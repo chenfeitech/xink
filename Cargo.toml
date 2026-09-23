@@ -1,0 +1,61 @@
+[package]
+name = "xink"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+description = "Local-first Markdown notes desktop app built with GPUI"
+license = "MIT"
+
+[[bin]]
+name = "xink"
+path = "src/main.rs"
+
+[dependencies]
+# 唯一直接依赖。gpui-kit 内部 pin gpui-pre 0.3.5 并 re-export GPUI。
+# 禁止直接依赖 crates.io 上的 gpui 0.2.2（与 gpui-pre 0.3.5 不兼容）。
+gpui-kit = "0.6"
+
+# 版本与 gpui-component 内部保持一致，避免同一 crate 多版本共存
+ropey = "=2.0.0-beta.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+dirs = "5"
+notify = "7"
+regex = "1"
+# 文件监听事件通过 flume 传给 UI，避免定时轮询（gpui 内部已使用同一版本）
+flume = "0.11"
+libc = "0.2"
+
+# 强制图标资源内嵌到二进制（含 debug 构建）。
+#
+# gpui-kit-assets 用 rust-embed 提供 `IconName` 的 SVG；rust-embed 默认只在
+# **release** 内嵌，debug 构建会按编译期记录的绝对路径（…/gpui-kit-assets-x.y.z/assets）
+# 在运行时读盘——把 debug 产物的 .app 拷到别的机器就会因路径不存在而图标全丢。
+# Cargo 会对同一版本的 rust-embed 做特性合并，因此这里开启 debug-embed 即可让
+# 依赖方的图标在任何构建模式下都内嵌。版本需与 Cargo.lock 中的 8.x 保持一致。
+rust-embed = { version = "8.12", features = ["debug-embed"] }
+
+# Markdown 代码块语法高亮。版本与 gpui-component 内部保持一致。
+syntect = { version = "5.3.0", default-features = false, features = [
+    "parsing",
+    "default-syntaxes",
+    "default-themes",
+    "regex-fancy",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+# 仅用于测试：复现预览解析（gpui-base 内部使用同一版本）对畸形 Markdown 的行为
+markdown = "1.0"
+
+[profile.dev]
+debug = "limited"
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+resvg = { opt-level = 3 }
+taffy = { opt-level = 3 }
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+gpui-pre-macros = { opt-level = 3 }

@@ -1,0 +1,1278 @@
+//! 设置界面（独立窗口）
+//!
+//! 设计要点（详见 `docs/settings-ui-design.md`）：
+//! - **元数据驱动**：所有设置项登记在 [`all_fields`] 描述表里，UI 只负责渲染这张表。
+//!   新增配置项 = 数据模型加字段 + 表里加一行，无需改动界面骨架。
+//! - 三级结构：分类 → 分组 → 设置项，支持搜索定位。
+//! - 单项重置（值 ≠ 默认时出现 ⟲）、依赖禁用、未接入渲染项标注"暂未生效"。
+//! - 改动经 [`crate::app::update_config`] 立即生效并落盘。
+
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::OnceLock;
+
+use gpui_kit::component::Root;
+use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{ActiveTheme, Sizable};
+use gpui_kit::*;
+
+use crate::core::config::{
+    AppConfig, ColorScheme, EditorMode, FontWeight, ImageDisplay, Language, LinkOpen, ThemeMode,
+};
+use crate::core::highlight::theme_names;
+
+// ── 分类 ──────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    Basic,
+    Editor,
+    Preview,
+}
+
+impl SettingsTab {
+    const ALL: [SettingsTab; 3] = [Self::Basic, Self::Editor, Self::Preview];
+
+    fn title(self) -> &'static str {
+        match self {
+            SettingsTab::Basic => "基本",
+            SettingsTab::Editor => "编辑器",
+            SettingsTab::Preview => "预览",
+        }
+    }
+}
+
+// ── 设置项描述表 ──────────────────────────────────────────────
+
+/// 控件类型
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FieldKind {
+    Bool,
+    Choice,
+    Number,
+    Font,
+}
+
+/// 控件构造函数。
+///
+/// 刻意**不接收 `Context`**：`Context<'_, V>` 带生命周期，闭包无法满足其
+/// 高阶生命周期约束（HRTB）。控件内部需要的 `cx` 由各自的事件回调自行取得。
+type ControlFn = Rc<dyn Fn(&mut SettingsView, &AppConfig) -> AnyElement>;
+
+/// 一项设置的完整描述
+pub struct SettingField {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub desc: &'static str,
+    pub tab: SettingsTab,
+    pub group: &'static str,
+    pub kind: FieldKind,
+    /// Some(原因)：该项已可配置但尚未接入渲染
+    pub unavailable: Option<&'static str>,
+    /// 返回 Some(原因) 时该项禁用
+    pub disabled: Rc<dyn Fn(&AppConfig) -> Option<&'static str>>,
+    /// 当前值是否等于默认值（决定是否显示 ⟲）
+    pub is_default: Rc<dyn Fn(&AppConfig) -> bool>,
+    /// 恢复该项默认值
+    pub reset: Rc<dyn Fn(&mut AppConfig)>,
+    /// 数值型取值（非数值项恒为 0），供统一渲染与输入框同步使用
+    pub value: Rc<dyn Fn(&AppConfig) -> f32>,
+    /// 数值型写入（非数值项为空操作）
+    pub set_value: Rc<dyn Fn(&mut AppConfig, f32)>,
+    pub control: ControlFn,
+}
+
+// ── 描述表的构造器（消除逐项重复代码） ──────────────────────────
+
+fn bool_field(
+    id: &'static str,
+    title: &'static str,
+    desc: &'static str,
+    tab: SettingsTab,
+    group: &'static str,
+    unavailable: Option<&'static str>,
+    get: fn(&AppConfig) -> bool,
+    set: fn(&mut AppConfig, bool),
+) -> SettingField {
+    let is_default = Rc::new(move |c: &AppConfig| get(c) == get(&AppConfig::default()));
+    let reset = Rc::new(move |c: &mut AppConfig| set(c, get(&AppConfig::default())));
+    let control = Rc::new(move |_: &mut SettingsView, c: &AppConfig| {
+        Switch::new(id)
+            .checked(get(c))
+            .on_click(move |v, _, cx| {
+                let v = *v;
+                crate::app::update_config(cx, move |cfg| set(cfg, v));
+            })
+            .into_any_element()
+    });
+    SettingField {
+        id,
+        title,
+        desc,
+        tab,
+        group,
+        kind: FieldKind::Bool,
+        unavailable,
+        disabled: Rc::new(|_| None),
+        is_default,
+        reset,
+        value: Rc::new(|_| 0.0),
+        set_value: Rc::new(|_, _| {}),
+        control,
+    }
+}
+
+fn choice_field(
+    id: &'static str,
+    title: &'static str,
+    desc: &'static str,
+    tab: SettingsTab,
+    group: &'static str,
+    unavailable: Option<&'static str>,
+    kind: FieldKind,
+    options: fn() -> Vec<(String, String)>,
+    get: fn(&AppConfig) -> String,
+    set: fn(&mut AppConfig, String),
+) -> SettingField {
+    let is_default = Rc::new(move |c: &AppConfig| get(c) == get(&AppConfig::default()));
+    let reset = Rc::new(move |c: &mut AppConfig| set(c, get(&AppConfig::default())));
+    let control = Rc::new(move |_: &mut SettingsView, c: &AppConfig| {
+        let current = get(c);
+        let items = options();
+        if items.len() <= 4 {
+            segmented(id, &items, &current, set)
+        } else {
+            dropdown(id, &items, &current, set)
+        }
+    });
+    SettingField {
+        id,
+        title,
+        desc,
+        tab,
+        group,
+        kind,
+        unavailable,
+        disabled: Rc::new(|_| None),
+        is_default,
+        reset,
+        value: Rc::new(|_| 0.0),
+        set_value: Rc::new(|_, _| {}),
+        control,
+    }
+}
+
+fn number_field(
+    id: &'static str,
+    title: &'static str,
+    desc: &'static str,
+    tab: SettingsTab,
+    group: &'static str,
+    min: f32,
+    max: f32,
+    step: f32,
+    unit: &'static str,
+    get: fn(&AppConfig) -> f32,
+    set: fn(&mut AppConfig, f32),
+) -> SettingField {
+    let is_default = Rc::new(move |c: &AppConfig| get(c) == get(&AppConfig::default()));
+    let reset = Rc::new(move |c: &mut AppConfig| set(c, get(&AppConfig::default())));
+    let control = Rc::new(move |view: &mut SettingsView, c: &AppConfig| {
+        number_control(view, id, get(c), min, max, step, unit, set)
+    });
+    SettingField {
+        id,
+        title,
+        desc,
+        tab,
+        group,
+        kind: FieldKind::Number,
+        unavailable: None,
+        disabled: Rc::new(|_| None),
+        is_default,
+        reset,
+        value: Rc::new(get),
+        set_value: Rc::new(set),
+        control,
+    }
+}
+
+/// 在 [`bool_field`] / [`choice_field`] 之上追加"依赖禁用"与"未生效"标记
+fn with_meta(
+    mut field: SettingField,
+    unavailable: Option<&'static str>,
+    disabled: Option<fn(&AppConfig) -> Option<&'static str>>,
+) -> SettingField {
+    field.unavailable = unavailable;
+    if let Some(f) = disabled {
+        field.disabled = Rc::new(f);
+    }
+    field
+}
+
+// ── 设置项清单 ────────────────────────────────────────────────
+
+fn all_fields() -> Vec<SettingField> {
+    use SettingsTab::{Basic, Editor, Preview};
+
+    vec![
+        // ── 基本 · 外观 ──
+        choice_field(
+            "basic.theme",
+            "主题模式",
+            "界面外观：跟随系统 / 浅色 / 深色",
+            Basic,
+            "外观",
+            None,
+            FieldKind::Choice,
+            || {
+                vec![
+                    ("system".into(), "跟随系统".into()),
+                    ("light".into(), "浅色".into()),
+                    ("dark".into(), "深色".into()),
+                ]
+            },
+            |c| match c.basic.theme {
+                ThemeMode::System => "system".into(),
+                ThemeMode::Light => "light".into(),
+                ThemeMode::Dark => "dark".into(),
+            },
+            |c, v| {
+                c.basic.theme = match v.as_str() {
+                    "light" => ThemeMode::Light,
+                    "dark" => ThemeMode::Dark,
+                    _ => ThemeMode::System,
+                }
+            },
+        ),
+        with_meta(
+            choice_field(
+                "basic.language",
+                "界面语言",
+                "界面文案语言（界面文案尚未本地化）",
+                Basic,
+                "外观",
+                None,
+                FieldKind::Choice,
+                || {
+                    vec![
+                        ("zh".into(), "中文".into()),
+                        ("en".into(), "English".into()),
+                    ]
+                },
+                |c| match c.basic.language {
+                    Language::Zh => "zh".into(),
+                    Language::En => "en".into(),
+                },
+                |c, v| {
+                    c.basic.language = if v == "en" {
+                        Language::En
+                    } else {
+                        Language::Zh
+                    }
+                },
+            ),
+            Some("界面文案尚未本地化"),
+            None,
+        ),
+        // ── 基本 · 目录树 ──
+        number_field(
+            "basic.icon_size",
+            "图标大小",
+            "目录树与工具栏图标边长，范围 12–48 px",
+            Basic,
+            "目录树",
+            12.0,
+            48.0,
+            2.0,
+            "px",
+            |c| c.basic.icon_size as f32,
+            |c, v| c.basic.icon_size = v as u32,
+        ),
+        choice_field(
+            "basic.tree_font.family",
+            "目录树字体",
+            "左侧文件列表的字体",
+            Basic,
+            "目录树",
+            None,
+            FieldKind::Font,
+            font_options,
+            |c| c.basic.tree_font.family.clone(),
+            |c, v| c.basic.tree_font.family = v,
+        ),
+        number_field(
+            "basic.tree_font.size",
+            "目录树字号",
+            "文件列表字号，范围 8–72 px",
+            Basic,
+            "目录树",
+            8.0,
+            72.0,
+            1.0,
+            "px",
+            |c| c.basic.tree_font.size,
+            |c, v| c.basic.tree_font.size = v,
+        ),
+        number_field(
+            "basic.tree_font.line_height",
+            "目录树行高",
+            "行高倍数，1.5 表示 1.5 倍行距",
+            Basic,
+            "目录树",
+            0.8,
+            3.0,
+            0.1,
+            "倍",
+            |c| c.basic.tree_font.line_height,
+            |c, v| c.basic.tree_font.line_height = v,
+        ),
+        choice_field(
+            "basic.tree_font.weight",
+            "目录树字重",
+            "文件名的粗细",
+            Basic,
+            "目录树",
+            None,
+            FieldKind::Choice,
+            || {
+                vec![
+                    ("regular".into(), "常规".into()),
+                    ("medium".into(), "中等".into()),
+                    ("semibold".into(), "半粗".into()),
+                    ("bold".into(), "粗体".into()),
+                ]
+            },
+            |c| match c.basic.tree_font.weight {
+                FontWeight::Regular => "regular".into(),
+                FontWeight::Medium => "medium".into(),
+                FontWeight::Semibold => "semibold".into(),
+                FontWeight::Bold => "bold".into(),
+            },
+            |c, v| {
+                c.basic.tree_font.weight = match v.as_str() {
+                    "medium" => FontWeight::Medium,
+                    "semibold" => FontWeight::Semibold,
+                    "bold" => FontWeight::Bold,
+                    _ => FontWeight::Regular,
+                }
+            },
+        ),
+        // ── 编辑器 · 编辑行为 ──
+        with_meta(
+            choice_field(
+                "editor.default_mode",
+                "默认编辑模式",
+                "新建标签页使用的模式（当前仅源码模式可用）",
+                Editor,
+                "编辑行为",
+                None,
+                FieldKind::Choice,
+                || {
+                    vec![
+                        ("source".into(), "源码".into()),
+                        ("split".into(), "分屏".into()),
+                        ("wysiwyg".into(), "所见即所得".into()),
+                    ]
+                },
+                |c| match c.editor.default_mode {
+                    EditorMode::Source => "source".into(),
+                    EditorMode::Split => "split".into(),
+                    EditorMode::Wysiwyg => "wysiwyg".into(),
+                },
+                |c, v| {
+                    c.editor.default_mode = match v.as_str() {
+                        "split" => EditorMode::Split,
+                        "wysiwyg" => EditorMode::Wysiwyg,
+                        _ => EditorMode::Source,
+                    }
+                },
+            ),
+            Some("分屏与所见即所得尚未实现"),
+            None,
+        ),
+        bool_field(
+            "editor.auto_save",
+            "自动保存",
+            "停止输入后自动写入磁盘；关闭后仍可用 Cmd-S 手动保存",
+            Editor,
+            "编辑行为",
+            None,
+            |c| c.editor.auto_save,
+            |c, v| c.editor.auto_save = v,
+        ),
+        with_meta(
+            number_field(
+                "editor.auto_save_delay_ms",
+                "自动保存延迟",
+                "停止输入后多久保存，范围 200–60000 ms",
+                Editor,
+                "编辑行为",
+                200.0,
+                60_000.0,
+                100.0,
+                "ms",
+                |c| c.editor.auto_save_delay_ms as f32,
+                |c, v| c.editor.auto_save_delay_ms = v as u64,
+            ),
+            None,
+            Some(|c| {
+                if c.editor.auto_save {
+                    None
+                } else {
+                    Some("需先开启自动保存")
+                }
+            }),
+        ),
+        with_meta(
+            bool_field(
+                "editor.indent.use_tabs",
+                "使用 Tab 缩进",
+                "关闭则用空格缩进",
+                Editor,
+                "编辑行为",
+                None,
+                |c| c.editor.indent.use_tabs,
+                |c, v| c.editor.indent.use_tabs = v,
+            ),
+            Some("编辑控件未暴露缩进设置"),
+            None,
+        ),
+        with_meta(
+            number_field(
+                "editor.indent.tab_size",
+                "缩进宽度",
+                "一个缩进层级占几个字符，范围 1–16",
+                Editor,
+                "编辑行为",
+                1.0,
+                16.0,
+                1.0,
+                "字符",
+                |c| c.editor.indent.tab_size as f32,
+                |c, v| c.editor.indent.tab_size = v as u32,
+            ),
+            Some("编辑控件未暴露缩进设置"),
+            None,
+        ),
+        with_meta(
+            bool_field(
+                "editor.show_line_numbers",
+                "显示行号",
+                "在编辑区左侧显示行号",
+                Editor,
+                "编辑行为",
+                None,
+                |c| c.editor.show_line_numbers,
+                |c, v| c.editor.show_line_numbers = v,
+            ),
+            Some("行号仅代码编辑模式支持"),
+            None,
+        ),
+        with_meta(
+            bool_field(
+                "editor.spell_check",
+                "拼写检查",
+                "标记可疑拼写（依赖系统词典）",
+                Editor,
+                "编辑行为",
+                None,
+                |c| c.editor.spell_check,
+                |c, v| c.editor.spell_check = v,
+            ),
+            Some("框架未提供拼写检查接口"),
+            None,
+        ),
+        // ── 编辑器 · 字体与排版 ──
+        choice_field(
+            "editor.font.family",
+            "编辑器字体",
+            "正文编辑区字体，建议等宽",
+            Editor,
+            "字体与排版",
+            None,
+            FieldKind::Font,
+            font_options,
+            |c| c.editor.font.family.clone(),
+            |c, v| c.editor.font.family = v,
+        ),
+        number_field(
+            "editor.font.size",
+            "编辑器字号",
+            "正文编辑区字号，范围 8–72 px",
+            Editor,
+            "字体与排版",
+            8.0,
+            72.0,
+            1.0,
+            "px",
+            |c| c.editor.font.size,
+            |c, v| c.editor.font.size = v,
+        ),
+        number_field(
+            "editor.font.line_height",
+            "编辑器行高",
+            "行高倍数",
+            Editor,
+            "字体与排版",
+            0.8,
+            3.0,
+            0.1,
+            "倍",
+            |c| c.editor.font.line_height,
+            |c, v| c.editor.font.line_height = v,
+        ),
+        with_meta(
+            choice_field(
+                "editor.color_scheme",
+                "编辑器配色",
+                "编辑区明暗配色",
+                Editor,
+                "字体与排版",
+                None,
+                FieldKind::Choice,
+                || {
+                    vec![
+                        ("auto".into(), "跟随主题".into()),
+                        ("light".into(), "浅色".into()),
+                        ("dark".into(), "深色".into()),
+                    ]
+                },
+                |c| match c.editor.color_scheme {
+                    ColorScheme::Auto => "auto".into(),
+                    ColorScheme::Light => "light".into(),
+                    ColorScheme::Dark => "dark".into(),
+                },
+                |c, v| {
+                    c.editor.color_scheme = match v.as_str() {
+                        "light" => ColorScheme::Light,
+                        "dark" => ColorScheme::Dark,
+                        _ => ColorScheme::Auto,
+                    }
+                },
+            ),
+            Some("编辑区配色跟随主题，暂未独立适配"),
+            None,
+        ),
+        // ── 预览 · 渲染 ──
+        choice_field(
+            "preview.code_theme",
+            "代码块主题",
+            "预览区代码高亮配色（syntect 主题）",
+            Preview,
+            "渲染",
+            None,
+            FieldKind::Choice,
+            || theme_names().into_iter().map(|n| (n.clone(), n)).collect(),
+            |c| c.preview.code_theme.clone(),
+            |c, v| c.preview.code_theme = v,
+        ),
+        with_meta(
+            choice_field(
+                "preview.image_display",
+                "图片显示",
+                "预览区图片的呈现方式",
+                Preview,
+                "渲染",
+                None,
+                FieldKind::Choice,
+                || {
+                    vec![
+                        ("fit_width".into(), "适应宽度".into()),
+                        ("original".into(), "原始尺寸".into()),
+                        ("hidden".into(), "不显示".into()),
+                    ]
+                },
+                |c| match c.preview.image_display {
+                    ImageDisplay::FitWidth => "fit_width".into(),
+                    ImageDisplay::Original => "original".into(),
+                    ImageDisplay::Hidden => "hidden".into(),
+                },
+                |c, v| {
+                    c.preview.image_display = match v.as_str() {
+                        "original" => ImageDisplay::Original,
+                        "hidden" => ImageDisplay::Hidden,
+                        _ => ImageDisplay::FitWidth,
+                    }
+                },
+            ),
+            Some("预览控件未暴露图片渲染开关"),
+            None,
+        ),
+        with_meta(
+            choice_field(
+                "preview.link_open",
+                "链接打开方式",
+                "点击预览区链接时的行为",
+                Preview,
+                "渲染",
+                None,
+                FieldKind::Choice,
+                || {
+                    vec![
+                        ("in_app".into(), "应用内打开".into()),
+                        ("external".into(), "系统浏览器".into()),
+                    ]
+                },
+                |c| match c.preview.link_open {
+                    LinkOpen::InApp => "in_app".into(),
+                    LinkOpen::External => "external".into(),
+                },
+                |c, v| {
+                    c.preview.link_open = if v == "external" {
+                        LinkOpen::External
+                    } else {
+                        LinkOpen::InApp
+                    }
+                },
+            ),
+            Some("预览控件未暴露链接点击回调"),
+            None,
+        ),
+        // ── 预览 · 排版 ──
+        choice_field(
+            "preview.font.family",
+            "预览字体",
+            "预览区正文字体",
+            Preview,
+            "排版",
+            None,
+            FieldKind::Font,
+            font_options,
+            |c| c.preview.font.family.clone(),
+            |c, v| c.preview.font.family = v,
+        ),
+        number_field(
+            "preview.font.size",
+            "预览字号",
+            "预览区正文字号，范围 8–72 px",
+            Preview,
+            "排版",
+            8.0,
+            72.0,
+            1.0,
+            "px",
+            |c| c.preview.font.size,
+            |c, v| c.preview.font.size = v,
+        ),
+        number_field(
+            "preview.font.line_height",
+            "预览行高",
+            "预览区行高倍数",
+            Preview,
+            "排版",
+            0.8,
+            3.0,
+            0.1,
+            "倍",
+            |c| c.preview.font.line_height,
+            |c, v| c.preview.font.line_height = v,
+        ),
+        number_field(
+            "preview.max_width",
+            "正文最大宽度",
+            "0 表示不限制；用于收窄阅读区",
+            Preview,
+            "排版",
+            0.0,
+            4_096.0,
+            64.0,
+            "px",
+            |c| c.preview.max_width as f32,
+            |c, v| c.preview.max_width = v as u32,
+        ),
+        // ── 预览 · 同步 ──
+        bool_field(
+            "preview.sync_scroll",
+            "同步滚动",
+            "编辑区与预览区滚动位置互相同步",
+            Preview,
+            "同步",
+            None,
+            |c| c.preview.sync_scroll,
+            |c, v| c.preview.sync_scroll = v,
+        ),
+    ]
+}
+
+// ── 控件 ──────────────────────────────────────────────────────
+
+/// 选项少于等于 4 个时用分段按钮，直接可见、无需展开
+fn segmented(
+    id: &'static str,
+    items: &[(String, String)],
+    current: &str,
+    set: fn(&mut AppConfig, String),
+) -> AnyElement {
+    let mut row = div().flex().flex_wrap().gap_1().justify_end();
+    for (ix, (value, label)) in items.iter().enumerate() {
+        let selected = value == current;
+        let value = value.clone();
+        let mut button = Button::new(format!("{id}#{ix}"))
+            .small()
+            .label(label.clone());
+        button = if selected {
+            button.primary()
+        } else {
+            button.ghost()
+        };
+        row = row.child(button.on_click(move |_, _, cx| {
+            let value = value.clone();
+            crate::app::update_config(cx, move |cfg| set(cfg, value));
+        }));
+    }
+    row.into_any_element()
+}
+
+/// 选项多于 4 个时用下拉，避免占满整行
+fn dropdown(
+    id: &'static str,
+    items: &[(String, String)],
+    current: &str,
+    set: fn(&mut AppConfig, String),
+) -> AnyElement {
+    let label = items
+        .iter()
+        .find(|(v, _)| v == current)
+        .map(|(_, l)| l.clone())
+        .unwrap_or_else(|| current.to_string());
+    let items = items.to_vec();
+
+    DropdownButton::new(id)
+        .button(Button::new(id).small().outline().label(label))
+        .dropdown_menu(move |menu, _window, _cx| {
+            let mut menu = menu;
+            for (value, text) in items.iter() {
+                let value = value.clone();
+                menu = menu.item(PopupMenuItem::new(text.clone()).on_click(move |_, _, cx| {
+                    let value = value.clone();
+                    crate::app::update_config(cx, move |cfg| set(cfg, value));
+                }));
+            }
+            menu
+        })
+        .into_any_element()
+}
+
+/// 数值：步进器 + 可直接输入的输入框
+fn number_control(
+    view: &mut SettingsView,
+    id: &'static str,
+    value: f32,
+    min: f32,
+    max: f32,
+    step: f32,
+    unit: &'static str,
+    set: fn(&mut AppConfig, f32),
+) -> AnyElement {
+    let dec = Button::new(format!("{id}-dec"))
+        .small()
+        .ghost()
+        .label("−")
+        .on_click(move |_, _, cx| {
+            let next = (value - step).max(min);
+            crate::app::update_config(cx, move |cfg| set(cfg, next));
+        });
+    let inc = Button::new(format!("{id}-inc"))
+        .small()
+        .ghost()
+        .label("+")
+        .on_click(move |_, _, cx| {
+            let next = (value + step).min(max);
+            crate::app::update_config(cx, move |cfg| set(cfg, next));
+        });
+
+    // 输入框支持直接键入精确值；实体在 new() 中创建，这里只负责渲染
+    let input = match view.inputs.get(id) {
+        Some(state) => Input::new(state).small().w(px(64.)).into_any_element(),
+        None => div().child(format!("{value}{unit}")).into_any_element(),
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .child(dec)
+        .child(input)
+        .child(div().text_xs().child(unit))
+        .child(inc)
+        .into_any_element()
+}
+
+/// 字体候选：系统字体（首次使用时缓存）+ 常用兜底项
+fn font_options() -> Vec<(String, String)> {
+    let mut names = SYSTEM_FONTS
+        .get()
+        .cloned()
+        .unwrap_or_else(|| FALLBACK_FONTS.iter().map(|s| s.to_string()).collect());
+
+    // 系统默认字体以 . 开头，排在最前便于选择
+    names.retain(|n| !n.is_empty());
+    for special in [".SystemUIFont", ".SystemMonospacedFont"] {
+        if !names.iter().any(|n| n == special) {
+            names.insert(0, special.to_string());
+        }
+    }
+    names.sort();
+    names
+        .into_iter()
+        .map(|n| {
+            let label = font_label(&n);
+            (n, label)
+        })
+        .collect()
+}
+
+fn font_label(name: &str) -> String {
+    match name {
+        ".SystemUIFont" => "系统默认".into(),
+        ".SystemMonospacedFont" => "系统默认（等宽）".into(),
+        other => other.to_string(),
+    }
+}
+
+static SYSTEM_FONTS: OnceLock<Vec<String>> = OnceLock::new();
+const FALLBACK_FONTS: &[&str] = &[
+    "PingFang SC",
+    "Microsoft YaHei",
+    "Helvetica",
+    "Arial",
+    "Menlo",
+    "Courier",
+];
+
+// ── 视图 ──────────────────────────────────────────────────────
+
+pub struct SettingsView {
+    tab: SettingsTab,
+    query: String,
+    /// 命中的设置项 id，用于搜索后高亮
+    highlight: Option<&'static str>,
+    /// 数值项的输入框状态，按字段 id 索引
+    inputs: HashMap<&'static str, Entity<InputState>>,
+}
+
+impl SettingsView {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // 系统字体列表只取一次，之后全局缓存
+        SYSTEM_FONTS.get_or_init(|| cx.text_system().all_font_names());
+
+        let mut this = Self {
+            tab: SettingsTab::Basic,
+            query: String::new(),
+            highlight: None,
+            inputs: HashMap::new(),
+        };
+
+        let cfg = crate::app::config(cx);
+        for field in all_fields() {
+            if field.kind != FieldKind::Number {
+                continue;
+            }
+            let state = cx.new(|cx| InputState::new(window, cx));
+            let text = format_number(&field, &cfg);
+            state.update(cx, |s, cx| s.set_value(text, window, cx));
+
+            // 取出写入回调，避免在 FnMut 闭包里移动捕获的变量
+            let set_value = field.set_value.clone();
+            cx.subscribe_in(
+                &state,
+                window,
+                move |_this, state, ev: &InputEvent, _window, cx| {
+                    if !matches!(ev, InputEvent::Change) {
+                        return;
+                    }
+                    let raw = state.read(cx).value().to_string();
+                    let Some(value) = raw.trim().parse::<f32>().ok() else {
+                        return;
+                    };
+                    let set_value = set_value.clone();
+                    crate::app::update_config(cx, move |c| set_value(c, value));
+                },
+            )
+            .detach();
+
+            this.inputs.insert(field.id, state);
+        }
+
+        this
+    }
+
+    /// 命中搜索的第一项，用于自动切分类并定位
+    fn first_match(&self, cfg: &AppConfig) -> Option<&'static str> {
+        let q = self.query.trim().to_lowercase();
+        if q.is_empty() {
+            return None;
+        }
+        let _ = cfg;
+        all_fields()
+            .iter()
+            .find(|f| matches_query(f, &q))
+            .map(|f| f.id)
+    }
+}
+
+fn matches_query(field: &SettingField, query: &str) -> bool {
+    field.title.to_lowercase().contains(query)
+        || field.desc.to_lowercase().contains(query)
+        || field.group.to_lowercase().contains(query)
+        || field.tab.title().to_lowercase().contains(query)
+}
+
+fn format_number(field: &SettingField, cfg: &AppConfig) -> String {
+    // 数值一律按"去掉多余小数"呈现，避免出现 14.000001
+    let value = (field.value)(cfg);
+    if value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value:.1}")
+    }
+}
+
+impl Render for SettingsView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let cfg = crate::app::config(cx);
+        let fields = all_fields();
+
+        // 搜索命中时自动切到命中项所属分类
+        if let Some(id) = self.first_match(&cfg) {
+            if let Some(field) = fields.iter().find(|f| f.id == id) {
+                if self.tab != field.tab {
+                    self.tab = field.tab;
+                }
+            }
+            self.highlight = Some(id);
+        } else {
+            self.highlight = None;
+        }
+
+        // 数值输入框与配置保持同步（步进/导入/重置后回显新值）
+        for field in &fields {
+            if field.kind != FieldKind::Number {
+                continue;
+            }
+            let text = format_number(field, &cfg);
+            if let Some(state) = self.inputs.get(field.id) {
+                if state.read(cx).value().to_string() != text {
+                    state.update(cx, |s, cx| s.set_value(text.clone(), window, cx));
+                }
+            }
+        }
+
+        let query = self.query.trim().to_lowercase();
+        let visible: Vec<&SettingField> = fields
+            .iter()
+            .filter(|f| f.tab == self.tab)
+            .filter(|f| query.is_empty() || matches_query(f, &query))
+            .collect();
+
+        // ── 左侧分类 ──
+        let mut sidebar = div().w(px(160.)).flex_col().gap_1().p_2();
+        for tab in SettingsTab::ALL {
+            let selected = tab == self.tab;
+            let mut button = Button::new(tab.title()).small().label(tab.title());
+            button = if selected {
+                button.primary()
+            } else {
+                button.ghost()
+            };
+            sidebar = sidebar.child(button.on_click(cx.listener(move |this, _, _, cx| {
+                this.tab = tab;
+                cx.notify();
+            })));
+        }
+
+        // ── 右侧设置项（按分组）──
+        let mut content = div().flex_1().min_w_0().flex_col().gap_1().px_4().py_2();
+        let mut current_group = String::new();
+        for field in &visible {
+            if field.group != current_group {
+                current_group = field.group.to_string();
+                content = content.child(
+                    div()
+                        .pt_2()
+                        .pb_1()
+                        .text_sm()
+                        .font_weight(FontWeight(600.))
+                        .child(field.group),
+                );
+            }
+            content = content.child(self.render_field(field, &cfg, cx));
+        }
+
+        if visible.is_empty() {
+            content = content.child(
+                div()
+                    .py_8()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("没有匹配的设置项"),
+            );
+        }
+
+        div()
+            .id("settings-view")
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
+            .child(
+                div()
+                    .flex_none()
+                    .p_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(self.render_search(cx)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(sidebar.border_r_1().border_color(cx.theme().border))
+                    .child(content.overflow_y_scrollbar()),
+            )
+            .child(self.render_footer(cx))
+    }
+}
+
+impl SettingsView {
+    /// 搜索框：输入即过滤，回车跳转到首个命中项
+    fn render_search(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let state = self.query.clone();
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(div().flex_1().text_sm().child(if state.is_empty() {
+                "搜索设置…".to_string()
+            } else {
+                state.clone()
+            }))
+            .children(if state.is_empty() {
+                None
+            } else {
+                Some(
+                    Button::new("clear-search")
+                        .small()
+                        .ghost()
+                        .label("清除")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.query.clear();
+                            cx.notify();
+                        })),
+                )
+            })
+    }
+
+    /// 单个设置项：标题 + 说明 + 控件 + 单项重置 + 状态标记
+    fn render_field(
+        &mut self,
+        field: &SettingField,
+        cfg: &AppConfig,
+        cx: &mut Context<SettingsView>,
+    ) -> Div {
+        let disabled_reason = (field.disabled)(cfg);
+        let highlighted = self.highlight == Some(field.id);
+        let control = (field.control)(self, cfg);
+
+        let mut row = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_4()
+            .px_2()
+            .py_1()
+            .rounded_md();
+        if highlighted {
+            row = row.bg(cx.theme().accent.opacity(0.15));
+        }
+
+        // 左：标题 + 说明 + 状态标记
+        let mut left = div().flex_1().min_w_0().flex_col();
+        let mut title = div().text_sm().child(field.title);
+        if let Some(reason) = field.unavailable {
+            title = title.child(
+                div()
+                    .ml_2()
+                    .text_xs()
+                    .text_color(cx.theme().warning)
+                    .child(format!("⚠ 暂未生效 · {reason}")),
+            );
+        }
+        left = left.child(title);
+        left = left.child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(match disabled_reason {
+                    Some(reason) => reason.to_string(),
+                    None => field.desc.to_string(),
+                }),
+        );
+        row = row.child(left);
+
+        // 右：控件 + 单项重置
+        let mut right = div().flex_none().flex().items_center().gap_2();
+        match disabled_reason {
+            Some(_) => {
+                // 依赖未满足：只展示当前值，不提供交互
+                right = right.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("已禁用"),
+                );
+            }
+            None => right = right.child(control),
+        }
+        if !(field.is_default)(cfg) {
+            let reset = field.reset.clone();
+            right = right.child(
+                Button::new(format!("{}-reset", field.id))
+                    .small()
+                    .ghost()
+                    .tooltip("恢复该项默认值")
+                    .label("⟲")
+                    .on_click(move |_, _, cx| {
+                        let reset = reset.clone();
+                        crate::app::update_config(cx, move |c| reset(c));
+                    }),
+            );
+        }
+        row = row.child(right);
+        row
+    }
+
+    /// 底部：备份迁移 + 整体恢复默认
+    fn render_footer(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .p_2()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                Button::new("import-config")
+                    .small()
+                    .ghost()
+                    .label("导入配置…")
+                    .on_click(|_, _, cx| import_config(cx)),
+            )
+            .child(
+                Button::new("export-config")
+                    .small()
+                    .ghost()
+                    .label("导出配置…")
+                    .on_click(|_, _, cx| export_config(cx)),
+            )
+            .child(
+                Button::new("reset-config")
+                    .small()
+                    .ghost()
+                    .label("恢复全部默认")
+                    .on_click(|_, _, cx| {
+                        crate::app::update_config(cx, |c| *c = AppConfig::default());
+                    }),
+            )
+    }
+}
+
+// ── 导入 / 导出 ───────────────────────────────────────────────
+
+fn import_config(cx: &mut App) {
+    let prompt = cx.prompt_for_paths(PathPromptOptions {
+        files: true,
+        directories: false,
+        multiple: false,
+        prompt: Some("选择要导入的配置文件".into()),
+    });
+
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(paths))) = prompt.await else {
+            return;
+        };
+        let Some(path) = paths.into_iter().next() else {
+            return;
+        };
+        let result = AppConfig::import_from(&path);
+        cx.update(move |cx| match result {
+            Ok(config) => {
+                crate::app::update_config(cx, |c| *c = config);
+                println!("[xink] 已导入配置: {}", path.display());
+            }
+            Err(err) => eprintln!("[xink] 导入配置失败: {err:?}"),
+        });
+    })
+    .detach();
+}
+
+fn export_config(cx: &mut App) {
+    let dir = dirs::home_dir().unwrap_or_default();
+    let prompt = cx.prompt_for_new_path(&dir, Some("xink-config.json"));
+
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(path))) = prompt.await else {
+            return;
+        };
+        cx.update(move |cx| {
+            let config = crate::app::config(cx);
+            match config.export_to(&path) {
+                Ok(()) => println!("[xink] 已导出配置: {}", path.display()),
+                Err(err) => eprintln!("[xink] 导出配置失败: {err:?}"),
+            }
+        });
+    })
+    .detach();
+}
+
+// ── 独立设置窗口（单例） ──────────────────────────────────────
+
+/// 记录已打开的设置窗口，重复触发时聚焦而不是再开一个
+struct SettingsWindow {
+    handle: Option<WindowHandle<Root>>,
+}
+
+impl Global for SettingsWindow {}
+
+/// 打开设置窗口；已存在则聚焦已有窗口。
+pub fn open_settings(cx: &mut App) {
+    let existing = cx
+        .try_global::<SettingsWindow>()
+        .and_then(|g| g.handle.clone());
+
+    if let Some(handle) = existing {
+        let mut alive = false;
+        _ = handle.update(cx, |_, window, _cx| {
+            window.activate_window();
+            alive = true;
+        });
+        if alive {
+            return;
+        }
+    }
+
+    cx.spawn(async move |cx| {
+        match cx.open_window(WindowOptions::default(), |window, cx| {
+            let view = cx.new(|cx| SettingsView::new(window, cx));
+            cx.new(|cx| Root::new(view, window, cx))
+        }) {
+            Ok(handle) => {
+                _ = cx.update(move |cx| {
+                    cx.set_global(SettingsWindow {
+                        handle: Some(handle),
+                    });
+                });
+            }
+            Err(err) => eprintln!("[xink] 打开设置窗口失败: {err:?}"),
+        }
+    })
+    .detach();
+}
