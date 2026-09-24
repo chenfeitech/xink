@@ -227,6 +227,11 @@ this method can only be called during paint
 
 ## 7. 配置项落地矩阵
 
+> **补充与修正（2026-09-24）**：逐字段消费点排查、生效链路规范与接线方案见
+> [`config-wiring-design.md`](./config-wiring-design.md)。本文 §7.2 的清单遗漏了
+> `editor.font.weight`、`preview.font.weight` 与 `editor.keymap`（后两者连设置项入口都没有）；
+> 且「仅持久化」项不再无限期挂起，改为「接线 / 降级 / 移除」三选一并按阶段处置。
+
 数据模型与界面已覆盖全部需求项，但受 UI 框架能力限制，部分项只完成「持久化」，尚未接入渲染：
 
 ### 7.1 已接入生效
