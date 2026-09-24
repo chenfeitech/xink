@@ -2,7 +2,7 @@
 
 > 状态：**已评审通过并实现**（2026-09-21），实现见 `src/ui/settings.rs`
 > 实现说明见文末 [第 13 节](#13-实现状态)
-> 关联文档：[`config-management-requirements.md`](./config-management-requirements.md)、[`config-management-design.md`](./config-management-design.md)
+> 关联文档：[`config-management-requirements.md`](./config-management-requirements.md)、[`config-management-design.md`](./config-management-design.md)、[`config-wiring-design.md`](./config-wiring-design.md)（配置生效链路与接线）
 > 评审后落地位置：`src/ui/settings.rs`（重写）
 
 ---
