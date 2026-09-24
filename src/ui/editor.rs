@@ -8,12 +8,13 @@ use gpui_kit::base::dock::TabGroup;
 use gpui_kit::component::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
-use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::input::{InputEvent, TabSize, Textarea, TextareaState};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size};
 use gpui_kit::*;
 
 use crate::actions::Save;
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
+use crate::core::config::IndentConfig;
 use crate::core::markdown::{resolve_image_urls, sanitize_for_preview};
 use crate::core::{Note, tab_key};
 
@@ -21,6 +22,8 @@ pub struct EditorPanel {
     focus_handle: FocusHandle,
     note: Option<Note>,
     textarea: Entity<TextareaState>,
+    /// 已下发给编辑控件的缩进配置，用于检测配置变更并增量应用
+    applied_indent: IndentConfig,
     /// 本篇笔记自己的预览文档。切换标签时整体替换引用，已解析过的不再重解析。
     doc: Option<Entity<TextViewState>>,
     /// 防抖保存任务。每次编辑都用新任务覆盖，旧任务被 drop 即取消。
@@ -48,6 +51,19 @@ impl EditorPanel {
 
     fn create(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let textarea = cx.new(|cx| TextareaState::new(window, cx));
+        // 缩进配置接线：无需更换编辑内核即可生效。
+        // `set_tab_size` 定义在 `impl<M: MultiLineMode>`（gpui-base input/editor/indent.rs:492），
+        // 而 `impl MultiLineMode for TextareaMode` 成立（input/base/kind.rs:65）。
+        let indent = crate::app::config(cx).editor.indent;
+        textarea.update(cx, |state, cx| {
+            state.set_tab_size(
+                TabSize {
+                    tab_size: indent.tab_size as usize,
+                    hard_tabs: indent.use_tabs,
+                },
+                cx,
+            );
+        });
         let self_entity = cx.weak_entity();
 
         cx.subscribe_in(&textarea, window, |this, _, ev: &InputEvent, window, cx| {
@@ -61,6 +77,7 @@ impl EditorPanel {
             focus_handle: cx.focus_handle(),
             note: None,
             textarea,
+            applied_indent: indent,
             doc: None,
             save_task: None,
             status: SharedString::default(),
@@ -657,6 +674,22 @@ impl Render for EditorPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let started = Instant::now();
         // 滚动同步由帧轮询（schedule_scroll_tick）驱动，不在这里每帧做
+
+        // 缩进配置变更时增量下发给编辑控件，使"改设置"立即生效。
+        // 用 applied_indent 守卫，避免每帧重复下发造成无谓重绘。
+        let indent = crate::app::config(cx).editor.indent;
+        if indent != self.applied_indent {
+            self.applied_indent = indent;
+            self.textarea.update(cx, |state, cx| {
+                state.set_tab_size(
+                    TabSize {
+                        tab_size: indent.tab_size as usize,
+                        hard_tabs: indent.use_tabs,
+                    },
+                    cx,
+                );
+            });
+        }
 
         // 未打开任何笔记时显示占位提示，编辑区本身始终存在
         let body = if self.note.is_some() {
