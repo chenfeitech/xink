@@ -47,19 +47,6 @@ pub enum FontWeight {
     Bold,
 }
 
-/// 编辑器默认模式
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum EditorMode {
-    /// 源码模式（当前实现的模式）
-    #[default]
-    Source,
-    /// 分屏：左源码右预览
-    Split,
-    /// 所见即所得
-    Wysiwyg,
-}
-
 /// 编辑器配色方案
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -136,7 +123,6 @@ pub struct BasicConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EditorConfig {
-    pub default_mode: EditorMode,
     pub auto_save: bool,
     /// 停止输入后多久自动保存（毫秒）
     pub auto_save_delay_ms: u64,
@@ -238,7 +224,6 @@ impl Default for BasicConfig {
 impl Default for EditorConfig {
     fn default() -> Self {
         Self {
-            default_mode: EditorMode::default(),
             auto_save: true,
             // 与 REQUIREMENTS.md R2.2 一致：停止输入约 300ms 后写入
             auto_save_delay_ms: 300,
