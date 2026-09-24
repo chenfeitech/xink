@@ -21,7 +21,7 @@ use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::*;
 
 use crate::core::config::{
-    AppConfig, ColorScheme, EditorMode, FontWeight, ImageDisplay, Language, LinkOpen, ThemeMode,
+    AppConfig, ColorScheme, FontWeight, ImageDisplay, Language, LinkOpen, ThemeMode,
 };
 use crate::core::highlight::theme_names;
 
@@ -363,38 +363,6 @@ fn all_fields() -> Vec<SettingField> {
             },
         ),
         // ── 编辑器 · 编辑行为 ──
-        with_meta(
-            choice_field(
-                "editor.default_mode",
-                "默认编辑模式",
-                "新建标签页使用的模式（当前仅源码模式可用）",
-                Editor,
-                "编辑行为",
-                None,
-                FieldKind::Choice,
-                || {
-                    vec![
-                        ("source".into(), "源码".into()),
-                        ("split".into(), "分屏".into()),
-                        ("wysiwyg".into(), "所见即所得".into()),
-                    ]
-                },
-                |c| match c.editor.default_mode {
-                    EditorMode::Source => "source".into(),
-                    EditorMode::Split => "split".into(),
-                    EditorMode::Wysiwyg => "wysiwyg".into(),
-                },
-                |c, v| {
-                    c.editor.default_mode = match v.as_str() {
-                        "split" => EditorMode::Split,
-                        "wysiwyg" => EditorMode::Wysiwyg,
-                        _ => EditorMode::Source,
-                    }
-                },
-            ),
-            Some("分屏与所见即所得尚未实现"),
-            None,
-        ),
         bool_field(
             "editor.auto_save",
             "自动保存",
@@ -854,6 +822,46 @@ pub struct SettingsView {
     highlight: Option<&'static str>,
     /// 数值项的输入框状态，按字段 id 索引
     inputs: HashMap<&'static str, Entity<InputState>>,
+    /// 上次自适应所用的内容指纹（分类 + 搜索词 + 可见项数 + 分组数）。
+    /// 指纹不变就不动窗口尺寸，避免每帧 resize，也保留用户手动调整的结果。
+    size_fingerprint: Option<(SettingsTab, String, usize, usize)>,
+}
+
+/// 设置窗口各部分的固定尺寸。
+///
+/// 框架没有通用的"测量元素"API，无法在渲染前拿到内容的自然高度；
+/// 因此这里把每部分的行高固定下来，窗口高度即可按可见项数**精确计算**，
+/// 从而做到打开时贴合内容：既没有多余空白，也不会出现滚动条。
+mod layout {
+    pub const SIDEBAR_W: f32 = 160.;
+    pub const CONTENT_W: f32 = 560.;
+    pub const SEARCH_H: f32 = 45.;
+    pub const FOOTER_H: f32 = 48.;
+    /// 单个设置项行高（含上下内边距）
+    pub const ROW_H: f32 = 52.;
+    /// 分组标题行高
+    pub const GROUP_H: f32 = 32.;
+    /// 内容区上下内边距之和（`py_2` × 2）
+    pub const CONTENT_PAD_Y: f32 = 16.;
+    /// 搜索无结果时的空态高度
+    pub const EMPTY_H: f32 = 64.;
+    pub const MIN_H: f32 = 220.;
+    pub const MAX_H: f32 = 860.;
+
+    /// 按可见项数与分组数计算窗口内容区高度。
+    pub fn window_height(rows: usize, groups: usize) -> f32 {
+        let content = if rows == 0 {
+            EMPTY_H
+        } else {
+            CONTENT_PAD_Y + rows as f32 * ROW_H + groups as f32 * GROUP_H
+        };
+        (SEARCH_H + FOOTER_H + content).clamp(MIN_H, MAX_H)
+    }
+
+    /// 窗口宽度固定：侧栏 + 内容列。固定宽度可避免控件列在切换分类时左右跳动。
+    pub fn window_width() -> f32 {
+        SIDEBAR_W + CONTENT_W
+    }
 }
 
 impl SettingsView {
@@ -866,6 +874,8 @@ impl SettingsView {
             query: String::new(),
             highlight: None,
             inputs: HashMap::new(),
+            // None 表示"还没自适应过"，首次渲染会立即贴合内容
+            size_fingerprint: None,
         };
 
         let cfg = crate::app::config(cx);
@@ -987,13 +997,20 @@ impl Render for SettingsView {
         }
 
         // ── 右侧设置项（按分组）──
-        let mut content = div().flex_1().min_w_0().flex_col().gap_1().px_4().py_2();
+        let mut content = div().flex_1().min_w_0().flex_col().px_4().py_2();
         let mut current_group = String::new();
+        // 分组数参与窗口高度计算
+        let mut group_count = 0usize;
         for field in &visible {
             if field.group != current_group {
                 current_group = field.group.to_string();
+                group_count += 1;
                 content = content.child(
                     div()
+                        // 固定行高，使窗口高度可精确计算
+                        .h(px(layout::GROUP_H))
+                        .flex()
+                        .items_center()
                         .pt_2()
                         .pb_1()
                         .text_sm()
@@ -1007,11 +1024,29 @@ impl Render for SettingsView {
         if visible.is_empty() {
             content = content.child(
                 div()
-                    .py_8()
+                    .h(px(layout::EMPTY_H))
+                    .flex()
+                    .items_center()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child("没有匹配的设置项"),
             );
+        }
+
+        // ── 窗口尺寸自适应内容 ──
+        //
+        // 只在"内容指纹"变化时调整：打开窗口、切换分类、搜索过滤会改变可见项数；
+        // 单纯改某个配置值不会，因此用户手动调大的窗口不会被立刻缩回。
+        let fingerprint = (self.tab, query.clone(), visible.len(), group_count);
+        if self.size_fingerprint.as_ref() != Some(&fingerprint) {
+            self.size_fingerprint = Some(fingerprint);
+            let desired = size(
+                px(layout::window_width()),
+                px(layout::window_height(visible.len(), group_count)),
+            );
+            if window.viewport_size() != desired {
+                window.resize(desired);
+            }
         }
 
         div()
@@ -1024,6 +1059,7 @@ impl Render for SettingsView {
             .child(
                 div()
                     .flex_none()
+                    .h(px(layout::SEARCH_H))
                     .p_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
@@ -1082,6 +1118,8 @@ impl SettingsView {
         let control = (field.control)(self, cfg);
 
         let mut row = div()
+            // 固定行高：窗口高度按"可见项数 × 行高"精确计算，避免估算误差
+            .h(px(layout::ROW_H))
             .flex()
             .items_center()
             .justify_between()
@@ -1153,6 +1191,7 @@ impl SettingsView {
     fn render_footer(&self, cx: &mut Context<Self>) -> Div {
         div()
             .flex_none()
+            .h(px(layout::FOOTER_H))
             .flex()
             .items_center()
             .gap_2()
