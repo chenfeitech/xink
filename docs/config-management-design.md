@@ -70,7 +70,6 @@ pub struct BasicConfig {        // 基本
 }
 
 pub struct EditorConfig {       // 编辑器
-    pub default_mode: EditorMode,      // Source | Split | Wysiwyg
     pub auto_save: bool,               // 默认 true
     pub auto_save_delay_ms: u64,       // 200–60000，默认 300
     pub indent: IndentConfig,          // use_tabs: bool, tab_size: 1–16
@@ -253,7 +252,7 @@ this method can only be called during paint
 | 配置项 | 受限原因 |
 |---|---|
 | 界面语言 | UI 文案尚未本地化，无文案可切换 |
-| 默认编辑模式 | 仅源码模式实现；WYSIWYG 按 `REQUIREMENTS.md` P2 不在本期范围 |
+| ~~默认编辑模式~~ | **已于 2026-09-24 从配置模型与设置界面移除**：仅源码模式可用；分屏由 `DockArea` 布局直接提供，所见即所得按 `REQUIREMENTS.md` 不在本期范围 |
 | 缩进规则 | `TextareaState` 未暴露 `tab_size` 设置入口（该能力仅存在于代码编辑模式的内部 `TabSize`） |
 | 行号显示 | `set_line_number` 只对 `LayoutMode::CodeEditor` 生效，当前编辑区是纯文本多行模式 |
 | 拼写检查 | 框架未提供拼写检查接口 |
