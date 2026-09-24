@@ -1,8 +1,12 @@
 # 编辑器内核切换评估：`show_line_numbers` 与 `indent.*` 的实现路径
 
-> 状态：**Spike 已执行完毕**（2026-09-24）
-> **结论：不建议仅为行号更换编辑内核；缩进两项已验证可直接接线并落地**
-> 执行结果见 [§9](#9-spike-执行结果2026-09-24)
+> 状态：**Spike 已执行完毕；后续决策：采纳内核升级并已实施**（2026-09-24）
+> - Spike 结论：缩进无需换内核即可接线（已落地）
+> - **后续决策：采纳内核升级**（`Textarea` → `EditorState`）。原因是拼写检查所需的诊断能力
+>   同样只在 `EditorState`（见 [`editor-features-analysis.md`](./editor-features-analysis.md) §1.2），
+>   一次升级可同时解锁行号与诊断，比分别推进更划算
+> - 现状：已实施，`cargo build` 通过、`cargo test` 85 passed，待 GUI 人工验收
+> Spike 结果见 [§9](#9-spike-执行结果2026-09-24)，实施结果见 [§10](#10-实施结果2026-09-24)
 > 关联：[`config-wiring-design.md`](./config-wiring-design.md) §4 #9（行号）、#8（缩进）、§9 Q1/Q3
 > 涉及：`src/ui/editor.rs`（编辑面板全部逻辑）、`src/core/config.rs`、`src/ui/preview.rs`（滚动同步）
 
@@ -14,7 +18,7 @@
 |---|---|
 | 是否单独立项？ | **是**（已立项并执行）。它不是"配置项接线"，而是**编辑器内核替换**，触及 P0 的编辑与保存主链路，且影响 P1（滚动同步）、P3（行号/缩进）、P4（编辑模式） |
 | 直接推进替换，还是先做原型？ | **先做原型 —— 事后证明这个选择是对的**：原型发现"缩进根本不需要换内核"，从而避免了一次不必要的高风险替换 |
-| 最终建议 | **不为行号更换内核**；缩进两项现已接线生效；行号保留配置并标 `NotWired`，待有独立理由（P4 Wysiwyg/Split、编辑区语法高亮、大纲）时随内核升级一并落地 |
+| 最终建议 | Spike 当时的结论是"不为行号**单独**换内核"；**2026-09-24 决策升级为采纳内核升级**——拼写检查的诊断能力同样只在 `EditorState`，一次升级同时解锁行号与诊断（拼写检查的展示层）。现已实施，见 §10 |
 
 ---
 
@@ -115,7 +119,8 @@ impl InputBaseState<crate::input::EditorMode> {
         ├─ 不通过 ─► 行号降级：D（移除配置）或 C（自研 gutter，需先验证 soft wrap）
         │
         └─ 无论成败 ─► 产出「编辑器内核能力矩阵」
-                           ├─► P4 default_mode（Wysiwyg/Split 必然基于 Editor，非 Textarea）
+                           ├─► 编辑形态演进（若将来做所见即所得，必然基于 Editor 非 Textarea；
+                           │   原 default_mode 配置已于 2026-09-24 移除）
                            └─► 未来大纲 / 双链等编辑区特性
 ```
 
@@ -155,7 +160,8 @@ impl InputBaseState<crate::input::EditorMode> {
 ## 8. 与既有文档的关系
 
 - 更新 [`config-wiring-design.md`](./config-wiring-design.md) §4 #9：`show_line_numbers` 的处置**前置于本 Spike**，不再在 P3 内直接决定；
-- 本 Spike 的结论同时是 P4（`default_mode` 的 Wysiwyg/Split）的技术前提——所见即所得必然基于 `Editor` 而非 `Textarea`；
+- 本 Spike 的结论同时是"编辑形态演进"的技术前提——若将来做所见即所得，必然基于 `Editor` 而非 `Textarea`
+  （原 `default_mode` 配置项已于 2026-09-24 移除）；
 - 行号/缩进两项配置的最终去向（接线 or 移除）在决策门后回填到 `config-wiring-design.md` 的接线总表。
 
 ---
@@ -205,10 +211,9 @@ impl<M: crate::input::MultiLineMode> InputBaseState<M> {
 
 ### 9.4 建议结论
 
-1. **本次不为行号更换编辑内核**；
-2. **缩进两项现已可接线**，且已在本分支落地（含改动即时生效）；
-3. **行号**：保留配置项并标 `NotWired`（原因写"需 `EditorState` 内核，待有独立理由时一并切换"），
-   待 P4（Wysiwyg/Split）或"编辑区语法高亮 / 大纲"立项时随内核升级作为副产品落地；
+1. ~~本次不为行号更换编辑内核~~ → **2026-09-24 决策采纳内核升级并已实施**（见 §10）；
+2. **缩进两项现已可接线**，且已落地（含改动即时生效）；
+3. **行号**：随内核升级**已接线**（构造期按配置设置 + `render` 增量下发），待人工验收；
 4. 若产品上坚持"现在就要行号"，再走方案 A，但须先完成 §6 的 GUI 验收（尤其 R1 手感与 R5 大文件）。
 
 ### 9.5 分支上已落地的改动（`spike/editor-core`）
@@ -230,4 +235,24 @@ impl<M: crate::input::MultiLineMode> InputBaseState<M> {
 | 3 | 打开笔记 / 编辑 / 自动保存 / 外部变更重载 | 无回归 |
 | 4 | 编辑 ↔ 预览滚动同步 | 无回归 |
 | 5 | ≥ 5000 行笔记打开与滚动 | 无明显卡顿 |
-| 6 | （仅当走方案 A）行号显示 + Markdown 写作手感 | 自动缩进/括号补全不干扰写作 |
+| 6 | 行号开关：设置里打开 → 编辑区立即显示行号；关闭 → 隐藏 | 即时生效，无需重开标签 |
+| 7 | Markdown 写作手感 | 自动补全/自动缩进已显式关闭；输入引号与括号不应被自动补全 |
+| 8 | 打开/编辑/保存/滚动同步/大文件（≥5000 行）无回归 | 与切换前一致 |
+
+---
+
+## 10. 实施结果（2026-09-24）
+
+分支 `feature/editor-core`，改动集中在 `src/ui/editor.rs`：
+
+| 改动 | 说明 |
+|---|---|
+| 内核切换 | `TextareaState` → `EditorState`、`Textarea` → `Editor`；字段 `textarea` 改名为 `editor`（共约 16 处，批量替换） |
+| 行号接线 | 构造期 `.line_number(cfg.editor.show_line_numbers)`；`render` 中用 `applied_line_numbers` 守卫检测变更 → `set_line_number(...)` 增量下发，**开关即时生效** |
+| 缩进接线（保留） | `create` 首次下发 + `render` 增量下发（原已实现，继续有效） |
+| 关闭干扰项 | 显式 `.auto_close(false)` / `.smart_indent(false)` / `.folding(false)` / `.indent_guides(false)`：Markdown 写作不需要括号自动补全与回车自动缩进；折叠与缩进参考线的交互尚未验证，先关闭 |
+
+验证：`cargo build` 通过、`cargo test` **85 passed / 0 failed**、`cargo clippy` 无 error。
+
+**仍需人工验收**：§9.6 第 6–8 条（行号开关、写作手感、保存与滚动同步无回归、大文件）。
+这批验证通过后，可继续推进拼写检查（诊断能力已随内核解锁）。

@@ -15,7 +15,6 @@ fn defaults_are_sane() {
     assert_eq!(c.basic.tree_font.size, 14.0);
     assert_eq!(c.basic.tree_font.line_height, 1.5);
 
-    assert_eq!(c.editor.default_mode, EditorMode::Source);
     assert!(c.editor.auto_save, "默认应开启自动保存");
     // 对齐 REQUIREMENTS.md R2.2 的"停止输入约 300ms 后写入"
     assert_eq!(c.editor.auto_save_delay_ms, 300);

@@ -1,4 +1,4 @@
-//! 中间编辑面板：Textarea 编辑 + 防抖自动保存 + 原子写盘
+//! 中间编辑面板：Editor 编辑 + 防抖自动保存 + 原子写盘
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -8,7 +8,7 @@ use gpui_kit::base::dock::TabGroup;
 use gpui_kit::component::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
-use gpui_kit::component::input::{InputEvent, TabSize, Textarea, TextareaState};
+use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size};
 use gpui_kit::*;
 
@@ -21,9 +21,11 @@ use crate::core::{Note, tab_key};
 pub struct EditorPanel {
     focus_handle: FocusHandle,
     note: Option<Note>,
-    textarea: Entity<TextareaState>,
+    editor: Entity<EditorState>,
     /// 已下发给编辑控件的缩进配置，用于检测配置变更并增量应用
     applied_indent: IndentConfig,
+    /// 已下发的行号开关，用于检测配置变更并增量应用
+    applied_line_numbers: bool,
     /// 本篇笔记自己的预览文档。切换标签时整体替换引用，已解析过的不再重解析。
     doc: Option<Entity<TextViewState>>,
     /// 防抖保存任务。每次编辑都用新任务覆盖，旧任务被 drop 即取消。
@@ -50,12 +52,24 @@ impl EditorPanel {
     }
 
     fn create(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let textarea = cx.new(|cx| TextareaState::new(window, cx));
-        // 缩进配置接线：无需更换编辑内核即可生效。
-        // `set_tab_size` 定义在 `impl<M: MultiLineMode>`（gpui-base input/editor/indent.rs:492），
-        // 而 `impl MultiLineMode for TextareaMode` 成立（input/base/kind.rs:65）。
-        let indent = crate::app::config(cx).editor.indent;
-        textarea.update(cx, |state, cx| {
+        let cfg = crate::app::config(cx);
+        let show_line_numbers = cfg.editor.show_line_numbers;
+        let indent = cfg.editor.indent;
+
+        // 编辑内核为 `EditorState`（代码编辑模式）：行号、诊断等能力只有它提供。
+        // Markdown 写作不需要括号/引号自动补全与回车自动缩进，这里显式关闭；
+        // 折叠与缩进参考线的交互尚未验证，一并关闭，避免未预期的行为。
+        let editor = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .line_number(show_line_numbers)
+                .auto_close(false)
+                .smart_indent(false)
+                .folding(false)
+                .indent_guides(false)
+        });
+        // 缩进配置接线：`set_tab_size` 定义在 `impl<M: MultiLineMode>`
+        // （gpui-base input/editor/indent.rs:492），两种内核都可用。
+        editor.update(cx, |state, cx| {
             state.set_tab_size(
                 TabSize {
                     tab_size: indent.tab_size as usize,
@@ -66,7 +80,7 @@ impl EditorPanel {
         });
         let self_entity = cx.weak_entity();
 
-        cx.subscribe_in(&textarea, window, |this, _, ev: &InputEvent, window, cx| {
+        cx.subscribe_in(&editor, window, |this, _, ev: &InputEvent, window, cx| {
             if matches!(ev, InputEvent::Change) {
                 this.on_change(window, cx);
             }
@@ -76,8 +90,9 @@ impl EditorPanel {
         let mut this = Self {
             focus_handle: cx.focus_handle(),
             note: None,
-            textarea,
+            editor,
             applied_indent: indent,
+            applied_line_numbers: show_line_numbers,
             doc: None,
             save_task: None,
             status: SharedString::default(),
@@ -189,7 +204,7 @@ impl EditorPanel {
             Ok(note) => {
                 let text = note.text();
                 // set_value 不触发 Change 事件，因此加载不会被误判为用户编辑
-                self.textarea.update(cx, |state, cx| {
+                self.editor.update(cx, |state, cx| {
                     state.set_value(text, window, cx);
                 });
                 self.status = format!("已打开 {}", note.path().display()).into();
@@ -226,7 +241,7 @@ impl EditorPanel {
         self.last_published_version = None;
         self.status = SharedString::default();
 
-        self.textarea
+        self.editor
             .update(cx, |state, cx| state.set_value("", window, cx));
 
         let self_entity = self.self_entity.clone();
@@ -259,7 +274,7 @@ impl EditorPanel {
 
         let ratio = if let Some(note) = &self.note {
             let (off, viewport, line_h) = {
-                let st = self.textarea.read(cx);
+                let st = self.editor.read(cx);
                 (
                     st.scroll_offset().y,
                     st.input_bounds().size.height,
@@ -272,7 +287,7 @@ impl EditorPanel {
             if viewport <= px(0.) {
                 return;
             }
-            // textarea 内部滚动，无直接内容高度 API，用行高×行数估算。
+            // editor 内部滚动，无直接内容高度 API，用行高×行数估算。
             // 左右两侧共用同一估算，保证"相对位置一致"。
             let content = line_h * note.line_count() as f32;
             let max = (content - viewport).max(px(1.));
@@ -307,7 +322,7 @@ impl EditorPanel {
             return;
         };
         let (viewport, line_h) = {
-            let st = self.textarea.read(cx);
+            let st = self.editor.read(cx);
             (st.input_bounds().size.height, st.line_height())
         };
         let Some(line_h) = line_h else {
@@ -319,7 +334,7 @@ impl EditorPanel {
         let content = line_h * note.line_count() as f32;
         let max = (content - viewport).max(px(1.));
         let target_y = -(ratio.clamp(0.0, 1.0) * max);
-        self.textarea.update(cx, |st, cx| {
+        self.editor.update(cx, |st, cx| {
             st.set_scroll_offset(point(px(0.), target_y), cx);
         });
         // 记录"我刚按预览目标滚到的位置"，供后续回显吸收
@@ -335,7 +350,7 @@ impl EditorPanel {
     }
 
     fn on_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.textarea.read(cx).value().to_string();
+        let text = self.editor.read(cx).value().to_string();
         if let Some(note) = &mut self.note {
             note.set_text(&text);
         }
@@ -397,7 +412,7 @@ impl EditorPanel {
             match note.reload() {
                 Ok(()) => {
                     let text = note.text();
-                    self.textarea.update(cx, |state, cx| {
+                    self.editor.update(cx, |state, cx| {
                         state.set_value(text, window, cx);
                     });
                     self.status = "已加载外部修改".into();
@@ -538,7 +553,7 @@ impl EditorPanel {
         let Some(_) = &self.note else {
             return;
         };
-        self.textarea.update(cx, |state, cx| match cmd.insertion() {
+        self.editor.update(cx, |state, cx| match cmd.insertion() {
             Insertion::Surround { before, after } => surround(state, window, cx, before, after),
             Insertion::Block(text) => block(state, window, cx, text),
             Insertion::Template { before, after } => {
@@ -546,7 +561,7 @@ impl EditorPanel {
             }
         });
         // 重新聚焦编辑区：让光标可见，后续输入继续落在笔记里
-        self.textarea
+        self.editor
             .update(cx, |state, cx| state.focus(window, cx));
         self.status = format!("已插入：{}", cmd.label()).into();
         cx.notify();
@@ -671,7 +686,7 @@ fn close_editor_tab(weak: WeakEntity<EditorPanel>, window: &mut Window, cx: &mut
 }
 
 impl Render for EditorPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let started = Instant::now();
         // 滚动同步由帧轮询（schedule_scroll_tick）驱动，不在这里每帧做
 
@@ -680,7 +695,7 @@ impl Render for EditorPanel {
         let indent = crate::app::config(cx).editor.indent;
         if indent != self.applied_indent {
             self.applied_indent = indent;
-            self.textarea.update(cx, |state, cx| {
+            self.editor.update(cx, |state, cx| {
                 state.set_tab_size(
                     TabSize {
                         tab_size: indent.tab_size as usize,
@@ -691,11 +706,20 @@ impl Render for EditorPanel {
             });
         }
 
+        // 行号开关变更时同样增量下发，改设置后下一帧即生效
+        let show_line_numbers = crate::app::config(cx).editor.show_line_numbers;
+        if show_line_numbers != self.applied_line_numbers {
+            self.applied_line_numbers = show_line_numbers;
+            self.editor.update(cx, |state, cx| {
+                state.set_line_number(show_line_numbers, window, cx);
+            });
+        }
+
         // 未打开任何笔记时显示占位提示，编辑区本身始终存在
         let body = if self.note.is_some() {
             div().flex_1().min_h_0().child({
                 let font = &crate::app::config(cx).editor.font;
-                Textarea::new(&self.textarea)
+                Editor::new(&self.editor)
                     .size_full()
                     .appearance(false)
                     .bordered(false)
@@ -893,9 +917,9 @@ fn format_icon(cmd: Format) -> Icon {
 
 /// 在光标处插入一对标记并把光标置于中间；若有选中文本则整体包裹。
 fn surround(
-    state: &mut TextareaState,
+    state: &mut EditorState,
     window: &mut Window,
-    cx: &mut Context<TextareaState>,
+    cx: &mut Context<EditorState>,
     before: &str,
     after: &str,
 ) {
@@ -917,7 +941,7 @@ fn is_line_start(prev_char: Option<char>) -> bool {
 }
 
 /// 光标是否处于行首（偏移为 0 或前一个字符是换行）。
-fn at_line_start(state: &TextareaState) -> bool {
+fn at_line_start(state: &EditorState) -> bool {
     let offset = state.cursor();
     if offset == 0 {
         return true;
@@ -928,9 +952,9 @@ fn at_line_start(state: &TextareaState) -> bool {
 
 /// 在光标处插入一段块级文本，必要时先补一个换行使其自成一块。
 fn block(
-    state: &mut TextareaState,
+    state: &mut EditorState,
     window: &mut Window,
-    cx: &mut Context<TextareaState>,
+    cx: &mut Context<EditorState>,
     text: &str,
 ) {
     if !at_line_start(state) {
@@ -943,9 +967,9 @@ fn block(
 ///
 /// 若光标不在行首，先补一个换行使其自成一块。
 fn insert_template(
-    state: &mut TextareaState,
+    state: &mut EditorState,
     window: &mut Window,
-    cx: &mut Context<TextareaState>,
+    cx: &mut Context<EditorState>,
     before: &str,
     after: &str,
 ) {

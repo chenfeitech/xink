@@ -15,10 +15,10 @@
 
 | 指标 | 数量 | 说明 |
 |---|---|---|
-| 叶子配置项（顶层字段展开后） | **29** | 19 个顶层字段，其中 `tree_font` / `editor.font` / `preview.font` / `indent` 为结构体 |
-| 已真正作用于软件功能 | **17** | 有明确消费点，改完能看到效果 |
-| **死配置（存了不生效）** | **12** | 值能保存、能导出，但不影响任何行为 |
-| 其中：设置界面已标注 ⚠ | 8 | `language`、`default_mode`、`indent.*`、`show_line_numbers`、`spell_check`、`color_scheme`、`image_display`、`link_open` |
+| 叶子配置项（顶层字段展开后） | **28** | 18 个顶层字段（`default_mode` 已于 2026-09-24 移除），其中 `tree_font` / `editor.font` / `preview.font` / `indent` 为结构体 |
+| 已真正作用于软件功能 | **19** | 含 Spike 后接线的 `indent.*` 两项 |
+| **死配置（存了不生效）** | **9** | 值能保存、能导出，但不影响任何行为 |
+| 其中：设置界面已标注 ⚠ | 5 | `language`、`spell_check`、`color_scheme`、`image_display`、`link_open` |
 | 其中：界面有入口但未标注 | 2 | `editor.font.weight`、`preview.font.weight`（模型有、UI 无入口、渲染未读） |
 | 其中：**连设置项入口都没有** | 1 | `editor.keymap`（`main.rs:46-56` 快捷键全部硬编码） |
 | 覆盖"配置改动 → UI 行为改变"的测试 | **0** | `src/ui/settings.rs` 无 `tests.rs`，配置单测全部停留在数据层 |
@@ -26,9 +26,10 @@
 **结论**：配置页面当前"看起来能调 20+ 项，实际只有 17 项真正接线"，且这条链路**没有任何测试守护**，
 重构时极易退化。本文档给出：接线总表、生效链路规范、逐项接线方案、验证方法与防退化机制。
 
-> 修正口径（含 2026-09-24 Spike 结果）：`link_open` 已确认可接线（P1）、`spell_check` 判定移除、
-> `indent.*` 两项**已接线**、而 `show_line_numbers` 延后。
-> 因此**当前仍未接线的为 10 项**：`language`、`default_mode`、`show_line_numbers`、`spell_check`、
+> 修正口径（2026-09-24）：`link_open` 已确认可接线（P1）、`spell_check` 判定移除、
+> `indent.*` 两项**已接线**、`show_line_numbers` **已接线**（随编辑内核升级落地）、
+> **`default_mode` 已移除**。
+> 因此**当前仍未接线的为 8 项**：`language`、`spell_check`、
 > `editor.font.weight`、`preview.font.weight`、`color_scheme`、`keymap`、`image_display`、`link_open`。
 
 ### 1.1 三条根因
@@ -36,8 +37,8 @@
 | 根因 | 表现 | 证据 |
 |---|---|---|
 | **R1 消费方式散落，无集中登记** | 配置是"各面板 `render` 内现读"（pull），消费点分散在 4 个 UI 文件，没有登记表，改的人无法知道某个字段有没有被用 | `file_tree.rs:604`、`editor.rs:664`、`preview.rs:162` 各自 `crate::app::config(cx)` |
-| **R2 框架能力缺口** | `Textarea` 未暴露 `tab_size` / 行号；`TextView` 未暴露图片开关与链接点击回调；无拼写检查接口 | `editor.rs:663-672` 只设了字体三件套 |
-| **R3 功能未实现但配置先行，且无退出机制** | `default_mode` 的 Split/Wysiwyg、`language` 本地化、`keymap` 覆盖都先在模型里占位，长期无法接线也无人删除 | `config.rs:139/149/127` |
+| **R2 框架能力缺口** | `Textarea` 编译期不暴露行号（行号仅在 `EditorState`）；`TextView` 未暴露图片显示开关；框架无拼写检查接口 | `editor.rs:663-672`；核实记录见 §1.2 |
+| **R3 功能未实现但配置先行，且无退出机制** | `language` 本地化、`keymap` 覆盖先在模型里占位，长期无法接线也无人删除（`default_mode` 已于 2026-09-24 移除，作为该问题的首个处置） | `core/config.rs` |
 | **R4 无防退化校验** | `unavailable` 标记靠人工维护，未接线的项不会被 CI 发现 | `settings.rs:219-700` 的 `all_fields()` 无测试 |
 
 ### 1.2 框架能力核实（追加：推翻部分原假设）
@@ -105,12 +106,12 @@
 
 | 配置项 | 类型 / 默认 | 设置项入口 | 消费点 | 状态 |
 |---|---|---|---|---|
-| `default_mode` | `EditorMode` / `Source` | 编辑行为 → 默认模式 | 无 | ❌ 仅源码模式 |
+| ~~`default_mode`~~ | — | — | — | **已移除**（2026-09-24）：仅源码模式可用，分屏由 DockArea 布局直接提供，所见即所得按 `REQUIREMENTS.md` 不在本期范围 |
 | `auto_save` | `bool` / `true` | 编辑行为 → 自动保存 | `editor.rs:336,340` | ✅ |
 | `auto_save_delay_ms` | `u64` 200–60000 / `300` | 编辑行为 → 保存延迟 | `editor.rs:335` | ✅ |
 | `indent.use_tabs` | `bool` / `false` | 编辑行为 → 使用 Tab | 无 | ❌ |
 | `indent.tab_size` | `u32` 1–16 / `4` | 编辑行为 → 缩进宽度 | 无 | ❌ |
-| `show_line_numbers` | `bool` / `false` | 编辑行为 → 行号 | 无 | ❌ 仅 `LayoutMode::CodeEditor` 支持 |
+| `show_line_numbers` | `bool` / `false` | 编辑行为 → 行号 | `editor.rs`（构造 + `render` 增量下发） | ✅ 已接线（2026-09-24，随内核升级为 `EditorState`） |
 | `spell_check` | `bool` / `false` | 编辑行为 → 拼写检查 | 无 | ❌ **已核实框架无能力 → 决策移除**（§1.2） |
 | `font.family` | `String` / 等宽 | 字体与排版 → 字体 | `editor.rs:664,669` | ✅ |
 | `font.size` | `f32` / `14` | 字体与排版 → 字号 | `editor.rs:670` | ✅ |
@@ -239,11 +240,11 @@ UI 呈现规则：
 | 2 | `language` | 界面文案语言 | 新建 `core/i18n.rs`：`t(key, lang)` 查表；UI 文案全部改用 `t()`；`update_config` 后 `refresh_windows()` 即切 | L1 | P2 |
 | 3 | `icon_size` | 目录树/工具栏图标边长 | 已接线 | L1 | — |
 | 4 | `tree_font.*` | 目录树字体 | 已接线（含 weight） | L1 | — |
-| 5 | `default_mode` | 打开笔记时的编辑形态 | `Source`=现状；`Split`=编辑面板内左右分屏（DockArea 已具备分栏能力）；**`Wysiwyg` 短期无实现路径 → 从枚举移除**，保留 `Source \| Split` | L1 | P4 |
+| 5 | ~~`default_mode`~~ | ~~打开笔记时的编辑形态~~ | **已移除**（2026-09-24）：仅源码模式可用，其余两种模式无实现路径；分屏由 DockArea 布局直接提供，不需要配置项 | — | 已移除 | `Source`=现状；`Split`=编辑面板内左右分屏（DockArea 已具备分栏能力）；**`Wysiwyg` 短期无实现路径 → 从枚举移除**，保留 `Source \| Split` | L1 | P4 |
 | 6 | `auto_save` | 停止输入后自动写盘 | 已接线（`editor.rs:340` 只挡写盘，不挡预览刷新） | L2 | — |
 | 7 | `auto_save_delay_ms` | 防抖延时 | 已接线；注意延时在 `schedule_save` 调用瞬间快照进异步任务 | L2 | — |
 | 8 | `indent.use_tabs` / `tab_size` | Tab 键插入的字符 | **Spike 已验证并落地**：`set_tab_size` 属 `impl<M: MultiLineMode>`（`indent.rs:492`），`TextareaState` 可直接设 `TabSize { tab_size, hard_tabs }`，**无需更换编辑内核**。已在 `spike/editor-core` 实现（create 首次下发 + render 增量下发） | L1 | ✅ 已完成（待合入） |
-| 9 | `show_line_numbers` | 编辑区左侧行号 | **Spike 结论：不为行号更换编辑内核**。行号 API 仅存在于 `EditorState`（`state.rs:9330`），换内核收益仅此 1 项，成本却覆盖 P0 编辑保存主链路。保留配置并标 `NotWired`，待 P4（Wysiwyg/Split）或"编辑区语法高亮/大纲"立项时随内核升级作为副产品落地。详见 [`editor-core-migration-eval.md`](./editor-core-migration-eval.md) §9 | — | 延后（NotWired） |
+| 9 | `show_line_numbers` | 编辑区左侧行号 | **已完成**：编辑内核升级为 `EditorState`（行号 API 仅它提供，`state.rs:9330`）。构造期按配置设置，`render` 中检测变更增量下发 → 开关即时生效；同时显式关闭 `auto_close` / `smart_indent` / `folding` / `indent_guides`，避免干扰 Markdown 写作 | L1 | ✅ 已完成（待人工验证） |
 | 10 | `spell_check` | 拼写检查 | **已核实框架无能力 → 移除**（§1.2）。自研需新依赖 + 词典 + 编辑器装饰，属独立特性 | — | P3 移除 |
 | 11 | `editor.font.*` | 编辑区字体 | 已接线 family/size/line_height；**补 weight**：`editor.rs:663-672` 加 `.font_weight(FontWeight(font.weight.value()))`，并在设置界面补"字重"入口 | L1 | P1 |
 | 12 | `color_scheme` | 编辑区配色独立于主题 | `Auto`=跟随全局主题；`Light/Dark`=在编辑区容器显式设前景/背景色（不依赖全局 Theme） | L1 | P3 |
@@ -268,7 +269,7 @@ UI 呈现规则：
 
 | 级别 | 含义 | 配置项 | 作用范围 | 是否需重启 |
 |---|---|---|---|---|
-| **L1 立即** | `update_config` → `refresh_windows()` → 下一帧全部窗口重绘；面板 `render` 内现读配置 | `theme`、`icon_size`、`tree_font.*`、`editor.font.*`、`preview.font.*`、`code_theme`、`max_width`、`language`（改造后）、`default_mode`（改造后）、`show_line_numbers`、`color_scheme`、`image_display` | 全部已打开窗口 + 之后新建的窗口 | 否 |
+| **L1 立即** | `update_config` → `refresh_windows()` → 下一帧全部窗口重绘；面板 `render` 内现读配置 | `theme`、`icon_size`、`tree_font.*`、`editor.font.*`、`preview.font.*`、`code_theme`、`max_width`、`language`（改造后）、`show_line_numbers`、`color_scheme`、`image_display` | 全部已打开窗口 + 之后新建的窗口 | 否 |
 | **L2 下次交互** | 值在触发瞬间被读取/快照，改动不影响已在飞行中的任务 | `auto_save`（下一次防抖触发是否写盘）、`auto_save_delay_ms`（下一次输入触发的防抖周期）、`indent.*`（下一次按 Tab）、`sync_scroll`（下一次滚动事件） | 当前会话，下一轮触发起 | 否 |
 | **L3 重启** | 绑定/注册在启动时一次性完成 | `keymap`（`main.rs` 的 `bind_keys` 在启动阶段执行） | 全应用 | **是** |
 | **L4 不生效** | 无消费点（当前死配置，见 §2.2） | 12 项 | — | — |
@@ -286,7 +287,7 @@ UI 呈现规则：
 | **P1 低成本接线** | `editor.font.weight`、`preview.font.weight`、`code_theme` 跟随明暗、`sync_scroll` 编辑器侧判断、**`link_open`（`on_link_click`）**、配置克隆开销 | `editor.rs`、`preview.rs`、`settings.rs`、`core/config/resolve.rs`（新建） | §7.3 验收清单对应项通过；新增单测 ≥ 9 |
 | **P2 结构性接线** | `language` 文案表（`core/i18n.rs`）、`keymap` 覆盖（`core/keymap.rs` + `main.rs`）、退出前 flush | `core/i18n.rs`（新建）、`core/keymap.rs`（新建）、`main.rs`、`app.rs` | 切英文生效；改 `cmd-s`→`cmd-shift-s` 重启后生效 |
 | **P3 能力补齐/清理** | 缩进 Tab、行号（gutter 或换 Editor）、`color_scheme`、`image_display`（markdown 预处理）、**移除 `spell_check`** | `editor.rs`、`core/markdown.rs`、`config.rs`、`settings.rs`、`config/tests.rs` | 每项要么生效，要么从模型与界面移除（不留死配置） |
-| **P4 形态类** | `default_mode` 的 `Split`；移除 `Wysiwyg` | `editor.rs`、`config.rs` | 分屏模式可用 |
+| **P4 形态类** | ~~`default_mode`~~ **已取消**（2026-09-24）：分屏由 DockArea 布局直接提供，所见即所得按 `REQUIREMENTS.md` 不在本期范围 | — | 无需实施 |
 
 **执行原则**：每个阶段结束后，§4 总表中该阶段的项必须从 `L4/NotWired` 变为某个明确级别；
 做不到接线的项，在同一阶段内**从数据模型与设置界面移除**，不允许以"暂未生效"长期挂起。
@@ -374,10 +375,10 @@ rg -o '// config: [a-z_.]+' src --no-filename | sed 's|// config: ||' | sort -u
 | V14 | `language` | 切 English | 界面文案 | **当前无变化**；P2 后切换 | ❌ → P2 |
 | V15 | `keymap` | — | — | **无入口**；P2 后可改键位，重启生效 | ❌ → P2 |
 | V16 | `indent.tab_size` / `use_tabs` | 4 → 8 后按 Tab；再勾选"使用 Tab 字符" | 插入字符 | 分别插入 8 空格与 `\t`，**改完即生效**（无需重开标签） | ✅ 已接线，待人工验证 |
-| V17 | `show_line_numbers` | 打开 | 编辑区左侧 | **当前无行号**；P3 后显示 | ❌ → P3 |
+| V17 | `show_line_numbers` | 打开开关 | 编辑区左侧的行号 | 开关打开后立即显示行号；关闭后隐藏（无需重开标签） | ✅ 已接线，待人工验证 |
 | V18 | `image_display` | 设为"不显示图片" | 预览区图片 | **当前无变化**；P3 后图片变为链接文本 | ❌ → P3 |
 | V19 | `link_open` | ① 设为"浏览器打开"，点外链<br>② 设为"应用内打开"，点库内 `.md` 链接 | ① 系统浏览器打开<br>② 在当前窗口打开为标签 | **当前两者都走浏览器**；P1 后按配置分流 | ❌ → **P1** |
-| V20 | `default_mode` | 设为"分屏" | 打开笔记的形态 | **当前无变化**；P4 后分屏 | ❌ → P4 |
+| V20 | ~~`default_mode`~~ | — | — | **配置项已移除**：设置界面不再显示该项，导出 JSON 不含该字段 | ✅ 已移除 |
 | V21 | `color_scheme` | 任意改动 | 编辑区配色 | 无变化；P3 接线或移除 | ❌ → P3 |
 | V24 | `spell_check` | — | 设置界面是否已移除该项 | P3 后界面与模型均无此项，导出 JSON 不含该字段 | ❌ → P3 移除 |
 | V22 | 持久化 | 改任意项 → 退出 → 重启 | 设置值、实际效果 | 值保留且效果一致（配置确实被消费而非仅显示） | 需逐项复测 |
@@ -409,11 +410,11 @@ CI/本地命令：`cargo test` + `bash scripts/check-config-wiring.sh`。
 
 | # | 风险 / 待决 | 影响 | 建议 |
 |---|---|---|---|
-| Q1 | `Textarea` 是否吞掉 Tab 键、能否用于自研 gutter | 决定 `indent.*` 与 `show_line_numbers` 能否在 P3 落地 | **已拆出独立 Spike**：[`editor-core-migration-eval.md`](./editor-core-migration-eval.md)。已核实行号只在 `EditorState` 上；`indent` 的公开 setter 未发现，待原型确认；自研 gutter 受 soft wrap 制约 |
+| Q1 | ~~`Textarea` 是否吞掉 Tab 键、能否用于自研 gutter~~ | ~~决定 `indent.*` 与 `show_line_numbers` 能否落地~~ | **已关闭（2026-09-24）**：Tab 键由框架全局绑定 `tab → IndentInline`（`state.rs:182`，`"Input"` 上下文），无需自行处理；缩进已接线；行号随内核升级为 `EditorState` 已接线。自研 gutter 方案作废（soft wrap 下行号会错位） |
 | Q2 | ~~`TextView` 是否提供链接点击回调~~ | ~~决定 `link_open` 生死~~ | **已关闭（2026-09-24）**：回调存在（`text_view.rs:333`），`link_open` 改为 P1 接线，详见 §1.2 |
 | Q3 | 切到 `Editor`（代码编辑模式）换取行号能力 | 会牵动编辑体验、保存与光标逻辑 | **推荐"先做 1 天原型再决策"**，不直接全量替换。理由与 7 条验收清单见 `editor-core-migration-eval.md` §4/§6；不与 P1/P2 混做 |
 | Q4 | `keymap` 只能重启生效 | 用户体验略差 | 接受 L3，UI 明确标注"重启后生效" |
-| Q5 | 移除字段的兼容影响 | 老 `config.json` 含被删字段 | serde 忽略未知字段，无风险；但 `default_mode` 移除 `Wysiwyg` 时需在 `sanitize` 里把旧值 `wysiwyg` 夹回 `source` |
+| Q5 | 移除字段的兼容影响 | 老 `config.json` 含被删字段 | serde 忽略未知字段，无风险。**已验证**：移除 `default_mode` 后，含该字段的旧 `config.json` 仍可正常加载（多余字段被忽略），`cargo test` 85 passed |
 | Q6 | 全窗口重绘（`refresh_windows`）粒度粗 | 改一个数字也全量重绘 | 本期不改（结构体小，开销可忽略）；若后续配置变大再考虑事件订阅 |
 | Q7 | 拼写检查若日后要做，走哪条路 | 决定 `spell_check` 能否回归 | 已调研（勿重复）：框架无 API。可选 ①`objc` 调 macOS `NSSpellChecker`（无词典打包，需新增依赖）；②`hunspell` crate + 自带词典（跨平台，体积增大）。装饰层 GPUI 支持波浪下划线（`gpui-pre-0.3.5/src/style.rs:835`）。**须先做 POC 通过再决定加回字段** |
 | Q8 | `image_display` 的 `Original` 可否绕过 | 决定该项是否只能做到 `Hidden` | 可选探索：`TextView` 能解析 `<img src width height>`（`text_view.rs:1010` 附近），预处理阶段改写为不带尺寸约束的 HTML `<img>` 或可实现原始尺寸；**未验证**，优先级低 |
