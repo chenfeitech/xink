@@ -5,6 +5,7 @@
 pub mod config;
 pub mod highlight;
 pub mod markdown;
+pub mod media;
 pub mod note;
 pub mod session;
 pub mod vault;

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn rewrites_relative_image_to_file_url() {
-    let out = resolve_image_urls("![封面](assets/cover.png)", Path::new("/notes"));
+    let out = resolve_image_urls("![封面](assets/cover.png)", Path::new("/notes"), ImageOptions::default());
     assert!(
         out.contains("file:///notes/assets/cover.png"),
         "应补全为 file:// URL，实际: {out}"
@@ -10,25 +10,149 @@ fn rewrites_relative_image_to_file_url() {
 }
 
 #[test]
-fn keeps_remote_and_absolute_urls() {
-    let md = "![a](https://x.com/a.png) ![b](/abs/b.png) ![c](data:image/png;base64,xx)";
-    let out = resolve_image_urls(md, Path::new("/notes"));
+fn keeps_remote_and_data_urls() {
+    let md = "![a](https://x.com/a.png) ![c](data:image/png;base64,xx)";
+    let out = resolve_image_urls(md, Path::new("/notes"), ImageOptions::default());
     assert!(out.contains("https://x.com/a.png"));
-    assert!(out.contains("(/abs/b.png)"));
     assert!(out.contains("data:image/png;base64,xx"));
-    assert!(!out.contains("file://"), "绝对 URL 不应被改写: {out}");
+    // 远程与内嵌图片无法在本地预览，不改写也不包链接
+    assert!(!out.contains("file://"), "远程/内嵌图不应被改写: {out}");
 }
 
 #[test]
+fn rewrites_absolute_path_to_file_url() {
+    // 绝对路径同样要转 file://：否则框架会把它当 URI 交给 HTTP 客户端而加载不出来
+    let out = resolve_image_urls("![b](/abs/b.png)", Path::new("/notes"), ImageOptions::default());
+    assert!(
+        out.contains("file:///abs/b.png"),
+        "绝对路径应转为 file://: {out}"
+    );
+}
+
+#[test]
+fn local_image_becomes_data_url_and_is_clickable() {
+    // 内容随意：这里只做 base64 编码，不解码图片
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shot.png");
+    std::fs::write(&path, b"not-a-real-png").unwrap();
+
+    let out = resolve_image_urls("![图](shot.png)", dir.path(), ImageOptions::default());
+    assert!(
+        out.contains("data:image/png;base64,"),
+        "本地图片应转为 data URL: {out}"
+    );
+    // 渲染成 <img> 并包进指向自身的链接，点击才能打开大图（框架只有链接回调）
+    assert!(
+        out.starts_with("[<img src=\"data:"),
+        "图片应渲染成 img 并包成链接: {out}"
+    );
+    assert!(out.contains("alt=\"图\""), "应保留 alt: {out}");
+    assert!(
+        out.contains(&format!("](file://{})", encode_path(&path))),
+        "链接应指回本地路径: {out}"
+    );
+}
+
+#[test]
+fn missing_local_image_falls_back_to_file_url() {
+    // 文件不存在：转不出 data URL，退回 file://，链接仍指向正确位置
+    let out = resolve_image_urls("![图](nope.png)", Path::new("/notes"), ImageOptions::default());
+    assert!(out.contains("file:///notes/nope.png"), "实际: {out}");
+    assert!(!out.contains("data:"), "不应编造 data URL: {out}");
+}
+
+#[test]
+fn base64_matches_standard_vectors() {
+    assert_eq!(encode_base64(b""), "");
+    assert_eq!(encode_base64(b"f"), "Zg==");
+    assert_eq!(encode_base64(b"fo"), "Zm8=");
+    assert_eq!(encode_base64(b"foo"), "Zm9v");
+    assert_eq!(encode_base64(b"foob"), "Zm9vYg==");
+}
+
+/// 递归查找是否存在链接节点
+fn has_link(node: &markdown::mdast::Node) -> bool {
+    if matches!(node, markdown::mdast::Node::Link(_)) {
+        return true;
+    }
+    node.children()
+        .map(|cs| cs.iter().any(has_link))
+        .unwrap_or(false)
+}
+
+#[test]
+fn rendered_image_wrapped_in_link_is_clickable() {
+    // 图片渲染成 <img> 后仍必须包在链接里：框架只有链接点击回调，
+    // 不包就点不出预览窗口。
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.png");
+    std::fs::write(&path, b"png-bytes").unwrap();
+
+    let out = resolve_image_urls("![图](a.png)", dir.path(), ImageOptions::default());
+    assert!(out.starts_with("[<img "), "应渲染成 img: {out}");
+    assert!(
+        out.contains(&format!("](file://{})", encode_path(&path))),
+        "img 必须被包进指向原图的链接: {out}"
+    );
+
+    // 生成的源文必须能被解析器接受并解析出链接节点
+    let ast = markdown::to_mdast(&out, &parse_options_like_gpui(false)).unwrap();
+    assert!(has_link(&ast), "应解析出链接节点: {out}");
+}
+
+#[test]
+fn hidden_display_degrades_image_to_text_link() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.png"), b"x").unwrap();
+
+    let opts = ImageOptions {
+        display: ImageDisplay::Hidden,
+        width_percent: 100,
+    };
+    let out = resolve_image_urls("![图](a.png)", dir.path(), opts);
+    assert!(!out.contains("<img"), "不应内联渲染图片: {out}");
+    assert!(out.starts_with("[图]("), "应退化为文本链接: {out}");
+}
+
+#[test]
+fn image_width_percent_is_written_into_style() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.png"), b"x").unwrap();
+
+    let opts = ImageOptions {
+        display: ImageDisplay::FitWidth,
+        width_percent: 60,
+    };
+    let out = resolve_image_urls("![图](a.png)", dir.path(), opts);
+    assert!(out.contains("style=\"width: 60%\""), "应写入宽度: {out}");
+}
+
+#[test]
+fn alt_text_containing_the_url_is_not_rewritten() {
+    // 回归：URL 只应替换一次，alt 文本里的同名字符串不能被改成 data URL
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.png"), b"x").unwrap();
+
+    let out = resolve_image_urls("![a.png](a.png)", dir.path(), ImageOptions::default());
+    assert!(
+        out.contains("alt=\"a.png\""),
+        "alt 应保留为 a.png（URL 只替换一次）: {}",
+        &out[..out.len().min(60)]
+    );
+}
+
+// 图片扩展名的判据统一在 `core::media`，那里有专门的用例
+
+#[test]
 fn encodes_spaces_and_non_ascii() {
-    let out = resolve_image_urls("![a](my image.png)", Path::new("/n"));
+    let out = resolve_image_urls("![a](my image.png)", Path::new("/n"), ImageOptions::default());
     assert!(out.contains("my%20image.png"), "空格应被编码: {out}");
 }
 
 #[test]
 fn leaves_plain_text_untouched() {
     let md = "没有图片的段落";
-    assert_eq!(resolve_image_urls(md, Path::new("/n")), md);
+    assert_eq!(resolve_image_urls(md, Path::new("/n"), ImageOptions::default()), md);
 }
 
 // ── 预览前的防御性预处理 ──────────────────────────────────────

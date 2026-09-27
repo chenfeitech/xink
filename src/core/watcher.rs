@@ -8,6 +8,8 @@ use flume::Receiver;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 
+use crate::core::media::is_image_path;
+
 /// 变更类型。
 ///
 /// 必须区分「内容被改」与「结构变了」：应用自身的自动保存会写入文件，
@@ -55,7 +57,7 @@ impl VaultWatcher {
                 .paths
                 .into_iter()
                 // 目录变化意味着结构变了；也忽略应用自身的临时文件
-                .filter(|p| p.is_dir() || (is_markdown(p) && !is_temp(p)))
+                .filter(|p| p.is_dir() || (is_visible_file(p) && !is_temp(p)))
                 .collect();
 
             if !paths.is_empty() {
@@ -98,6 +100,12 @@ fn is_markdown(path: &Path) -> bool {
     path.extension()
         .map(|e| e.eq_ignore_ascii_case("md"))
         .unwrap_or(false)
+}
+
+/// 目录树里会出现的文件：笔记 + 图片。
+/// 必须与 `vault::scan_dir` 的判据一致，否则会出现"新增图片树里不刷新"的问题。
+fn is_visible_file(path: &Path) -> bool {
+    is_markdown(path) || is_image_path(path)
 }
 
 /// 应用原子写盘产生的临时文件

@@ -25,6 +25,7 @@ fn defaults_are_sane() {
     assert_eq!(c.preview.code_theme, "base16-ocean.dark");
     assert!(c.preview.sync_scroll, "默认应开启同步滚动");
     assert_eq!(c.preview.image_display, ImageDisplay::FitWidth);
+    assert_eq!(c.preview.image_width_percent, 100, "默认占满预览区宽度");
     assert_eq!(c.preview.link_open, LinkOpen::InApp);
 }
 
@@ -196,6 +197,35 @@ fn import_from_foreign_json_falls_back_to_defaults() {
 }
 
 // ── 辅助方法 ──────────────────────────────────────────────────
+
+#[test]
+fn sanitize_clamps_image_width_percent() {
+    let mut c = AppConfig::default();
+    c.preview.image_width_percent = 150;
+    c.sanitize();
+    assert_eq!(c.preview.image_width_percent, 100, "超出上限应夹取");
+
+    c.preview.image_width_percent = 5;
+    c.sanitize();
+    assert_eq!(c.preview.image_width_percent, 20, "低于下限应夹取");
+}
+
+#[test]
+fn legacy_image_display_value_does_not_break_config() {
+    // 已移除的"原始尺寸"若出现在旧 config.json 里，不能让整个文件解析失败
+    // （否则会静默回落默认值，用户所有设置丢失）
+    let json = r#"{"preview":{"image_display":"original"}}"#;
+    let mut c: AppConfig = serde_json::from_str(json).expect("旧值应能解析");
+    assert!(
+        matches!(c.preview.image_display, ImageDisplay::Legacy),
+        "未知选项应落在 Legacy 变体"
+    );
+    c.sanitize();
+    assert!(
+        matches!(c.preview.image_display, ImageDisplay::FitWidth),
+        "Legacy 应被夹回适应宽度"
+    );
+}
 
 #[test]
 fn font_weight_values_are_valid_css_weights() {

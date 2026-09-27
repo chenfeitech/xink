@@ -15,7 +15,7 @@ use gpui_kit::*;
 use crate::actions::Save;
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
 use crate::core::config::IndentConfig;
-use crate::core::markdown::{resolve_image_urls, sanitize_for_preview};
+use crate::core::markdown::{ImageOptions, resolve_image_urls, sanitize_for_preview};
 use crate::core::{Note, tab_key};
 
 pub struct EditorPanel {
@@ -26,6 +26,8 @@ pub struct EditorPanel {
     applied_indent: IndentConfig,
     /// 已下发的行号开关，用于检测配置变更并增量应用
     applied_line_numbers: bool,
+    /// 上次生成预览源文所用的图片选项，用于检测配置变更并重算预览
+    applied_image_opts: Option<ImageOptions>,
     /// 本篇笔记自己的预览文档。切换标签时整体替换引用，已解析过的不再重解析。
     doc: Option<Entity<TextViewState>>,
     /// 防抖保存任务。每次编辑都用新任务覆盖，旧任务被 drop 即取消。
@@ -93,6 +95,7 @@ impl EditorPanel {
             editor,
             applied_indent: indent,
             applied_line_numbers: show_line_numbers,
+            applied_image_opts: None,
             doc: None,
             save_task: None,
             status: SharedString::default(),
@@ -138,25 +141,35 @@ impl EditorPanel {
     /// 而不是把整篇重新塞进同一个共享文档。
     fn refresh_doc(&mut self, cx: &mut Context<Self>) {
         let started = Instant::now();
-        // 先用版本号判断是否值得重算。
+        // 先用「路径 + 版本 + 图片选项」判断是否值得重算。
         // note.text() 会把整个 Rope 转成 String，再加上图片路径正则重扫，
         // 若在 render 里每帧执行，切换标签时会明显卡顿。
+        //
+        // 图片选项必须参与判断：只改图片配置时路径与版本都不变，
+        // 若不看它，改了图片宽度也永远不会重算源文（配置表现为"不生效"）。
+        let opts = image_options(cx);
         let (path, version) = match &self.note {
             Some(note) => (note.path().to_path_buf(), note.version()),
-            None => return,
+            None => {
+                // 没有笔记时无需重算，但要记下当前选项，避免每帧重复进入
+                self.applied_image_opts = Some(opts);
+                return;
+            }
         };
         if self.last_published_path.as_ref() == Some(&path)
             && self.last_published_version == Some(version)
+            && self.applied_image_opts == Some(opts)
         {
             return;
         }
         self.last_published_path = Some(path);
         self.last_published_version = Some(version);
+        self.applied_image_opts = Some(opts);
 
         let Some(note) = &self.note else {
             return;
         };
-        let source = Self::preview_source(note);
+        let source = Self::preview_source(note, opts);
         if let Some(doc) = &self.doc {
             doc.update(cx, |doc, cx| doc.set_text(source.as_str(), cx));
         }
@@ -180,13 +193,13 @@ impl EditorPanel {
         });
     }
 
-    /// 生成预览源文：把相对图片路径补全为 file:// URL，否则本地图片加载不到
-    fn preview_source(note: &Note) -> String {
+    /// 生成预览源文：本地图片转 data URL，并按配置决定显示方式与宽度
+    fn preview_source(note: &Note, opts: ImageOptions) -> String {
         let text = note.text();
         let dir = note.path().parent().unwrap_or(Path::new(""));
         // 先做防御性预处理，避免畸形 Markdown 让预览解析器 panic 导致应用退出
         let safe = sanitize_for_preview(&text);
-        resolve_image_urls(&safe, dir)
+        resolve_image_urls(&safe, dir, opts)
     }
 
     /// 载入一篇笔记。也用于把空白占位页"填"成真正的笔记。
@@ -209,7 +222,7 @@ impl EditorPanel {
                 });
                 self.status = format!("已打开 {}", note.path().display()).into();
                 // 每篇笔记一个预览文档，首次解析后切回来就无需再解析
-                let source = Self::preview_source(&note);
+                let source = Self::preview_source(&note, image_options(cx));
                 self.doc = Some(cx.new(|cx| TextViewState::markdown(source.as_str(), cx)));
                 self.note = Some(note);
                 true
@@ -715,6 +728,13 @@ impl Render for EditorPanel {
             });
         }
 
+        // 图片显示方式 / 宽度变化时请求重算预览源文。
+        // 是否真的重算由 `refresh_doc` 内部守卫判断（那里也会记录当前选项），
+        // 这里只负责在配置变化时触发一次。
+        if Some(image_options(cx)) != self.applied_image_opts {
+            self.refresh_doc(cx);
+        }
+
         // 未打开任何笔记时显示占位提示，编辑区本身始终存在
         let body = if self.note.is_some() {
             div().flex_1().min_h_0().child({
@@ -980,6 +1000,15 @@ fn insert_template(
     let between = state.cursor_position();
     state.insert(after, window, cx);
     state.set_cursor_position(between, window, cx);
+}
+
+/// 从当前配置取出图片渲染选项（预览源文生成时用）
+fn image_options(cx: &App) -> ImageOptions {
+    let cfg = crate::app::config(cx);
+    ImageOptions {
+        display: cfg.preview.image_display,
+        width_percent: cfg.preview.image_width_percent,
+    }
 }
 
 #[cfg(test)]

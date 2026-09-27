@@ -16,6 +16,31 @@ fn should_ignore_common_noise() {
 }
 
 #[test]
+fn scan_collects_image_files() {
+    // 目录树要能看到图片：jpg / png / gif / svg / webp 都应被收集，
+    // 其余非笔记文件仍然不进树（避免把库里的杂文件全列出来）
+    let dir = tmp();
+    let root = dir.path();
+    for name in ["shot.png", "photo.jpg", "anim.gif", "icon.svg", "pic.webp"] {
+        fs::write(root.join(name), "").unwrap();
+    }
+    fs::write(root.join("note.md"), "").unwrap();
+    fs::write(root.join("readme.txt"), "").unwrap();
+    fs::write(root.join("main.rs"), "").unwrap();
+
+    let vault = Vault::open(root.to_path_buf()).unwrap();
+    let tree = vault.scan().unwrap();
+
+    let names: Vec<String> = tree.children.iter().map(|c| c.name.clone()).collect();
+    for name in ["shot.png", "photo.jpg", "anim.gif", "icon.svg", "pic.webp"] {
+        assert!(names.iter().any(|n| n == name), "图片应出现在目录树: {name}");
+    }
+    assert!(names.iter().any(|n| n == "note.md"));
+    assert!(!names.iter().any(|n| n == "readme.txt"), "非图片非笔记不进树");
+    assert!(!names.iter().any(|n| n == "main.rs"), "非图片非笔记不进树");
+}
+
+#[test]
 fn scan_collects_markdown_and_dirs_sorted() {
     let dir = tmp();
     let root = dir.path();

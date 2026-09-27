@@ -10,7 +10,10 @@ use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::tree::{TreeItem, TreeState, tree};
+use gpui_kit::assets::IconName as AssetIcon;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Size};
+
+use crate::core::media::is_image_path;
 use gpui_kit::*;
 
 use anyhow::anyhow;
@@ -708,7 +711,9 @@ impl Render for FilesPanel {
                         // 目录树的字体与图标尺寸均取自配置，改完立即生效
                         let font = &cfg.basic.tree_font;
                         let icon_px = px(cfg.basic.icon_size as f32);
-                        let icon = |name: IconName| Icon::new(name).with_size(Size::Size(icon_px));
+                        // 用完整图标集（gpui_kit::assets）：组件库内置的那 101 个
+                        // 图标里没有图片相关图标
+                        let icon = |name: AssetIcon| Icon::new(name).with_size(Size::Size(icon_px));
                         let mut row = div()
                             .flex()
                             .items_center()
@@ -720,15 +725,18 @@ impl Render for FilesPanel {
                         if is_dir {
                             if entry.is_expanded() {
                                 row = row
-                                    .child(icon(IconName::ChevronDown))
-                                    .child(icon(IconName::FolderOpen));
+                                    .child(icon(AssetIcon::ChevronDown))
+                                    .child(icon(AssetIcon::FolderOpen));
                             } else {
                                 row = row
-                                    .child(icon(IconName::ChevronRight))
-                                    .child(icon(IconName::FolderClosed));
+                                    .child(icon(AssetIcon::ChevronRight))
+                                    .child(icon(AssetIcon::FolderClosed));
                             }
+                        } else if is_image_path(&path) {
+                            // 图片文件：专用图标，点击打开图片预览而不是当笔记打开
+                            row = row.child(div().w(icon_px)).child(icon(AssetIcon::FileImage));
                         } else {
-                            row = row.child(div().w(icon_px)).child(icon(IconName::FileText));
+                            row = row.child(div().w(icon_px)).child(icon(AssetIcon::FileText));
                         }
                         // 目录名加粗，与文件形成强弱对比
                         let name = div().child(item.label.to_string());
@@ -749,7 +757,10 @@ impl Render for FilesPanel {
                                 });
                                 // 目录的展开/折叠由 Tree 自身处理，这里只负责打开文件
                                 if !is_dir {
-                                    if let Some(panel) = weak_click.upgrade() {
+                                    if is_image_path(&path) {
+                                        // 图片不进编辑器，直接开预览窗口
+                                        crate::ui::open_image_viewer(path.clone(), cx);
+                                    } else if let Some(panel) = weak_click.upgrade() {
                                         panel.update(cx, |p, cx| {
                                             p.open_note(path.clone(), window, cx)
                                         });

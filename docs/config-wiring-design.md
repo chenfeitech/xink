@@ -18,7 +18,7 @@
 | 叶子配置项（顶层字段展开后） | **28** | 18 个顶层字段（`default_mode` 已于 2026-09-24 移除），其中 `tree_font` / `editor.font` / `preview.font` / `indent` 为结构体 |
 | 已真正作用于软件功能 | **19** | 含 Spike 后接线的 `indent.*` 两项 |
 | **死配置（存了不生效）** | **9** | 值能保存、能导出，但不影响任何行为 |
-| 其中：设置界面已标注 ⚠ | 5 | `language`、`spell_check`、`color_scheme`、`image_display`、`link_open` |
+| 其中：设置界面已标注 ⚠ | 4 | `language`、`spell_check`、`color_scheme`、`link_open`（`link_open` 已接线，标记待清理） |
 | 其中：界面有入口但未标注 | 2 | `editor.font.weight`、`preview.font.weight`（模型有、UI 无入口、渲染未读） |
 | 其中：**连设置项入口都没有** | 1 | `editor.keymap`（`main.rs:46-56` 快捷键全部硬编码） |
 | 覆盖"配置改动 → UI 行为改变"的测试 | **0** | `src/ui/settings.rs` 无 `tests.rs`，配置单测全部停留在数据层 |
@@ -29,8 +29,9 @@
 > 修正口径（2026-09-24）：`link_open` 已确认可接线（P1）、`spell_check` 判定移除、
 > `indent.*` 两项**已接线**、`show_line_numbers` **已接线**（随编辑内核升级落地）、
 > **`default_mode` 已移除**。
-> 因此**当前仍未接线的为 8 项**：`language`、`spell_check`、
-> `editor.font.weight`、`preview.font.weight`、`color_scheme`、`keymap`、`image_display`、`link_open`。
+> 因此**当前仍未接线的为 6 项**：`language`、`spell_check`、
+> `editor.font.weight`、`preview.font.weight`、`color_scheme`、`keymap`。
+> （`link_open` 已随"图片预览"接线，`image_display` 与新增的 `image_width_percent` 已接线。）
 
 ### 1.1 三条根因
 
@@ -49,7 +50,7 @@
 |---|---|---|---|
 | `link_open` | **框架有能力** | `gpui-base-0.6.4/src/text/text_view.rs:333` 提供 `TextView::on_link_click(handler)`；`gpui-component-0.6.4/src/text/compat.rs:136` 同名转发；**未挂 handler 时默认走 `cx.open_url(&url)`**（`text_view.rs:96`） | **保留并接线，从 P3 提前到 P1** |
 | `spell_check` | **框架无能力** | 全量搜索 `gpui-*` 依赖：无 `NSSpellChecker` 绑定、无任何拼写 API；`input/editor/diagnostics.rs:280` 的 "Spelling mistake" 只是 LSP 诊断的**测试 fixture 字符串**，不是拼写能力 | **移除**（见 §6 P3 与本节末） |
-| `image_display` | 部分有能力 | 图片由 `TextView` 内部渲染（`text_view.rs:1010` 等），无全局显示开关；`Hidden` 可由 markdown 预处理实现 | 维持 §4 #16 方案 |
+| `image_display` | 有能力（部分受限） | 内联 HTML 默认启用且支持 `<img style="width: N%">`；但渲染层硬编码 `max_w(relative(1.))`，无法突破容器宽 | 已接线 `FitWidth` + `Hidden`；`Original` 移除 |
 
 **`link_open` 接线方案（P1，约 15 行）**
 
@@ -129,8 +130,9 @@
 | `font.line_height` | `f32` / `1.5` | 排版 → 行高 | `preview.rs:184` | ✅ |
 | `font.weight` | `FontWeight` / `Regular` | **无入口** | 无 | ❌ |
 | `code_theme` | `String` / `base16-ocean.dark` | 渲染 → 代码主题 | `preview.rs:175,201` | ⚠️ 生效但**不跟随明暗主题** |
-| `image_display` | `ImageDisplay` / `FitWidth` | 渲染 → 图片显示 | 无 | ❌ |
-| `link_open` | `LinkOpen` / `InApp` | 渲染 → 链接打开 | 无 | ❌ 未接线，**但框架有 `on_link_click` → P1 接线**（§1.2） |
+| `image_display` | `ImageDisplay` / `FitWidth` | 渲染 → 图片显示 | `markdown.rs`（预处理改写） | ✅ 已接线（选项为"适应宽度 / 不显示"；原"原始尺寸"因框架限制移除） |
+| `image_width_percent` | `u32` 20–100 / `100` | 渲染 → 图片宽度 | `markdown.rs`（写入 `<img style>`） | ✅ 已接线 |
+| `link_open` | `LinkOpen` / `InApp` | 渲染 → 链接打开 | `preview.rs`（`on_link_click`） | ✅ 已接线（含点击图片打开预览） |
 | `sync_scroll` | `bool` / `true` | 同步 → 同步滚动 | `preview.rs:68,95` | ⚠️ 生效但**编辑器侧未判断**（`editor.rs:280-283` 无条件发事件） |
 | `max_width` | `u32` 0–4096 / `0` | 排版 → 正文最大宽度 | `preview.rs:187-188` | ✅ |
 
@@ -251,8 +253,8 @@ UI 呈现规则：
 | 13 | `keymap` | 快捷键覆盖 | 新增 `core/keymap.rs`：`default_bindings() + override(cfg.editor.keymap)`；`main.rs:46-56` 改为 `cx.bind_keys(resolve_bindings(&cfg))`；设置界面补键值对列表入口 | **L3** | P2 |
 | 14 | `preview.font.*` | 预览区字体 | 已接线 family/size/line_height；**补 weight**：`preview.rs:182-184` 加 `.font_weight(...)`，设置界面补入口 | L1 | P1 |
 | 15 | `code_theme` | 代码块高亮配色 | 已接线；**补"跟随明暗"**：默认值改为 `"auto"`，`code_theme(cfg, is_dark)` 解析为 `base16-ocean.light/dark`，避免浅色主题下代码块仍是深色 | L1 | P1 |
-| 16 | `image_display` | 预览区图片渲染方式 | 在 `core/markdown.rs` 预处理阶段实现：`Hidden` → 把 `![a](u)` 改写为 `[a](u)`（纯文本链接）；`FitWidth/Original` 差异依赖渲染层，**本期只保证 Hidden 生效，Original 标注 `NotWired`** | L1 | P3 |
-| 17 | `link_open` | 点击链接的行为 | **框架有 `on_link_click`**：`External` 不挂 handler（默认浏览器打开）；`InApp` 挂 handler，库内 `.md` 走 `open_note`，其余回退 `open_url`。接线点 `preview.rs:192` | L1 | **P1** |
+| 16 | `image_display` | 预览区图片渲染方式 | **已完成**：预处理阶段按配置改写——`Hidden` 去掉 `!` 退化为文本链接；`FitWidth` 渲染为 `<img style="width: N%">`（N 取 `image_width_percent`）。**`Original`（原始尺寸）已移除选项**：渲染层硬编码 `max_w(relative(1.))`，Markdown 侧无法突破 | L1 | ✅ 已完成 |
+| 17 | `link_open` | 点击链接的行为 | **已完成**：`preview.rs` 挂 `on_link_click`。`InApp` → 库内 `.md` 走 `open_note`，非笔记回退系统浏览器；`External` → `cx.open_url`。**点击图片也走此回调并打开预览窗口** | L1 | ✅ 已完成 |
 | 18 | `sync_scroll` | 编辑/预览滚动同步 | 已接线（预览侧判断）；**补编辑器侧判断**：`editor.rs:280-283` 发事件前先判 `sync_scroll`，关闭时不再发无用事件 | L2 | P1 |
 | 19 | `max_width` | 预览正文最大宽度 | 已接线 | L1 | — |
 
@@ -286,7 +288,7 @@ UI 呈现规则：
 | **P0 防退化**（先做） | ① 消费点注释规范 `// config: <field.path>`<br>② `scripts/check-config-wiring.sh` 静态校验<br>③ `settings.rs` 补 `tests.rs`，断言 `all_fields()` 每项都有 `effect` 且 `NotWired` 项与本文档清单一致 | 全仓 + `scripts/` | 脚本可跑通；删除任一消费点注释 → 脚本失败 |
 | **P1 低成本接线** | `editor.font.weight`、`preview.font.weight`、`code_theme` 跟随明暗、`sync_scroll` 编辑器侧判断、**`link_open`（`on_link_click`）**、配置克隆开销 | `editor.rs`、`preview.rs`、`settings.rs`、`core/config/resolve.rs`（新建） | §7.3 验收清单对应项通过；新增单测 ≥ 9 |
 | **P2 结构性接线** | `language` 文案表（`core/i18n.rs`）、`keymap` 覆盖（`core/keymap.rs` + `main.rs`）、退出前 flush | `core/i18n.rs`（新建）、`core/keymap.rs`（新建）、`main.rs`、`app.rs` | 切英文生效；改 `cmd-s`→`cmd-shift-s` 重启后生效 |
-| **P3 能力补齐/清理** | 缩进 Tab、行号（gutter 或换 Editor）、`color_scheme`、`image_display`（markdown 预处理）、**移除 `spell_check`** | `editor.rs`、`core/markdown.rs`、`config.rs`、`settings.rs`、`config/tests.rs` | 每项要么生效，要么从模型与界面移除（不留死配置） |
+| **P3 能力补齐/清理** | 缩进 Tab（已接线）、行号（已接线）、`color_scheme`、**移除 `spell_check`** | `editor.rs`、`core/markdown.rs`、`config.rs`、`settings.rs`、`config/tests.rs` | 每项要么生效，要么从模型与界面移除（不留死配置） |
 | **P4 形态类** | ~~`default_mode`~~ **已取消**（2026-09-24）：分屏由 DockArea 布局直接提供，所见即所得按 `REQUIREMENTS.md` 不在本期范围 | — | 无需实施 |
 
 **执行原则**：每个阶段结束后，§4 总表中该阶段的项必须从 `L4/NotWired` 变为某个明确级别；
@@ -376,7 +378,7 @@ rg -o '// config: [a-z_.]+' src --no-filename | sed 's|// config: ||' | sort -u
 | V15 | `keymap` | — | — | **无入口**；P2 后可改键位，重启生效 | ❌ → P2 |
 | V16 | `indent.tab_size` / `use_tabs` | 4 → 8 后按 Tab；再勾选"使用 Tab 字符" | 插入字符 | 分别插入 8 空格与 `\t`，**改完即生效**（无需重开标签） | ✅ 已接线，待人工验证 |
 | V17 | `show_line_numbers` | 打开开关 | 编辑区左侧的行号 | 开关打开后立即显示行号；关闭后隐藏（无需重开标签） | ✅ 已接线，待人工验证 |
-| V18 | `image_display` | 设为"不显示图片" | 预览区图片 | **当前无变化**；P3 后图片变为链接文本 | ❌ → P3 |
+| V18 | `image_display` / `image_width_percent` | ① 设为"不显示图片" ② 宽度改为 60% | 预览区图片 | ① 图片变成文本链接 ② 图片宽度变为预览区的 60%；**改完即生效**（配置变化时重算预览源文） | ✅ 已接线，待人工验证 |
 | V19 | `link_open` | ① 设为"浏览器打开"，点外链<br>② 设为"应用内打开"，点库内 `.md` 链接 | ① 系统浏览器打开<br>② 在当前窗口打开为标签 | **当前两者都走浏览器**；P1 后按配置分流 | ❌ → **P1** |
 | V20 | ~~`default_mode`~~ | — | — | **配置项已移除**：设置界面不再显示该项，导出 JSON 不含该字段 | ✅ 已移除 |
 | V21 | `color_scheme` | 任意改动 | 编辑区配色 | 无变化；P3 接线或移除 | ❌ → P3 |
@@ -417,7 +419,7 @@ CI/本地命令：`cargo test` + `bash scripts/check-config-wiring.sh`。
 | Q5 | 移除字段的兼容影响 | 老 `config.json` 含被删字段 | serde 忽略未知字段，无风险。**已验证**：移除 `default_mode` 后，含该字段的旧 `config.json` 仍可正常加载（多余字段被忽略），`cargo test` 85 passed |
 | Q6 | 全窗口重绘（`refresh_windows`）粒度粗 | 改一个数字也全量重绘 | 本期不改（结构体小，开销可忽略）；若后续配置变大再考虑事件订阅 |
 | Q7 | 拼写检查若日后要做，走哪条路 | 决定 `spell_check` 能否回归 | 已调研（勿重复）：框架无 API。可选 ①`objc` 调 macOS `NSSpellChecker`（无词典打包，需新增依赖）；②`hunspell` crate + 自带词典（跨平台，体积增大）。装饰层 GPUI 支持波浪下划线（`gpui-pre-0.3.5/src/style.rs:835`）。**须先做 POC 通过再决定加回字段** |
-| Q8 | `image_display` 的 `Original` 可否绕过 | 决定该项是否只能做到 `Hidden` | 可选探索：`TextView` 能解析 `<img src width height>`（`text_view.rs:1010` 附近），预处理阶段改写为不带尺寸约束的 HTML `<img>` 或可实现原始尺寸；**未验证**，优先级低 |
+| Q8 | ~~`image_display` 的 `Original` 可否绕过~~ | ~~决定该项是否只能做到 `Hidden`~~ | **已关闭（2026-09-24）**：三处渲染都硬编码 `.max_w(relative(1.))`（`node.rs:1813`、`inline_flow.rs:170/1087`），Markdown 侧无论写 `<img width>` 还是 `style` 都会被钳到容器宽，**无法绕过**。该选项已从枚举与设置界面移除，并保留 `Legacy` 变体兼容旧配置 |
 
 ---
 

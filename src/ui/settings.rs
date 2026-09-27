@@ -407,7 +407,8 @@ fn all_fields() -> Vec<SettingField> {
                 |c| c.editor.indent.use_tabs,
                 |c, v| c.editor.indent.use_tabs = v,
             ),
-            Some("编辑控件未暴露缩进设置"),
+            // 已接线：set_tab_size 属 impl<M: MultiLineMode>，能力可用
+            None,
             None,
         ),
         with_meta(
@@ -424,35 +425,41 @@ fn all_fields() -> Vec<SettingField> {
                 |c| c.editor.indent.tab_size as f32,
                 |c, v| c.editor.indent.tab_size = v as u32,
             ),
-            Some("编辑控件未暴露缩进设置"),
+            // 已接线：set_tab_size 属 impl<M: MultiLineMode>，能力可用
+            None,
             None,
         ),
         with_meta(
             bool_field(
                 "editor.show_line_numbers",
                 "显示行号",
-                "在编辑区左侧显示行号",
+                "在编辑区左侧显示行号（编辑区基于代码编辑器控件，行号始终可用）",
                 Editor,
                 "编辑行为",
                 None,
                 |c| c.editor.show_line_numbers,
                 |c, v| c.editor.show_line_numbers = v,
             ),
-            Some("行号仅代码编辑模式支持"),
+            // 行号已随编辑内核升级接线生效，能力始终可用，因此不显示"暂未生效"：
+            // - 开关打开 → 编辑区显示行号；
+            // - 开关关闭 → 用户主动关闭，是选择而非能力缺失，同样不提示。
+            // 仅当能力确实不可用时才应给出该标记（例如编辑内核退回非代码编辑器控件）。
+            None,
             None,
         ),
         with_meta(
             bool_field(
                 "editor.spell_check",
                 "拼写检查",
-                "标记可疑拼写（依赖系统词典）",
+                "标记可疑拼写（检查引擎尚未接入）",
                 Editor,
                 "编辑行为",
                 None,
                 |c| c.editor.spell_check,
                 |c, v| c.editor.spell_check = v,
             ),
-            Some("框架未提供拼写检查接口"),
+            // 诊断展示层已随内核就绪，缺的是拼写引擎，因此仍属"当前不可用"
+            Some("拼写检查引擎尚未接入（诊断展示层已就绪）"),
             None,
         ),
         // ── 编辑器 · 字体与排版 ──
@@ -543,7 +550,7 @@ fn all_fields() -> Vec<SettingField> {
             choice_field(
                 "preview.image_display",
                 "图片显示",
-                "预览区图片的呈现方式",
+                "预览区图片的呈现方式（原始尺寸无法实现：渲染层会强制限制在预览宽度内）",
                 Preview,
                 "渲染",
                 None,
@@ -551,25 +558,48 @@ fn all_fields() -> Vec<SettingField> {
                 || {
                     vec![
                         ("fit_width".into(), "适应宽度".into()),
-                        ("original".into(), "原始尺寸".into()),
                         ("hidden".into(), "不显示".into()),
                     ]
                 },
                 |c| match c.preview.image_display {
-                    ImageDisplay::FitWidth => "fit_width".into(),
-                    ImageDisplay::Original => "original".into(),
                     ImageDisplay::Hidden => "hidden".into(),
+                    // 适应宽度与旧版本遗留值都按适应宽度呈现
+                    _ => "fit_width".into(),
                 },
                 |c, v| {
                     c.preview.image_display = match v.as_str() {
-                        "original" => ImageDisplay::Original,
                         "hidden" => ImageDisplay::Hidden,
                         _ => ImageDisplay::FitWidth,
                     }
                 },
             ),
-            Some("预览控件未暴露图片渲染开关"),
+            // 已接线：预处理阶段按此设置决定内联渲染还是退化为链接
             None,
+            None,
+        ),
+        with_meta(
+            number_field(
+                "preview.image_width_percent",
+                "图片宽度",
+                "图片占预览区宽度的百分比，范围 20–100",
+                Preview,
+                "渲染",
+                20.0,
+                100.0,
+                5.0,
+                "%",
+                |c| c.preview.image_width_percent as f32,
+                |c, v| c.preview.image_width_percent = v as u32,
+            ),
+            None,
+            // 不显示图片时宽度没有意义
+            Some(|c| {
+                if c.preview.image_display == ImageDisplay::Hidden {
+                    Some("当前设置为不显示图片")
+                } else {
+                    None
+                }
+            }),
         ),
         with_meta(
             choice_field(
@@ -598,7 +628,9 @@ fn all_fields() -> Vec<SettingField> {
                     }
                 },
             ),
-            Some("预览控件未暴露链接点击回调"),
+            // 已接线（preview.rs 的 on_link_click）：
+            // InApp 会在应用内打开库内 .md，否则用系统浏览器；点击图片则打开预览窗口
+            None,
             None,
         ),
         // ── 预览 · 排版 ──

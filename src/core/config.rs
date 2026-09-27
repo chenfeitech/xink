@@ -62,13 +62,18 @@ pub enum ColorScheme {
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageDisplay {
-    /// 限制在预览宽度内
+    /// 限制在预览宽度内（框架渲染图片时的默认行为）
     #[default]
     FitWidth,
-    /// 按原始尺寸显示（可横向滚动）
-    Original,
     /// 只显示链接，不渲染图片
     Hidden,
+    /// 旧版本遗留值（如已移除的 `original`）。
+    ///
+    /// 保留它是为了兼容：旧 `config.json` 里若写了已移除的选项，
+    /// 没有这个变体会导致**整个配置文件解析失败**并回落默认值（用户全部设置丢失）。
+    /// `sanitize` 会把它夹回 `FitWidth`。
+    #[serde(other)]
+    Legacy,
 }
 
 /// 预览区链接打开行为
@@ -143,6 +148,8 @@ pub struct PreviewConfig {
     /// 代码块高亮主题（syntect 主题名）
     pub code_theme: String,
     pub image_display: ImageDisplay,
+    /// 图片显示宽度占预览区宽度的百分比（20–100）
+    pub image_width_percent: u32,
     pub link_open: LinkOpen,
     /// 编辑器与预览双向同步滚动
     pub sync_scroll: bool,
@@ -243,6 +250,8 @@ impl Default for PreviewConfig {
             font: FontConfig::body(),
             code_theme: default_theme(true).into(),
             image_display: ImageDisplay::default(),
+            // 100% = 占满预览区宽度（与框架默认行为一致）
+            image_width_percent: 100,
             link_open: LinkOpen::default(),
             sync_scroll: true,
             max_width: 0,
@@ -260,6 +269,7 @@ mod limit {
     pub const SAVE_DELAY_MS: (u64, u64) = (200, 60_000);
     pub const TAB_SIZE: (u32, u32) = (1, 16);
     pub const MAX_WIDTH: (u32, u32) = (0, 4_096);
+    pub const IMAGE_WIDTH_PERCENT: (u32, u32) = (20, 100);
 }
 
 fn clamp_f32(v: f32, (min, max): (f32, f32)) -> f32 {
@@ -301,6 +311,14 @@ impl AppConfig {
             .preview
             .max_width
             .clamp(limit::MAX_WIDTH.0, limit::MAX_WIDTH.1);
+        self.preview.image_width_percent = self
+            .preview
+            .image_width_percent
+            .clamp(limit::IMAGE_WIDTH_PERCENT.0, limit::IMAGE_WIDTH_PERCENT.1);
+        // 旧版本遗留的显示方式（如已移除的"原始尺寸"）夹回适应宽度
+        if matches!(self.preview.image_display, ImageDisplay::Legacy) {
+            self.preview.image_display = ImageDisplay::FitWidth;
+        }
         if self.preview.code_theme.trim().is_empty() {
             self.preview.code_theme = PreviewConfig::default().code_theme;
         }

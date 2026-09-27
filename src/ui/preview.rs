@@ -7,7 +7,10 @@ use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_kit::*;
 
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
+use crate::core::config::LinkOpen;
 use crate::core::highlight::highlight_with_theme;
+use crate::core::markdown::path_from_file_url;
+use crate::core::media::is_image_path;
 
 pub struct PreviewPanel {
     focus_handle: FocusHandle,
@@ -210,10 +213,34 @@ impl Render for PreviewPanel {
                             )
                         })
                         .collect()
+                })
+                .on_link_click(|url, _event, window, cx| {
+                    handle_link_click(url, window, cx);
                 }),
         );
 
         crate::ui::log_slow("PreviewPanel::render", started);
         view
     }
+}
+
+/// 点击预览区链接 / 图片的行为
+///
+/// - 本地图片：预处理时我们把图片包成了指向自身的 `file://` 链接，因此点击图片
+///   会走到这里（框架没有图片点击回调，只有链接回调），此时打开图片预览窗口；
+/// - 其余链接按 `preview.link_open` 配置处理：应用内打开时尝试作为笔记打开，
+///   打不开（非 Markdown / 文件不存在）则退回系统浏览器。
+fn handle_link_click(url: &SharedString, window: &mut Window, cx: &mut App) {
+    if let Some(path) = path_from_file_url(url) {
+        if is_image_path(&path) && path.is_file() {
+            crate::ui::open_image_viewer(path, cx);
+            return;
+        }
+        if crate::app::config(cx).preview.link_open == LinkOpen::InApp
+            && crate::ui::tabs::open_note(path, window, cx)
+        {
+            return;
+        }
+    }
+    cx.open_url(url);
 }

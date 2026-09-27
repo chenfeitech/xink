@@ -7,6 +7,8 @@ use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::core::media::is_image_path;
+
 /// 文件树节点（领域数据，不含 UI 状态）
 #[derive(Debug, Clone)]
 pub struct FileNode {
@@ -126,7 +128,8 @@ fn scan_dir(dir: &Path) -> Result<FileNode> {
         }
         if path.is_dir() {
             children.push(scan_dir(&path)?);
-        } else if is_markdown(&file_name) {
+        } else if is_markdown(&file_name) || is_image_path(&path) {
+            // 目录树里显示笔记与图片：图片可在树中直接点开预览
             children.push(FileNode {
                 path,
                 name: file_name,
