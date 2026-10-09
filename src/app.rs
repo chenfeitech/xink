@@ -196,8 +196,14 @@ pub fn apply_theme(window: Option<&mut Window>, cx: &mut App) {
         }
     };
 
-    // 记录解析结果：代码块高亮主题等需要"当前是否深色"
-    cx.update_global::<AppState, _>(|state, _| state.dark = dark);
+    // 记录解析结果：代码块高亮主题等需要"当前是否深色"。
+    //
+    // 必须判空：本函数也会被"系统外观变化"等窗口事件调用，而那些事件可能早于
+    // `AppState` 的注册（`set_global`）。此时 `update_global` 会因找不到 global 直接 panic。
+    // 未注册时跳过即可——随后启动流程会再调用一次本函数补上。
+    if cx.try_global::<AppState>().is_some() {
+        cx.update_global::<AppState, _>(|state, _| state.dark = dark);
+    }
 }
 
 /// 当前是否为深色主题（"跟随系统"已解析为具体结果）。
