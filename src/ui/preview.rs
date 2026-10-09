@@ -1,12 +1,16 @@
 //! 右侧预览面板：渲染当前活动笔记的 Markdown
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use gpui_kit::base::{ScrollbarHandle, TextView, TextViewState};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_kit::*;
 
-use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
+use crate::app::{
+    ActiveDocChanged, AppState, EditorScrolled, PreviewImageChanged, PreviewScrolled,
+};
 use crate::core::config::LinkOpen;
 use crate::core::highlight::highlight_with_theme;
 use crate::core::markdown::path_from_file_url;
@@ -16,6 +20,8 @@ pub struct PreviewPanel {
     focus_handle: FocusHandle,
     /// 当前显示的文档。切换笔记时整体替换引用，已解析过的文档不再重解析。
     doc: Option<Entity<TextViewState>>,
+    /// 图片预览模式：非空时面板显示这张图片，而不是 Markdown
+    image: Option<PathBuf>,
     /// 上次推送给编辑器的滚动比例
     last_emitted_ratio: f32,
     /// 上次从编辑器接收并应用的滚动比例，用于吸收回显、避免同步循环
@@ -27,6 +33,7 @@ impl PreviewPanel {
         let mut this = Self {
             focus_handle: cx.focus_handle(),
             doc: None,
+            image: None,
             last_emitted_ratio: 0.0,
             last_received_ratio: 0.0,
         };
@@ -37,12 +44,26 @@ impl PreviewPanel {
 
         // 笔记可能先于预览面板创建，先把已存在的活动文档接上
         this.doc = state.read(cx).active_doc.clone();
+        this.image = state.read(cx).image.clone();
 
         cx.subscribe_in(
             &state,
             window,
             move |this, _, ev: &ActiveDocChanged, _, cx| {
                 this.doc = Some(ev.0.clone());
+                // 切换/编辑笔记时退出图片模式，回到 Markdown
+                this.image = None;
+                cx.notify();
+            },
+        )
+        .detach();
+
+        // 图片预览：与 Markdown 共用同一个预览面板，不再新开窗口
+        cx.subscribe_in(
+            &state,
+            window,
+            move |this, _, ev: &PreviewImageChanged, _, cx| {
+                this.image = ev.0.clone();
                 cx.notify();
             },
         )
@@ -67,6 +88,10 @@ impl PreviewPanel {
 
     /// 应用编辑器推送的滚动比例到本预览文档。
     fn apply_editor_ratio(&mut self, ratio: f32, cx: &mut Context<Self>) {
+        // 图片模式下没有 Markdown 可同步
+        if self.image.is_some() {
+            return;
+        }
         // 关闭同步滚动后，编辑器滚动不再带动预览
         if !crate::app::config(cx).preview.sync_scroll {
             return;
@@ -93,6 +118,11 @@ impl PreviewPanel {
     /// 每帧轮询预览滚动比例，变化超阈值则推给编辑器（含回显吸收，避免循环）。
     fn tick_scroll_sync(&mut self, cx: &mut Context<Self>) {
         const EPS: f32 = 0.002;
+
+        // 图片模式下没有 Markdown 可同步
+        if self.image.is_some() {
+            return;
+        }
 
         // 关闭同步滚动后，不再把预览滚动推给编辑器
         if !crate::app::config(cx).preview.sync_scroll {
@@ -164,6 +194,44 @@ impl Render for PreviewPanel {
         let started = Instant::now();
         let cfg = crate::app::config(cx);
 
+        // 图片预览模式：复用同一个预览面板显示图片，不再为每张图开新窗口。
+        // 切换/编辑笔记时会自动清掉 image，回到 Markdown。
+        if let Some(path) = self.image.clone() {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.to_string_lossy().to_string());
+            return div()
+                .id("preview-panel")
+                .size_full()
+                .flex()
+                .flex_col()
+                .bg(cx.theme().background)
+                .child(
+                    div()
+                        .flex_none()
+                        .p_2()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .p_2()
+                        .child(
+                            img(path)
+                                .object_fit(ObjectFit::Contain)
+                                .max_w(relative(1.))
+                                .max_h(relative(1.)),
+                        ),
+                );
+        }
+
         let Some(doc) = self.doc.clone() else {
             return div()
                 .id("preview-panel")
@@ -233,7 +301,8 @@ impl Render for PreviewPanel {
 fn handle_link_click(url: &SharedString, window: &mut Window, cx: &mut App) {
     if let Some(path) = path_from_file_url(url) {
         if is_image_path(&path) && path.is_file() {
-            crate::ui::open_image_viewer(path, cx);
+            // 在预览面板里显示这张图（不再新开窗口）
+            crate::app::show_preview_image(path, cx);
             return;
         }
         if crate::app::config(cx).preview.link_open == LinkOpen::InApp

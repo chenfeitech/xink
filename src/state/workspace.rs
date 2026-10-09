@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::core::vault::{VaultEntry, VaultRegistry};
 use crate::core::{dedup_paths, partition_existing};
 
 const APP_DIR_NAME: &str = "xink";
@@ -47,23 +48,71 @@ struct LastVault {
     root: PathBuf,
 }
 
-pub fn save_vault(root: &Path) -> Result<()> {
-    write_json(
-        &vault_path(),
-        &LastVault {
-            root: root.to_path_buf(),
-        },
-    )
+// ---- 多库注册表（设计见 docs/multi-vault-design.md）----
+//
+// 旧的 `vault.json`（单个 root）已不再写入，只作为迁移来源被读取：
+// 首次启动时由 `load_vaults` 把其中的路径转成一条库记录。
+
+pub fn vaults_path() -> PathBuf {
+    app_data_dir().join("vaults.json")
 }
 
-/// 库已失效（被移动/删除）时返回 None，由调用方回落
-pub fn load_vault() -> Option<PathBuf> {
-    let last: LastVault = read_json(&vault_path()).ok()?;
-    if last.root.is_dir() {
-        Some(last.root)
-    } else {
-        None
+/// 保存库注册表（`VaultRegistry` 定义在 `core::vault`，这里只负责读写）
+pub fn save_vaults(reg: &VaultRegistry) -> Result<()> {
+    write_json_atomic(&vaults_path(), reg)
+}
+
+/// 读取库注册表。
+///
+/// 宽容策略（与 `AppConfig::load` 一致）：文件缺失或 JSON 损坏都返回空注册表，
+/// **绝不阻塞启动**。若注册表为空且旧的 `vault.json` 有效，自动迁移成一条记录。
+pub fn load_vaults() -> VaultRegistry {
+    load_vaults_at(&vaults_path(), &vault_path())
+}
+
+/// 带路径参数的版本：测试可在临时目录里跑，避免污染真实的应用数据目录
+fn load_vaults_at(vaults_file: &Path, legacy_file: &Path) -> VaultRegistry {
+    if let Ok(reg) = read_json::<VaultRegistry>(vaults_file) {
+        return reg;
     }
+    // 首次升级：旧的单库记录迁移成一条库
+    match migrate_last_vault(legacy_file) {
+        Some(reg) => {
+            // 写回迁移结果，下次启动无需再迁移；写失败不影响本次启动
+            let _ = write_json_atomic(vaults_file, &reg);
+            reg
+        }
+        None => VaultRegistry::default(),
+    }
+}
+
+/// 旧版 `vault.json`（单个 root）→ 一条库记录；目录已失效则返回 None
+fn migrate_last_vault(legacy_file: &Path) -> Option<VaultRegistry> {
+    let last: LastVault = read_json(legacy_file).ok()?;
+    if !last.root.is_dir() {
+        return None;
+    }
+    let entry = VaultEntry::new(last.root.clone(), VaultEntry::default_name(&last.root));
+    let id = entry.id.clone();
+    Some(VaultRegistry {
+        vaults: vec![entry],
+        active: Some(id),
+    })
+}
+
+/// 原子写 JSON：先写同目录临时文件再 rename。
+///
+/// 状态文件损坏虽然只会回落到默认值，但中途崩溃留下半截文件仍会让用户
+/// 莫名其妙地"丢设置"，所以这里同样按 `.codebuddy/rules/04-notes-domain.md` 走原子写。
+fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(value)?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, json)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -175,3 +224,6 @@ pub fn load_recent_notes() -> Vec<PathBuf> {
         .map(|n| n.paths.into_iter().filter(|p| p.is_file()).collect())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests;

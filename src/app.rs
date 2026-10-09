@@ -1,5 +1,6 @@
 //! 工作区：DockArea 三栏布局（左文件树 / 中编辑 / 右预览）
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::base::TextViewState;
@@ -11,6 +12,7 @@ use gpui_kit::*;
 
 use crate::actions::OpenSettings;
 use crate::core::config::{AppConfig, ThemeMode};
+use crate::core::vault::VaultRegistry;
 use crate::core::{resolve_active, tab_key};
 use crate::state::workspace;
 use crate::ui::{EditorPanel, FilesPanel, OpenTabs, PreviewPanel, tabs};
@@ -23,10 +25,18 @@ use crate::ui::{EditorPanel, FilesPanel, OpenTabs, PreviewPanel, tabs};
 pub struct PreviewState {
     /// 当前活动的预览文档
     pub active_doc: Option<Entity<TextViewState>>,
+    /// 图片预览：点击笔记里的图片或目录树中的图片文件时，预览面板改为显示这张图。
+    ///
+    /// 这里是"复用同一个预览面板"而不是新开窗口：预览位置一致、不产生窗口冗余。
+    /// 切换/编辑笔记时会被清空，自动回到 Markdown。
+    pub image: Option<PathBuf>,
 }
 
 /// 活动预览文档发生变化（切换笔记标签）
 pub struct ActiveDocChanged(pub Entity<TextViewState>);
+
+/// 预览面板要显示的图片发生变化；`None` 表示回到 Markdown 预览
+pub struct PreviewImageChanged(pub Option<PathBuf>);
 
 /// 编辑器滚动位置变化，参数为滚动比例（0~1）。
 /// 由 EditorPanel 发出，PreviewPanel 据此同步预览滚动。
@@ -39,6 +49,18 @@ pub struct PreviewScrolled(pub f32);
 impl EventEmitter<ActiveDocChanged> for PreviewState {}
 impl EventEmitter<EditorScrolled> for PreviewState {}
 impl EventEmitter<PreviewScrolled> for PreviewState {}
+impl EventEmitter<PreviewImageChanged> for PreviewState {}
+
+/// 让预览面板显示一张图片（点击图片时用）
+pub fn show_preview_image(path: PathBuf, cx: &mut App) {
+    cx.update_global::<AppState, _>(|state, cx| {
+        state.preview.update(cx, |preview, cx| {
+            preview.image = Some(path.clone());
+            cx.emit(PreviewImageChanged(Some(path)));
+        });
+    });
+}
+
 
 /// 跨面板共享的应用状态。
 /// 文件树需要往中间区域添加笔记标签页，因此持有 dock_area 的引用。
@@ -58,6 +80,10 @@ pub struct AppState {
     /// 修改请统一走 [`update_config`]：它会校正取值、落盘并重绘窗口，
     /// 保证"改完立即生效、无需重启"。
     pub config: AppConfig,
+    /// 已注册的库与当前选择（多库机制，见 `docs/multi-vault-design.md`）。
+    ///
+    /// 库的当前路径统一由 `vaults.active_root()` 派生，避免两处状态不一致。
+    pub vaults: VaultRegistry,
 }
 
 impl Global for AppState {}
@@ -260,7 +286,22 @@ impl Workspace {
         let (dock_area, skin) =
             DockSkin::dock_area(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx);
 
-        let preview = cx.new(|_| PreviewState { active_doc: None });
+        let preview = cx.new(|_| PreviewState {
+            active_doc: None,
+            image: None,
+        });
+
+        // 库注册表：必须先确定当前库，再恢复标签（标签要按当前库过滤）。
+        //
+        // 校验只做提示，绝不阻塞启动——与配置、布局、标签恢复的容错策略一致。
+        let mut vaults = workspace::load_vaults();
+        for note in vaults.resolve_active() {
+            println!("[xink] {note}");
+        }
+        // 回落 / 迁移的结果落盘，下次启动不必重算
+        if let Err(err) = workspace::save_vaults(&vaults) {
+            eprintln!("[xink] 保存库列表失败: {err:?}");
+        }
 
         cx.set_global(AppState {
             dock_area: dock_area.clone(),
@@ -268,6 +309,7 @@ impl Workspace {
             tabs: OpenTabs::new(),
             empty_panels: Vec::new(),
             config: AppConfig::load(),
+            vaults,
         });
 
         // 主题等外观类配置在启动时先应用一次
@@ -369,14 +411,28 @@ impl Workspace {
     /// 只要成功恢复出一篇笔记，就不会显示空白编辑页。
     fn restore_open_notes(dock_area: &Entity<DockArea>, window: &mut Window, cx: &mut App) {
         let session = workspace::load_open_notes();
-        if session.paths.is_empty() {
-            println!("[xink] 没有历史打开的笔记，显示空白编辑页");
+        // 只恢复属于当前库的标签：`open_notes.json` 里可能残留其它库的路径，
+        // 全部恢复会让切换库后仍看到别的库的笔记。
+        let active_root = cx
+            .try_global::<AppState>()
+            .and_then(|state| state.vaults.active_root());
+        let paths: Vec<PathBuf> = match &active_root {
+            Some(root) => session
+                .paths
+                .into_iter()
+                .filter(|p| p.starts_with(root))
+                .collect(),
+            None => Vec::new(),
+        };
+
+        if paths.is_empty() {
+            println!("[xink] 没有属于当前库的历史标签，显示空白编辑页");
             return;
         }
-        println!("[xink] 恢复 {} 个标签页", session.paths.len());
+        println!("[xink] 恢复 {} 个标签页", paths.len());
 
         let mut restored = Vec::new();
-        for path in &session.paths {
+        for path in &paths {
             if tabs::open_note(path.clone(), window, cx) {
                 restored.push(tab_key(path));
             } else {

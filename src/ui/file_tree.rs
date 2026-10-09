@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::PopupMenuItem;
@@ -32,6 +32,8 @@ pub struct FilesPanel {
     status: SharedString,
     /// 首次 render 时恢复上次打开的库，只做一次
     restored: bool,
+    /// 已加载的库根路径。与 `AppState.vaults` 的当前库不一致时重新加载（即切换库）。
+    applied_vault_root: Option<PathBuf>,
     /// 库目录监听（外部编辑器改动）
     watcher: Option<VaultWatcher>,
     watcher_task: Option<Task<()>>,
@@ -54,6 +56,7 @@ impl FilesPanel {
             vault: None,
             status: "未打开笔记库".into(),
             restored: false,
+            applied_vault_root: None,
             watcher: None,
             watcher_task: None,
             recent: workspace::load_recent_notes(),
@@ -93,21 +96,9 @@ impl FilesPanel {
             match prompt.await {
                 Ok(Ok(Some(paths))) => {
                     if let Some(root) = paths.into_iter().next() {
-                        _ = this.update_in(window, |this, window, cx| match Vault::open(root) {
-                            Ok(vault) => {
-                                let root = vault.root().to_path_buf();
-                                println!("[xink] 打开库: {}", root.display());
-                                if let Err(err) = crate::state::workspace::save_vault(&root) {
-                                    eprintln!("[xink] 记录库路径失败: {err:?}");
-                                }
-                                this.vault = Some(vault);
-                                this.refresh(window, cx);
-                                this.start_watcher(window, cx);
-                            }
-                            Err(err) => {
-                                this.status = format!("打开失败: {err}").into();
-                                cx.notify();
-                            }
+                        // 已注册则切换，否则新增；文件树由守卫在下一帧重载
+                        _ = this.update_in(window, |_, _, cx| {
+                            crate::ui::vault_manager::create_or_switch_vault(root, cx)
                         });
                     }
                 }
@@ -351,14 +342,18 @@ impl FilesPanel {
         .detach();
     }
 
-    /// 启动时恢复上次打开的库
+    /// 启动时恢复当前选中的库（由 `AppState.vaults` 决定，不再是单值记录）
     fn restore_last_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(root) = crate::state::workspace::load_vault() else {
+        let Some(root) = cx
+            .try_global::<AppState>()
+            .and_then(|state| state.vaults.active_root())
+        else {
             return;
         };
         match Vault::open(root.clone()) {
             Ok(vault) => {
                 println!("[xink] 恢复上次库: {}", root.display());
+                self.applied_vault_root = Some(root);
                 self.vault = Some(vault);
                 self.refresh(window, cx);
                 self.start_watcher(window, cx);
@@ -523,12 +518,25 @@ impl FilesPanel {
 
     /// 最近打开的笔记，点击可再次打开
     fn render_recent(&self, cx: &mut Context<Self>) -> Div {
-        if self.recent.is_empty() {
+        // 只显示属于当前库的笔记。
+        // `recent.json` 是全局的（保留跨库历史），若不过滤，切换库后
+        // 底部仍会列出上一个库的笔记，点击还能打开库外文件。
+        let Some(root) = self.vault.as_ref().map(|v| v.root().to_path_buf()) else {
+            return div();
+        };
+        let items: Vec<PathBuf> = self
+            .recent
+            .iter()
+            .filter(|p| p.starts_with(&root))
+            .take(5)
+            .cloned()
+            .collect();
+        if items.is_empty() {
             return div();
         }
 
         let mut row = div().flex_none().flex().flex_wrap().gap_1().px_2().pb_1();
-        for (ix, path) in self.recent.iter().take(5).enumerate() {
+        for (ix, path) in items.into_iter().enumerate() {
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -612,6 +620,44 @@ impl Render for FilesPanel {
         if !self.restored {
             self.restored = true;
             self.restore_last_vault(window, cx);
+        }
+
+        // 当前库发生变化（在库选择器里切换 / 新打开了一个库）→ 重新加载树与监听。
+        // 用 applied_vault_root 守卫，避免每帧重复加载。
+        let active_root = cx
+            .try_global::<AppState>()
+            .and_then(|state| state.vaults.active_root());
+        if active_root != self.applied_vault_root {
+            self.applied_vault_root = active_root.clone();
+            match active_root {
+                Some(root) => match Vault::open(root.clone()) {
+                    Ok(vault) => {
+                        // 旧库的标签不再属于当前库，先关掉（这里才有 window 可以移除面板）
+                        crate::ui::tabs::close_notes_outside(&root, window, cx);
+                        println!("[xink] 切换库: {}", root.display());
+                        self.vault = Some(vault);
+                        // 最近访问是全局记录，换库后要按新库重新取（显示时按库过滤）
+                        self.recent = crate::state::workspace::load_recent_notes();
+                        // 退出图片预览：否则上一个库的图片会留在预览面板里
+                        cx.update_global::<AppState, _>(|state, cx| {
+                            state.preview.update(cx, |preview, cx| {
+                                preview.image = None;
+                                cx.emit(crate::app::PreviewImageChanged(None));
+                            });
+                        });
+                        self.refresh(window, cx);
+                        self.start_watcher(window, cx);
+                    }
+                    Err(err) => {
+                        self.status = format!("打开库失败: {err}").into();
+                        cx.notify();
+                    }
+                },
+                None => {
+                    self.vault = None;
+                    self.status = "未打开笔记库".into();
+                }
+            }
         }
         let started = Instant::now();
         let tree_state = self.tree_state.clone();
@@ -758,8 +804,8 @@ impl Render for FilesPanel {
                                 // 目录的展开/折叠由 Tree 自身处理，这里只负责打开文件
                                 if !is_dir {
                                     if is_image_path(&path) {
-                                        // 图片不进编辑器，直接开预览窗口
-                                        crate::ui::open_image_viewer(path.clone(), cx);
+                                        // 图片不进编辑器，在预览面板里显示（不新开窗口）
+                                        crate::app::show_preview_image(path.clone(), cx);
                                     } else if let Some(panel) = weak_click.upgrade() {
                                         panel.update(cx, |p, cx| {
                                             p.open_note(path.clone(), window, cx)
@@ -847,6 +893,7 @@ impl Render for FilesPanel {
                     .py_1()
                     .border_t_1()
                     .border_color(cx.theme().border)
+                    .child(self.render_vault_switcher(cx))
                     .child(
                         Button::new("open-settings")
                             .icon(Icon::new(IconName::Settings).with_size(Size::Size(icon_px)))
@@ -860,6 +907,61 @@ impl Render for FilesPanel {
 
         crate::ui::log_slow("FilesPanel::render", started);
         view
+    }
+}
+
+// ── 多库：选择器 ──────────────────────────────────────────────
+//
+// 选择器只负责"切换到哪个库"；库列表本身的增删改用「配置管理」窗口
+// （`ui/vault_manager.rs`，设计见 docs/multi-vault-design.md §6.4）。
+
+impl FilesPanel {
+    /// 左下角的库选择器：显示当前库名，展开可切换库或进入管理界面
+    fn render_vault_switcher(&self, cx: &mut Context<Self>) -> Div {
+        let registry = cx
+            .try_global::<AppState>()
+            .map(|state| state.vaults.clone())
+            .unwrap_or_default();
+        let current = registry
+            .active_entry()
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| "选择库".to_string());
+        let active_id = registry.active.clone();
+        let items: Vec<(String, String)> = registry
+            .vaults
+            .iter()
+            .map(|v| (v.id.clone(), v.name.clone()))
+            .collect();
+
+        div().flex_1().min_w_0().child(
+            DropdownButton::new("vault-switcher")
+                .button(Button::new("vault-switcher-btn").small().ghost().label(current))
+                .dropdown_menu(move |menu, _window, _cx| {
+                    let mut menu = menu;
+                    for (id, name) in items.iter() {
+                        let is_active = active_id.as_deref() == Some(id.as_str());
+                        let label = if is_active {
+                            format!("✓ {name}")
+                        } else {
+                            name.clone()
+                        };
+                        let id = id.clone();
+                        menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                            crate::ui::vault_manager::switch_to_vault(&id, cx);
+                        }));
+                    }
+                    // 分隔线以下不是"选哪个库"，而是库列表的维护入口
+                    menu = menu
+                        .separator()
+                        .item(PopupMenuItem::new("打开文件夹作为库…").on_click(|_, _, cx| {
+                            crate::ui::vault_manager::prompt_create_vault(cx);
+                        }))
+                        .item(PopupMenuItem::new("配置管理…").on_click(|_, _, cx| {
+                            crate::ui::vault_manager::open_vault_manager(cx);
+                        }));
+                    menu
+                }),
+        )
     }
 }
 

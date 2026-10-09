@@ -2,14 +2,13 @@
 
 pub mod editor;
 pub mod file_tree;
-pub mod image_viewer;
 pub mod preview;
 pub mod settings;
+pub mod vault_manager;
 pub mod tabs;
 
 pub use editor::EditorPanel;
 pub use file_tree::FilesPanel;
-pub use image_viewer::open_image_viewer;
 pub use preview::PreviewPanel;
 pub use settings::open_settings;
 pub use tabs::OpenTabs;

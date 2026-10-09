@@ -114,6 +114,61 @@ impl OpenTabs {
     }
 }
 
+/// 关闭所有不属于 `root` 的标签（切换库时调用）。
+///
+/// 切换库后旧库的标签不该继续留在界面上——否则会出现
+/// "文件树里看不到这篇笔记、标签却还开着"的割裂状态。
+///
+/// 这里只处理标签注册表与面板，**不改动** `FilesPanel` 的库状态：
+/// 后者由它自己按"当前库变化"重新加载。
+pub fn close_notes_outside(root: &Path, window: &mut Window, cx: &mut App) {
+    let outsiders: Vec<PathBuf> = match cx.try_global::<AppState>() {
+        Some(state) => state
+            .tabs
+            .keys()
+            .into_iter()
+            .filter(|p| !p.starts_with(root))
+            .collect(),
+        None => return,
+    };
+    if outsiders.is_empty() {
+        return;
+    }
+
+    for path in &outsiders {
+        let key = tab_key(path);
+        // 与关闭单个标签保持一致：**最后一个面板不移除，而是清空成空白页**。
+        // 否则编辑区会一个面板都不剩，DockArea 布局按下标访问空数组会 panic。
+        let is_last = cx
+            .try_global::<AppState>()
+            .map(|state| state.tabs.keys().len() <= 1)
+            .unwrap_or(false);
+        let panel = cx.try_global::<AppState>().and_then(|s| s.tabs.get(&key));
+
+        if let Some(panel) = panel {
+            if is_last {
+                panel.update(cx, |editor, cx| editor.clear(window, cx));
+            } else {
+                let dock_area = cx.try_global::<AppState>().map(|s| s.dock_area.clone());
+                if let Some(dock_area) = dock_area {
+                    dock_area.update(cx, |area, cx| area.remove_panel(panel, window, cx));
+                }
+            }
+        }
+        cx.update_global::<AppState, _>(|state, _| state.tabs.remove(&key));
+        crate::app::sync_placeholder(window, cx);
+    }
+
+    // 立即写回：否则下次启动又会把别的库的标签恢复出来
+    cx.update_global::<AppState, _>(|state, _| {
+        if let Err(err) =
+            crate::state::workspace::save_open_notes(&state.tabs.keys(), state.tabs.active())
+        {
+            eprintln!("[xink] 保存标签失败: {err:?}");
+        }
+    });
+}
+
 /// 打开一篇笔记的**唯一入口**。
 ///
 /// 流程：

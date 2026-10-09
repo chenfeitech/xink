@@ -113,6 +113,47 @@
 
 ---
 
+## 5. 复用 Markdown 预览窗显示图片（2026-09-28 提出，方案待确认）
+
+### 5.1 现状
+
+点击图片目前调用 `open_image_viewer`（`ui/image_viewer.rs`）**每次新开一个独立窗口**。
+而预览面板（`ui/preview.rs`）只渲染 Markdown：`PreviewPanel.doc: Option<Entity<TextViewState>>`
+由 `ActiveDocChanged` 事件驱动，doc 为 `None` 时显示"没有打开的笔记"（`preview.rs:15-23,164`）。
+
+### 5.2 推荐方案：预览面板增加"图片模式"（增量改造）
+
+不改 `active_doc` 的现有语义，而是**新增**一条通道：
+
+```rust
+pub struct PreviewState {
+    pub active_doc: Option<Entity<TextViewState>>,   // 不变
+    pub image: Option<PathBuf>,                      // 新增：图片模式
+}
+```
+
+| 环节 | 设计 |
+|---|---|
+| 点击图片 | 发 `PreviewImageChanged(Some(path))`，预览面板切换为图片渲染 |
+| 回到笔记 | 切换/编辑笔记时（`ActiveDocChanged`）清掉 `image`，自动回到 Markdown |
+| 渲染 | `image.is_some()` → `img(path).object_fit(Contain)`；否则走原 `TextView` 分支 |
+| 滚动同步 | 图片模式下跳过 `apply_editor_ratio` / `tick_scroll_sync`（无 Markdown 可同步） |
+| 空态 | 图片 + 无笔记时显示图片名，避免显示"没有打开的笔记"造成困惑 |
+
+窗口管理的影响：不再每次弹窗，减少窗口冗余；`image_viewer.rs` 可保留为"在新窗口放大查看"的可选入口
+（例如右键菜单），否则应删除以免留下死代码。
+
+### 5.3 取舍与影响
+
+| 维度 | 复用预览面板 | 保持独立窗口 |
+|---|---|---|
+| 一致性 | ✅ 与 Markdown 预览同一区域、同一套主题 | ❌ 额外窗口，风格割裂 |
+| 窗口冗余 | ✅ 无新窗口 | ❌ 每点一次图多一个窗口 |
+| 可视面积 | ⚠️ 三栏布局下右栏较窄，大图会缩小显示 | ✅ 可独立放大、拖动 |
+| 改动面 | 中：`PreviewState` 加字段 + 新事件 + render 分支 + 同步跳过 | 无 |
+
+结论：**默认复用预览面板**；若要兼顾"看大图"，保留独立窗口作为二级入口（不在默认点击路径上）。
+
 ## 4. 验证
 
 单测（`src/core/markdown/tests.rs`）：相对路径转 data URL、包链接、文件缺失退回、
