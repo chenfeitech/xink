@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::highlight::default_theme;
 
 fn tmpdir() -> tempfile::TempDir {
     tempfile::tempdir().expect("创建临时目录")
@@ -233,4 +234,104 @@ fn font_weight_values_are_valid_css_weights() {
     assert_eq!(FontWeight::Medium.value(), 500.0);
     assert_eq!(FontWeight::Semibold.value(), 600.0);
     assert_eq!(FontWeight::Bold.value(), 700.0);
+}
+
+// ── 配置修改 ──────────────────────────────────────────────────
+//
+// 这一组覆盖"用户改了某一项之后会怎样"：先按 `update_config` 的纯逻辑部分
+// （改值 → sanitize → 序列化）走一遍，再反序列化回来，确认改动既没被吞掉
+// 也没被错误地改写成别的值。UI 层（需要 App 上下文）无法单测，故只覆盖到这里。
+
+#[test]
+fn code_theme_auto_follows_appearance() {
+    let dark = resolve_code_theme(AUTO_CODE_THEME, true);
+    let light = resolve_code_theme(AUTO_CODE_THEME, false);
+
+    assert_eq!(dark, default_theme(true), "深色下解析为深色高亮主题");
+    assert_eq!(light, default_theme(false), "浅色下解析为浅色高亮主题");
+    assert_ne!(dark, light, "「跟随主题」必须随明暗变化，否则等于没接");
+}
+
+#[test]
+fn code_theme_explicit_value_is_not_overridden() {
+    // 指定具体主题名时不随明暗变化
+    assert_eq!(resolve_code_theme("InspiredGitHub", true), "InspiredGitHub");
+    assert_eq!(resolve_code_theme("InspiredGitHub", false), "InspiredGitHub");
+
+    // 未知主题名原样传出：由高亮层负责回落，配置层不吞掉用户的值
+    assert_eq!(resolve_code_theme("no-such-theme", true), "no-such-theme");
+}
+
+#[test]
+fn modified_wired_settings_survive_sanitize_and_reload() {
+    let mut c = AppConfig::default();
+    // 逐个覆盖本轮接线的配置项
+    c.editor.show_line_numbers = true;
+    c.editor.indent.use_tabs = true;
+    c.editor.indent.tab_size = 8;
+    c.editor.font.weight = FontWeight::Bold;
+    c.preview.font.weight = FontWeight::Semibold;
+    c.preview.code_theme = AUTO_CODE_THEME.into();
+    c.preview.image_display = ImageDisplay::Hidden;
+    c.preview.image_width_percent = 60;
+    c.preview.link_open = LinkOpen::External;
+    c.preview.sync_scroll = false;
+
+    // 模拟 update_config 的纯逻辑部分：改完 → 校正 → 落盘 → 再载入
+    c.sanitize();
+    let text = serde_json::to_string(&c).unwrap();
+    let back: AppConfig = serde_json::from_str(&text).unwrap();
+
+    assert_eq!(back, c, "改动不应被校正或序列化吞掉");
+    assert!(back.editor.show_line_numbers);
+    assert!(back.editor.indent.use_tabs);
+    assert_eq!(back.editor.indent.tab_size, 8);
+    assert_eq!(back.editor.font.weight, FontWeight::Bold);
+    assert_eq!(back.preview.font.weight, FontWeight::Semibold);
+    assert_eq!(back.preview.code_theme, AUTO_CODE_THEME);
+    assert_eq!(back.preview.image_display, ImageDisplay::Hidden);
+    assert_eq!(back.preview.image_width_percent, 60);
+    assert_eq!(back.preview.link_open, LinkOpen::External);
+    assert!(!back.preview.sync_scroll);
+}
+
+#[test]
+fn modified_out_of_range_values_are_clamped_not_reverted() {
+    let mut c = AppConfig::default();
+    // 越界值：夹到边界，而不是回到默认值
+    c.editor.indent.tab_size = 100;
+    c.preview.image_width_percent = 5;
+    c.basic.icon_size = 999;
+    // 合法改动：必须原样保留
+    c.editor.show_line_numbers = true;
+    c.editor.font.weight = FontWeight::Medium;
+
+    c.sanitize();
+
+    assert_eq!(c.editor.indent.tab_size, limit::TAB_SIZE.1, "夹到上限");
+    assert_eq!(
+        c.preview.image_width_percent,
+        limit::IMAGE_WIDTH_PERCENT.0,
+        "夹到下限"
+    );
+    assert_eq!(c.basic.icon_size, limit::ICON_SIZE.1, "夹到上限");
+    // 越界的校正不能波及未越界的改动
+    assert!(c.editor.show_line_numbers, "合法改动不应被重置");
+    assert_eq!(c.editor.font.weight, FontWeight::Medium);
+}
+
+#[test]
+fn modified_config_keeps_unmodified_fields_at_defaults() {
+    let mut c = AppConfig::default();
+    let before = c.clone();
+    // 只改一项
+    c.editor.show_line_numbers = true;
+
+    c.sanitize();
+    let text = serde_json::to_string(&c).unwrap();
+    let back: AppConfig = serde_json::from_str(&text).unwrap();
+
+    let mut expected = before;
+    expected.editor.show_line_numbers = true;
+    assert_eq!(back, expected, "只改一项时，其余字段必须保持原样");
 }

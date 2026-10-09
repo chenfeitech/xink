@@ -11,8 +11,8 @@ use gpui_kit::*;
 use crate::app::{
     ActiveDocChanged, AppState, EditorScrolled, PreviewImageChanged, PreviewScrolled,
 };
-use crate::core::config::{AUTO_CODE_THEME, LinkOpen};
-use crate::core::highlight::{default_theme, highlight_with_theme};
+use crate::core::config::{LinkOpen, resolve_code_theme};
+use crate::core::highlight::highlight_with_theme;
 use crate::core::markdown::path_from_file_url;
 use crate::core::media::is_image_path;
 
@@ -242,13 +242,9 @@ impl Render for PreviewPanel {
                 .child("没有打开的笔记");
         };
 
-        // 代码块主题：`auto` 表示跟随当前明暗（浅色主题下不再用深色高亮），
-        // 其余取值按配置指定的主题名。
-        let code_theme = if cfg.preview.code_theme == AUTO_CODE_THEME {
-            default_theme(crate::app::is_dark(cx)).to_string()
-        } else {
-            cfg.preview.code_theme.clone()
-        };
+        // 代码块主题：`auto` 表示跟随当前明暗（浅色主题下不再用深色高亮）。
+        // 解析逻辑在配置层（纯函数，有单测覆盖）。
+        let code_theme = resolve_code_theme(&cfg.preview.code_theme, crate::app::is_dark(cx));
         let font = cfg.preview.font.clone();
 
         let mut view = div()

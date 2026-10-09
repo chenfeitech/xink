@@ -12,9 +12,23 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use crate::core::highlight::default_theme;
+
 /// `preview.code_theme` 的特殊取值：跟随当前明暗主题
 /// （浅色主题用浅色高亮、深色主题用深色高亮），由渲染时解析成具体主题名。
 pub const AUTO_CODE_THEME: &str = "auto";
+
+/// 解析代码块高亮主题：`auto` 跟随明暗，其余取值原样返回。
+///
+/// 抽成纯函数是为了可测——"改了配置会用什么主题"属于配置语义，
+/// 若写在渲染代码里就只能靠肉眼验收。
+pub fn resolve_code_theme(code_theme: &str, is_dark: bool) -> String {
+    if code_theme == AUTO_CODE_THEME {
+        default_theme(is_dark).to_string()
+    } else {
+        code_theme.to_string()
+    }
+}
 use crate::state::workspace::config_path;
 
 // ── 枚举型配置项 ──────────────────────────────────────────────
