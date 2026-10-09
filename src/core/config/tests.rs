@@ -22,7 +22,7 @@ fn defaults_are_sane() {
     assert_eq!(c.editor.indent.tab_size, 4);
     assert!(c.editor.keymap.is_empty());
 
-    assert_eq!(c.preview.code_theme, "base16-ocean.dark");
+    assert_eq!(c.preview.code_theme, AUTO_CODE_THEME);
     assert!(c.preview.sync_scroll, "默认应开启同步滚动");
     assert_eq!(c.preview.image_display, ImageDisplay::FitWidth);
     assert_eq!(c.preview.image_width_percent, 100, "默认占满预览区宽度");
@@ -151,7 +151,7 @@ fn sanitize_restores_empty_font_family_and_code_theme() {
 
     c.sanitize();
     assert_eq!(c.basic.tree_font.family, ".SystemUIFont");
-    assert_eq!(c.preview.code_theme, "base16-ocean.dark");
+    assert_eq!(c.preview.code_theme, AUTO_CODE_THEME);
 }
 
 // ── 导入 / 导出 ───────────────────────────────────────────────

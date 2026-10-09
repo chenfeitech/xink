@@ -80,6 +80,11 @@ pub struct AppState {
     /// 修改请统一走 [`update_config`]：它会校正取值、落盘并重绘窗口，
     /// 保证"改完立即生效、无需重启"。
     pub config: AppConfig,
+    /// 当前是否为深色主题（含"跟随系统"解析后的结果）。
+    ///
+    /// 由 [`apply_theme`] 维护：框架没有"查询当前明暗"的 API，
+    /// 而代码块高亮主题需要据此选择，因此在这里记录一次供各处读取。
+    pub dark: bool,
     /// 已注册的库与当前选择（多库机制，见 `docs/multi-vault-design.md`）。
     ///
     /// 库的当前路径统一由 `vaults.active_root()` 派生，避免两处状态不一致。
@@ -168,11 +173,36 @@ pub fn apply_theme(window: Option<&mut Window>, cx: &mut App) {
         .map(|state| state.config.basic.theme)
         .unwrap_or(ThemeMode::System);
 
-    match mode {
-        ThemeMode::System => Theme::sync_system_appearance(window, cx),
-        ThemeMode::Light => Theme::global_mut(cx).colors = *ThemeColor::light(),
-        ThemeMode::Dark => Theme::global_mut(cx).colors = *ThemeColor::dark(),
-    }
+    let dark = match mode {
+        ThemeMode::System => {
+            // 先取外观再同步：`sync_system_appearance` 要拿走 window 的可变借用
+            let appearance = window
+                .as_ref()
+                .map(|w| w.appearance())
+                .unwrap_or_else(|| cx.window_appearance());
+            Theme::sync_system_appearance(window, cx);
+            matches!(
+                appearance,
+                WindowAppearance::Dark | WindowAppearance::VibrantDark
+            )
+        }
+        ThemeMode::Light => {
+            Theme::global_mut(cx).colors = *ThemeColor::light();
+            false
+        }
+        ThemeMode::Dark => {
+            Theme::global_mut(cx).colors = *ThemeColor::dark();
+            true
+        }
+    };
+
+    // 记录解析结果：代码块高亮主题等需要"当前是否深色"
+    cx.update_global::<AppState, _>(|state, _| state.dark = dark);
+}
+
+/// 当前是否为深色主题（"跟随系统"已解析为具体结果）。
+pub fn is_dark(cx: &App) -> bool {
+    cx.try_global::<AppState>().map(|state| state.dark).unwrap_or(true)
 }
 
 /// 空白页同步。
@@ -309,6 +339,8 @@ impl Workspace {
             tabs: OpenTabs::new(),
             empty_panels: Vec::new(),
             config: AppConfig::load(),
+            // 初值，随后由 apply_theme 按主题模式与系统外观校正
+            dark: true,
             vaults,
         });
 

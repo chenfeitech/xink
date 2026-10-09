@@ -285,6 +285,12 @@ impl EditorPanel {
     fn tick_scroll_sync(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         const EPS: f32 = 0.002;
 
+        // 编辑器侧也判断开关：关闭后不再向预览推送滚动比例。
+        // 配置在每次触发时读取，因此改设置后下一次滚动即生效（L2）。
+        if !crate::app::config(cx).preview.sync_scroll {
+            return;
+        }
+
         let ratio = if let Some(note) = &self.note {
             let (off, viewport, line_h) = {
                 let st = self.editor.read(cx);
@@ -755,6 +761,8 @@ impl Render for EditorPanel {
                     .font_family(font.family.clone())
                     .text_size(px(font.size))
                     .line_height(px(font.size * font.line_height))
+                    // 字重接线：之前只应用了字体三件套，weight 配了不生效
+                    .font_weight(FontWeight(font.weight.value()))
             })
         } else {
             div()

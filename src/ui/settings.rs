@@ -21,7 +21,7 @@ use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::*;
 
 use crate::core::config::{
-    AppConfig, ColorScheme, FontWeight, ImageDisplay, Language, LinkOpen, ThemeMode,
+    AUTO_CODE_THEME, AppConfig, ColorScheme, FontWeight, ImageDisplay, Language, LinkOpen, ThemeMode,
 };
 use crate::core::highlight::theme_names;
 
@@ -501,6 +501,18 @@ fn all_fields() -> Vec<SettingField> {
             |c| c.editor.font.line_height,
             |c, v| c.editor.font.line_height = v,
         ),
+        choice_field(
+            "editor.font.weight",
+            "编辑器字重",
+            "正文编辑区字体的粗细",
+            Editor,
+            "字体与排版",
+            None,
+            FieldKind::Choice,
+            || font_weight_options(),
+            |c| font_weight_value(c.editor.font.weight),
+            |c, v| c.editor.font.weight = font_weight_parse(&v),
+        ),
         with_meta(
             choice_field(
                 "editor.color_scheme",
@@ -537,12 +549,16 @@ fn all_fields() -> Vec<SettingField> {
         choice_field(
             "preview.code_theme",
             "代码块主题",
-            "预览区代码高亮配色（syntect 主题）",
+            "预览区代码高亮配色；「跟随主题」会随明暗自动切换（syntect 主题）",
             Preview,
             "渲染",
             None,
             FieldKind::Choice,
-            || theme_names().into_iter().map(|n| (n.clone(), n)).collect(),
+            || {
+                let mut options = vec![(AUTO_CODE_THEME.to_string(), "跟随主题".to_string())];
+                options.extend(theme_names().into_iter().map(|n| (n.clone(), n)));
+                options
+            },
             |c| c.preview.code_theme.clone(),
             |c, v| c.preview.code_theme = v,
         ),
@@ -671,6 +687,18 @@ fn all_fields() -> Vec<SettingField> {
             "倍",
             |c| c.preview.font.line_height,
             |c, v| c.preview.font.line_height = v,
+        ),
+        choice_field(
+            "preview.font.weight",
+            "预览字重",
+            "预览区正文字体的粗细",
+            Preview,
+            "排版",
+            None,
+            FieldKind::Choice,
+            || font_weight_options(),
+            |c| font_weight_value(c.preview.font.weight),
+            |c, v| c.preview.font.weight = font_weight_parse(&v),
         ),
         number_field(
             "preview.max_width",
@@ -804,6 +832,34 @@ fn number_control(
 }
 
 /// 字体候选：系统字体（首次使用时缓存）+ 常用兜底项
+/// 字重选项，与 [`FontWeight`] 一一对应
+fn font_weight_options() -> Vec<(String, String)> {
+    vec![
+        ("regular".into(), "常规".into()),
+        ("medium".into(), "中等".into()),
+        ("semibold".into(), "半粗".into()),
+        ("bold".into(), "粗体".into()),
+    ]
+}
+
+fn font_weight_value(weight: FontWeight) -> String {
+    match weight {
+        FontWeight::Regular => "regular".into(),
+        FontWeight::Medium => "medium".into(),
+        FontWeight::Semibold => "semibold".into(),
+        FontWeight::Bold => "bold".into(),
+    }
+}
+
+fn font_weight_parse(v: &str) -> FontWeight {
+    match v {
+        "medium" => FontWeight::Medium,
+        "semibold" => FontWeight::Semibold,
+        "bold" => FontWeight::Bold,
+        _ => FontWeight::Regular,
+    }
+}
+
 fn font_options() -> Vec<(String, String)> {
     let mut names = SYSTEM_FONTS
         .get()

@@ -12,7 +12,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use crate::core::highlight::default_theme;
+/// `preview.code_theme` 的特殊取值：跟随当前明暗主题
+/// （浅色主题用浅色高亮、深色主题用深色高亮），由渲染时解析成具体主题名。
+pub const AUTO_CODE_THEME: &str = "auto";
 use crate::state::workspace::config_path;
 
 // ── 枚举型配置项 ──────────────────────────────────────────────
@@ -248,7 +250,8 @@ impl Default for PreviewConfig {
     fn default() -> Self {
         Self {
             font: FontConfig::body(),
-            code_theme: default_theme(true).into(),
+            // 默认跟随明暗：浅色主题下代码块不再固定用深色高亮
+            code_theme: AUTO_CODE_THEME.into(),
             image_display: ImageDisplay::default(),
             // 100% = 占满预览区宽度（与框架默认行为一致）
             image_width_percent: 100,

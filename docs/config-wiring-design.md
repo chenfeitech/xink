@@ -16,10 +16,10 @@
 | 指标 | 数量 | 说明 |
 |---|---|---|
 | 叶子配置项（顶层字段展开后） | **28** | 18 个顶层字段（`default_mode` 已于 2026-09-24 移除），其中 `tree_font` / `editor.font` / `preview.font` / `indent` 为结构体 |
-| 已真正作用于软件功能 | **19** | 含 Spike 后接线的 `indent.*` 两项 |
-| **死配置（存了不生效）** | **9** | 值能保存、能导出，但不影响任何行为 |
-| 其中：设置界面已标注 ⚠ | 4 | `language`、`spell_check`、`color_scheme`、`link_open`（`link_open` 已接线，标记待清理） |
-| 其中：界面有入口但未标注 | 2 | `editor.font.weight`、`preview.font.weight`（模型有、UI 无入口、渲染未读） |
+| 已真正作用于软件功能 | **22** | 含 Spike 后接线的 `indent.*` 两项、内核升级后的 `show_line_numbers`、P1 补接线的 `font.weight` ×2 |
+| **死配置（存了不生效）** | **4** | 值能保存、能导出，但不影响任何行为：`language`、`spell_check`、`color_scheme`、`keymap` |
+| 其中：设置界面已标注 ⚠ | 2 | `language`、`color_scheme`（`spell_check` 已判定移除；`link_open` 已接线，仅剩标记待清理） |
+| 其中：界面有入口但未标注 | 0 | P1 已为两个 `font.weight` 补上设置界面入口并接线 |
 | 其中：**连设置项入口都没有** | 1 | `editor.keymap`（`main.rs:46-56` 快捷键全部硬编码） |
 | 覆盖"配置改动 → UI 行为改变"的测试 | **0** | `src/ui/settings.rs` 无 `tests.rs`，配置单测全部停留在数据层 |
 
@@ -29,8 +29,9 @@
 > 修正口径（2026-09-24）：`link_open` 已确认可接线（P1）、`spell_check` 判定移除、
 > `indent.*` 两项**已接线**、`show_line_numbers` **已接线**（随编辑内核升级落地）、
 > **`default_mode` 已移除**。
-> 因此**当前仍未接线的为 6 项**：`language`、`spell_check`、
-> `editor.font.weight`、`preview.font.weight`、`color_scheme`、`keymap`。
+> **2026-10-09 P1 已收尾**：两个 `font.weight` 已接线并补界面入口、`code_theme` 支持跟随明暗
+> （默认 `auto`）、`sync_scroll` 编辑器侧已判断、`link_open` 已随图片预览接线。
+> 因此**当前仍未接线的为 4 项**：`language`、`spell_check`（已判定移除）、`color_scheme`、`keymap`。
 > （`link_open` 已随"图片预览"接线，`image_display` 与新增的 `image_width_percent` 已接线。）
 
 ### 1.1 三条根因
@@ -117,7 +118,7 @@
 | `font.family` | `String` / 等宽 | 字体与排版 → 字体 | `editor.rs:664,669` | ✅ |
 | `font.size` | `f32` / `14` | 字体与排版 → 字号 | `editor.rs:670` | ✅ |
 | `font.line_height` | `f32` / `1.6` | 字体与排版 → 行高 | `editor.rs:671` | ✅ |
-| `font.weight` | `FontWeight` / `Regular` | **无入口** | 无 | ❌ 三重缺失（模型有 / UI 无 / 渲染无） |
+| `font.weight` | `FontWeight` / `Regular` | 编辑区字体 → 字重 | `editor.rs`（`Editor::new` 链） | ✅ 已接线（2026-10-09 P1）：渲染加 `.font_weight`，设置界面补"编辑器字重"入口 |
 | `color_scheme` | `ColorScheme` / `Auto` | 字体与排版 → 配色 | 无 | ❌ |
 | `keymap` | `BTreeMap<String,String>` / `{}` | **无入口** | 无 | ❌ `main.rs:46-56` 全硬编码 |
 
@@ -128,12 +129,12 @@
 | `font.family` | `String` / `.SystemUIFont` | 排版 → 字体 | `preview.rs:182` | ✅ |
 | `font.size` | `f32` / `14` | 排版 → 字号 | `preview.rs:183` | ✅ |
 | `font.line_height` | `f32` / `1.5` | 排版 → 行高 | `preview.rs:184` | ✅ |
-| `font.weight` | `FontWeight` / `Regular` | **无入口** | 无 | ❌ |
-| `code_theme` | `String` / `base16-ocean.dark` | 渲染 → 代码主题 | `preview.rs:175,201` | ⚠️ 生效但**不跟随明暗主题** |
+| `font.weight` | `FontWeight` / `Regular` | 预览区字体 → 字重 | `preview.rs`（预览根容器） | ✅ 已接线（2026-10-09 P1）：渲染加 `.font_weight`，设置界面补"预览字重"入口 |
+| `code_theme` | `String` / `auto` | 渲染 → 代码主题 | `preview.rs`（渲染时解析） | ✅ 已接线且**跟随明暗**：`auto` 按 `app::is_dark()` 解析为浅/深色主题，设置界面新增"跟随主题"选项 |
 | `image_display` | `ImageDisplay` / `FitWidth` | 渲染 → 图片显示 | `markdown.rs`（预处理改写） | ✅ 已接线（选项为"适应宽度 / 不显示"；原"原始尺寸"因框架限制移除） |
 | `image_width_percent` | `u32` 20–100 / `100` | 渲染 → 图片宽度 | `markdown.rs`（写入 `<img style>`） | ✅ 已接线 |
 | `link_open` | `LinkOpen` / `InApp` | 渲染 → 链接打开 | `preview.rs`（`on_link_click`） | ✅ 已接线（含点击图片打开预览） |
-| `sync_scroll` | `bool` / `true` | 同步 → 同步滚动 | `preview.rs:68,95` | ⚠️ 生效但**编辑器侧未判断**（`editor.rs:280-283` 无条件发事件） |
+| `sync_scroll` | `bool` / `true` | 同步 → 同步滚动 | `preview.rs`、`editor.rs`（`tick_scroll_sync` 开头判断） | ✅ 已接线（2026-10-09 P1）：编辑器侧也判断开关，关闭后不再推送滚动比例 |
 | `max_width` | `u32` 0–4096 / `0` | 排版 → 正文最大宽度 | `preview.rs:187-188` | ✅ |
 
 ---
@@ -144,7 +145,7 @@
 
 ```
 ① 生成默认值
-   config.rs:227-266  Default impl（code_theme 取 highlight::default_theme(true)）
+   config.rs:227-266  Default impl（code_theme 取 AUTO_CODE_THEME，即"跟随明暗"）
 
 ② 用户改动（唯一写入口）
    settings.rs 控件回调 → app.rs:122 update_config(cx, f)
@@ -248,11 +249,11 @@ UI 呈现规则：
 | 8 | `indent.use_tabs` / `tab_size` | Tab 键插入的字符 | **Spike 已验证并落地**：`set_tab_size` 属 `impl<M: MultiLineMode>`（`indent.rs:492`），`TextareaState` 可直接设 `TabSize { tab_size, hard_tabs }`，**无需更换编辑内核**。已在 `spike/editor-core` 实现（create 首次下发 + render 增量下发） | L1 | ✅ 已完成（待合入） |
 | 9 | `show_line_numbers` | 编辑区左侧行号 | **已完成**：编辑内核升级为 `EditorState`（行号 API 仅它提供，`state.rs:9330`）。构造期按配置设置，`render` 中检测变更增量下发 → 开关即时生效；同时显式关闭 `auto_close` / `smart_indent` / `folding` / `indent_guides`，避免干扰 Markdown 写作 | L1 | ✅ 已完成（待人工验证） |
 | 10 | `spell_check` | 拼写检查 | **已核实框架无能力 → 移除**（§1.2）。自研需新依赖 + 词典 + 编辑器装饰，属独立特性 | — | P3 移除 |
-| 11 | `editor.font.*` | 编辑区字体 | 已接线 family/size/line_height；**补 weight**：`editor.rs:663-672` 加 `.font_weight(FontWeight(font.weight.value()))`，并在设置界面补"字重"入口 | L1 | P1 |
+| 11 | `editor.font.*` | 编辑区字体 | **已完成**：family/size/line_height/weight 全部接线；`editor.rs` 的 `Editor::new` 链加 `.font_weight(FontWeight(font.weight.value()))`，设置界面补"编辑器字重"入口 | L1 | ✅ 已完成（待人工验证） |
 | 12 | `color_scheme` | 编辑区配色独立于主题 | `Auto`=跟随全局主题；`Light/Dark`=在编辑区容器显式设前景/背景色（不依赖全局 Theme） | L1 | P3 |
 | 13 | `keymap` | 快捷键覆盖 | 新增 `core/keymap.rs`：`default_bindings() + override(cfg.editor.keymap)`；`main.rs:46-56` 改为 `cx.bind_keys(resolve_bindings(&cfg))`；设置界面补键值对列表入口 | **L3** | P2 |
-| 14 | `preview.font.*` | 预览区字体 | 已接线 family/size/line_height；**补 weight**：`preview.rs:182-184` 加 `.font_weight(...)`，设置界面补入口 | L1 | P1 |
-| 15 | `code_theme` | 代码块高亮配色 | 已接线；**补"跟随明暗"**：默认值改为 `"auto"`，`code_theme(cfg, is_dark)` 解析为 `base16-ocean.light/dark`，避免浅色主题下代码块仍是深色 | L1 | P1 |
+| 14 | `preview.font.*` | 预览区字体 | **已完成**：四项全部接线；`preview.rs` 预览根容器加 `.font_weight(...)`，设置界面补"预览字重"入口 | L1 | ✅ 已完成（待人工验证） |
+| 15 | `code_theme` | 代码块高亮配色 | **已完成（含跟随明暗）**：默认值改为 `AUTO_CODE_THEME`（`auto`），渲染时按 `app::is_dark()` 解析为 `default_theme(is_dark)`；设置界面选项首位为"跟随主题"。旧配置里的具体主题名不受影响（原样使用） | L1 | ✅ 已完成（待人工验证） |
 | 16 | `image_display` | 预览区图片渲染方式 | **已完成**：预处理阶段按配置改写——`Hidden` 去掉 `!` 退化为文本链接；`FitWidth` 渲染为 `<img style="width: N%">`（N 取 `image_width_percent`）。**`Original`（原始尺寸）已移除选项**：渲染层硬编码 `max_w(relative(1.))`，Markdown 侧无法突破 | L1 | ✅ 已完成 |
 | 17 | `link_open` | 点击链接的行为 | **已完成**：`preview.rs` 挂 `on_link_click`。`InApp` → 库内 `.md` 走 `open_note`，非笔记回退系统浏览器；`External` → `cx.open_url`。**点击图片也走此回调并打开预览窗口** | L1 | ✅ 已完成 |
 | 18 | `sync_scroll` | 编辑/预览滚动同步 | 已接线（预览侧判断）；**补编辑器侧判断**：`editor.rs:280-283` 发事件前先判 `sync_scroll`，关闭时不再发无用事件 | L2 | P1 |

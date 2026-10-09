@@ -11,8 +11,8 @@ use gpui_kit::*;
 use crate::app::{
     ActiveDocChanged, AppState, EditorScrolled, PreviewImageChanged, PreviewScrolled,
 };
-use crate::core::config::LinkOpen;
-use crate::core::highlight::highlight_with_theme;
+use crate::core::config::{AUTO_CODE_THEME, LinkOpen};
+use crate::core::highlight::{default_theme, highlight_with_theme};
 use crate::core::markdown::path_from_file_url;
 use crate::core::media::is_image_path;
 
@@ -242,8 +242,13 @@ impl Render for PreviewPanel {
                 .child("没有打开的笔记");
         };
 
-        // 代码块主题与正文字体均取自配置
-        let code_theme = cfg.preview.code_theme.clone();
+        // 代码块主题：`auto` 表示跟随当前明暗（浅色主题下不再用深色高亮），
+        // 其余取值按配置指定的主题名。
+        let code_theme = if cfg.preview.code_theme == AUTO_CODE_THEME {
+            default_theme(crate::app::is_dark(cx)).to_string()
+        } else {
+            cfg.preview.code_theme.clone()
+        };
         let font = cfg.preview.font.clone();
 
         let mut view = div()
@@ -252,7 +257,9 @@ impl Render for PreviewPanel {
             .overflow_hidden()
             .font_family(font.family.clone())
             .text_size(px(font.size))
-            .line_height(px(font.size * font.line_height));
+            .line_height(px(font.size * font.line_height))
+            // 字重接线：之前只应用了字体三件套，weight 配了不生效
+            .font_weight(FontWeight(font.weight.value()));
 
         // 正文最大宽度：0 表示不限，用于收窄阅读区
         if cfg.preview.max_width > 0 {
