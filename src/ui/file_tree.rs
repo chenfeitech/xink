@@ -718,11 +718,21 @@ impl Render for FilesPanel {
                         let icon_px = px(cfg.basic.icon_size as f32);
                         // 用完整图标集（gpui_kit::assets）：组件库内置的那 101 个
                         // 图标里没有图片相关图标
-                        let icon = |name: AssetIcon| Icon::new(name).with_size(Size::Size(icon_px));
+                        // 图标包一层 `flex_none`：它是固定尺寸元素，可用宽度不足时
+                        // 绝不能被 flex 压缩，否则名称起始列会随文件名长度漂移。
+                        let icon = |name: AssetIcon| {
+                            div()
+                                .flex_none()
+                                .child(Icon::new(name).with_size(Size::Size(icon_px)))
+                        };
                         let mut row = div()
                             .flex()
                             .items_center()
                             .gap_1()
+                            // 行宽恒等于可用宽度：既不因长文件名撑开，也不随面板宽度抖动
+                            .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
                             .font_family(font.family.clone())
                             .text_size(px(font.size))
                             .line_height(px(font.size * font.line_height))
@@ -739,12 +749,23 @@ impl Render for FilesPanel {
                             }
                         } else if is_image_path(&path) {
                             // 图片文件：专用图标，点击打开图片预览而不是当笔记打开
-                            row = row.child(div().w(icon_px)).child(icon(AssetIcon::FileImage));
+                            row = row
+                                .child(div().flex_none().w(icon_px))
+                                .child(icon(AssetIcon::FileImage));
                         } else {
-                            row = row.child(div().w(icon_px)).child(icon(AssetIcon::FileText));
+                            row = row
+                                .child(div().flex_none().w(icon_px))
+                                .child(icon(AssetIcon::FileText));
                         }
-                        // 目录名加粗，与文件形成强弱对比
-                        let name = div().child(item.label.to_string());
+                        // 目录名加粗，与文件形成强弱对比。
+                        // 名称占满剩余空间并单行截断：超长时不挤压前面的图标列，也不撑宽行。
+                        // 框架没有省略号（truncate）API，这里用 nowrap + 裁剪代替。
+                        let name = div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .child(item.label.to_string());
                         let name = if is_dir {
                             name.font_weight(FontWeight::BOLD)
                         } else {
@@ -753,8 +774,11 @@ impl Render for FilesPanel {
                         row = row.child(name);
 
                         ListItem::new(("file-tree-item", ix))
-                            // 按层级缩进，让父子关系一眼可辨
+                            // 按层级缩进，让父子关系一眼可辨。
+                            // 固定像素缩进：不随面板宽度变化，各层级列位置恒定。
                             .pl(px(6. + depth as f32 * 16.))
+                            .min_w_0()
+                            .overflow_hidden()
                             .child(row)
                             .on_click(move |_, window, cx| {
                                 state.update(cx, |state, cx| {
