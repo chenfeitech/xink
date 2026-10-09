@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use gpui_kit::base::TextViewState;
 use gpui_kit::base::dock::TabGroup;
-use gpui_kit::assets::IconName as AssetIcon;
+use gpui_kit::component::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
@@ -645,7 +645,7 @@ impl Panel for EditorPanel {
     /// 于是每个标签右侧都有关闭按钮，与 Obsidian 一致。
     // 需要返回两种不同类型（纯文本占位 / 带按钮的元素），故统一为 AnyElement
     #[allow(refining_impl_trait)]
-    fn title(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> AnyElement {
         // 没有打开笔记时是空白占位页：不给关闭按钮，编辑区需要始终保留
         let Some(note) = &self.note else {
             return "编辑".to_string().into_any_element();
@@ -664,31 +664,13 @@ impl Panel for EditorPanel {
             .child(name)
             .child(
                 div()
-                    .id(button_id)
                     // 独占点击，避免同时触发标签的选中
                     .occlude()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    // 20×20 同时是视觉尺寸与点击热区：本轮要求"看起来也要够大"
-                    .size(px(20.))
-                    .rounded(px(4.))
-                    // 常态就用前景色（不用 muted_foreground）：不 hover 也要看得见
-                    .text_color(cx.theme().foreground)
-                    // hover 切到危险色底 + 反色图标：反馈明确，语义上是"关闭"
-                    .hover(|style| {
-                        style
-                            .bg(cx.theme().danger)
-                            .text_color(cx.theme().danger_foreground)
-                    })
-                    // 指针样式：补回改用裸容器后失去的 Button 内置反馈。
-                    // tooltip 未加——div 的 tooltip 要传构造视图的闭包（Button 的才收字符串），
-                    // 代价大于收益，靠视觉对比度已经足够识别（见设计文档 §6.7 R2）。
-                    .cursor(CursorStyle::PointingHand)
-                    .child(Icon::new(AssetIcon::X).with_size(Size::Size(px(14.))))
-                    .on_click(move |_, window, cx| {
-                        close_editor_tab(weak.clone(), window, cx);
-                    }),
+                    .child(Button::new(button_id).icon(IconName::Close).on_click(
+                        move |_, window, cx| {
+                            close_editor_tab(weak.clone(), window, cx);
+                        },
+                    )),
             )
             .into_any_element()
     }
