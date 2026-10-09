@@ -666,11 +666,18 @@ impl Panel for EditorPanel {
                 div()
                     // 独占点击，避免同时触发标签的选中
                     .occlude()
-                    .child(Button::new(button_id).icon(IconName::Close).on_click(
-                        move |_, window, cx| {
-                            close_editor_tab(weak.clone(), window, cx);
-                        },
-                    )),
+                    .child(
+                        Button::new(button_id)
+                            // 图标按钮默认是 32×32（Size::Medium/Large → size_8），
+                            // 而图标只有十几像素，四周留白过多显得空旷。
+                            // 这里显式把按钮收到 18×18 并指定 13px 图标，
+                            // 让按钮尺寸紧贴图标本身（每边留白约 2.5px）。
+                            .icon(Icon::new(IconName::Close).with_size(Size::Size(px(13.))))
+                            .with_size(Size::Size(px(18.)))
+                            .on_click(move |_, window, cx| {
+                                close_editor_tab(weak.clone(), window, cx);
+                            }),
+                    ),
             )
             .into_any_element()
     }
