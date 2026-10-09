@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use gpui_kit::base::TextViewState;
 use gpui_kit::base::dock::TabGroup;
-use gpui_kit::component::IconName;
+use gpui_kit::assets::IconName as AssetIcon;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
@@ -660,11 +660,20 @@ impl Panel for EditorPanel {
                 div()
                     // 独占点击，避免同时触发标签的选中
                     .occlude()
-                    .child(Button::new(button_id).icon(IconName::Close).on_click(
-                        move |_, window, cx| {
-                            close_editor_tab(weak.clone(), window, cx);
-                        },
-                    )),
+                    // 用 padding 扩大点击热区：按钮本身做小，但点起来不小
+                    .p_1()
+                    .child(
+                        Button::new(button_id)
+                            // 与工具栏按钮一致的小型 ghost 按钮：平时无边框无背景，
+                            // 只在 hover / 点击时出现轻微反馈
+                            .small()
+                            .ghost()
+                            // 显式指定图标尺寸，不依赖按钮默认值
+                            .icon(Icon::new(AssetIcon::X).with_size(Size::Size(px(13.))))
+                            .on_click(move |_, window, cx| {
+                                close_editor_tab(weak.clone(), window, cx);
+                            }),
+                    ),
             )
             .into_any_element()
     }

@@ -200,30 +200,5 @@ pub fn load_open_notes() -> OpenNotesSnapshot {
     OpenNotesSnapshot { paths, active }
 }
 
-// ---- 最近打开的笔记 ----
-
-const MAX_RECENT: usize = 10;
-
-#[derive(Serialize, Deserialize, Default)]
-struct RecentNotes {
-    paths: Vec<PathBuf>,
-}
-
-/// 记录一条最近打开，最新的在前，去重且截断
-pub fn push_recent_note(path: &Path) -> Result<()> {
-    let file = app_data_dir().join("recent.json");
-    let mut notes: RecentNotes = read_json(&file).unwrap_or_default();
-    notes.paths.retain(|p| p != path);
-    notes.paths.insert(0, path.to_path_buf());
-    notes.paths.truncate(MAX_RECENT);
-    write_json(&file, &notes)
-}
-
-pub fn load_recent_notes() -> Vec<PathBuf> {
-    read_json::<RecentNotes>(&app_data_dir().join("recent.json"))
-        .map(|n| n.paths.into_iter().filter(|p| p.is_file()).collect())
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests;

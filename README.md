@@ -43,6 +43,94 @@ cargo clippy --all-targets
 
 首次编译会拉取并构建 blade-graphics / tree-sitter / resvg 等重依赖，耗时较长，属正常现象。
 
+## 打包（macOS）
+
+打包由 `scripts/build_macos.sh` 完成：**编译 → 生成 `.icns` 图标 → 组装 `.app` → 签名 → 打包 `.dmg` / `.pkg`**。
+
+```bash
+./scripts/build_macos.sh               # 编译 release，产出 .app + .dmg（最常用）
+./scripts/build_macos.sh --pkg         # 额外产出 .pkg 安装器
+./scripts/build_macos.sh --no-dmg      # 只产出 .app
+./scripts/build_macos.sh --skip-build  # 跳过编译，用已有 target 产物重新打包
+./scripts/build_macos.sh -h            # 查看用法
+```
+
+产物统一输出到 `build/`（版本号取自 `Cargo.toml`，无需另外维护）：
+
+| 产物 | 说明 |
+|---|---|
+| `build/xink.app` | 应用 Bundle |
+| `build/xink-<version>.dmg` | 拖拽安装盘（默认产出） |
+| `build/xink-<version>.pkg` | 安装器（加 `--pkg`） |
+
+可用环境变量覆盖默认值：
+
+```bash
+PROFILE=debug ./scripts/build_macos.sh --skip-build    # 用 debug 产物试跑打包流程
+ICON_SRC=resources/other.png ./scripts/build_macos.sh  # 指定其它图标源
+VERSION=0.2.0 ./scripts/build_macos.sh                 # 覆盖版本号
+```
+
+| 变量 | 默认值 |
+|---|---|
+| `APP_NAME` | `xink` |
+| `BUNDLE_ID` | `com.helight.xink` |
+| `VERSION` | 取自 `Cargo.toml` |
+| `ICON_SRC` | `resources/AppIcon.png` |
+| `PROFILE` | `release` |
+| `MIN_MACOS` | `11.0` |
+| `BUILD_DIR` | `./build` |
+
+注意事项：
+
+- 依赖 Xcode 命令行工具提供的 `iconutil` / `sips` / `hdiutil`；加 `--pkg` 时还需要 `pkgbuild`
+  （见上文"构建前置条件"）。缺失时脚本会直接报错退出。
+- 图标由 `sips` 生成多尺寸 `iconset` 再转 `.icns`，源图默认是 `resources/AppIcon.png`。
+- 脚本会**校验图标资源确实内嵌进二进制**（在产物里检索 SVG），未内嵌则直接失败——
+  否则打出的包在本机正常、拷到别的机器就图标全丢。
+- 签名默认是 ad-hoc（`codesign --sign -`），仅保证本地可运行；
+  分发前需用 Developer ID 重新签名（脚本结束时会打印对应命令）。
+
+## 应用数据目录
+
+应用自身的状态（配置、布局、标签、库列表）统一放在**应用数据目录**：
+
+| 平台 | 路径 |
+|---|---|
+| macOS | `~/Library/Application Support/xink/` |
+| Linux | `~/.local/share/xink/` |
+| Windows | `%APPDATA%\xink\` |
+
+目录位置由 `dirs::data_dir()` 决定（见 `src/state/workspace.rs` 的 `app_data_dir()`）。
+
+```
+~/Library/Application Support/xink/
+├── config.json        # 用户配置（基本 / 编辑器 / 预览三类设置）
+├── layout.json        # Dock 布局（面板位置与大小）
+├── open_notes.json    # 已打开的标签（顺序 + 当前活动标签）
+├── vault.json         # 上次打开的库路径（旧的单库记录）
+├── vaults.json        # 库列表与当前选择（多库功能，见 docs/multi-vault-design.md）
+└── xink.pid           # 单实例锁（防止重复启动）
+```
+
+各文件的作用与"删了会怎样"：
+
+| 文件 | 用途 | 删除后 |
+|---|---|---|
+| `config.json` | 外观、编辑器、预览三类偏好设置 | 恢复默认设置 |
+| `layout.json` | 三栏布局与面板尺寸 | 恢复默认布局 |
+| `open_notes.json` | 重启后恢复标签顺序与活动标签 | 启动时不恢复历史标签 |
+| `vault.json` | 上次打开的库（单库时代的记录） | 启动时不自动恢复上次库 |
+| `vaults.json` | 已注册的库与当前选择（开发中） | 库列表清空 |
+| `xink.pid` | 单实例锁文件 | 无影响，下次启动重建 |
+
+要点：
+
+- **笔记正文不在这里**。笔记始终是库目录里普通的 `.md` 文件，这里的都是可重建的派生状态。
+- 删除整个目录只会丢失偏好与界面状态，**不会丢失任何笔记**。
+- 文件缺失或 JSON 损坏时，应用一律回落到默认值继续启动，不会崩在启动阶段。
+- 配置支持设置界面里的"导出 / 导入"；其余文件不参与导入导出。
+
 ## 开发约定
 
 项目级 AI 开发规则与技能位于 `.codebuddy/`：

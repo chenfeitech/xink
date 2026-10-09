@@ -22,7 +22,6 @@ use crate::actions::{DeleteItem, NewFolder, NewNote, OpenFolder, RenameItem};
 use crate::app::AppState;
 use crate::core::watcher::{WatchEvent, WatchKind};
 use crate::core::{FileNode, Vault, VaultWatcher};
-use crate::state::workspace;
 use crate::ui::tabs;
 
 pub struct FilesPanel {
@@ -37,8 +36,7 @@ pub struct FilesPanel {
     /// 库目录监听（外部编辑器改动）
     watcher: Option<VaultWatcher>,
     watcher_task: Option<Task<()>>,
-    /// 最近打开的文件。缓存起来，避免每次 render 都读盘。
-    recent: Vec<PathBuf>,
+
     /// 路径 → 是否为目录。
     ///
     /// UI 的 `TreeItem` 只保留 id/名称/子节点，不携带"是不是目录"，
@@ -59,7 +57,7 @@ impl FilesPanel {
             applied_vault_root: None,
             watcher: None,
             watcher_task: None,
-            recent: workspace::load_recent_notes(),
+
             dir_flags: Rc::new(HashMap::new()),
         }
     }
@@ -369,16 +367,11 @@ impl FilesPanel {
     /// 在中间区域打开笔记。
     ///
     /// 打开逻辑（去重、认领空白页、登记、落盘）统一在 `tabs::open_note`，
-    /// 这里只补上文件面板自己的事：维护最近文件列表。
+    /// 这里只补上文件面板自己的事：通知重绘。
     fn open_note(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if !tabs::open_note(path.clone(), window, cx) {
             return;
         }
-
-        if let Err(err) = workspace::push_recent_note(&path) {
-            eprintln!("[xink] 记录最近文件失败: {err:?}");
-        }
-        self.recent = workspace::load_recent_notes();
         cx.notify();
     }
 
@@ -516,38 +509,6 @@ impl FilesPanel {
         cx.notify();
     }
 
-    /// 最近打开的笔记，点击可再次打开
-    fn render_recent(&self, cx: &mut Context<Self>) -> Div {
-        // 只显示属于当前库的笔记。
-        // `recent.json` 是全局的（保留跨库历史），若不过滤，切换库后
-        // 底部仍会列出上一个库的笔记，点击还能打开库外文件。
-        let Some(root) = self.vault.as_ref().map(|v| v.root().to_path_buf()) else {
-            return div();
-        };
-        let items: Vec<PathBuf> = self
-            .recent
-            .iter()
-            .filter(|p| p.starts_with(&root))
-            .take(5)
-            .cloned()
-            .collect();
-        if items.is_empty() {
-            return div();
-        }
-
-        let mut row = div().flex_none().flex().flex_wrap().gap_1().px_2().pb_1();
-        for (ix, path) in items.into_iter().enumerate() {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let path = path.clone();
-            row = row.child(Button::new(("recent", ix)).label(name).on_click(
-                cx.listener(move |this, _, window, cx| this.open_note(path.clone(), window, cx)),
-            ));
-        }
-        row
-    }
 }
 
 /// 在后台线程执行：构造 Vault 并扫描
@@ -636,8 +597,6 @@ impl Render for FilesPanel {
                         crate::ui::tabs::close_notes_outside(&root, window, cx);
                         println!("[xink] 切换库: {}", root.display());
                         self.vault = Some(vault);
-                        // 最近访问是全局记录，换库后要按新库重新取（显示时按库过滤）
-                        self.recent = crate::state::workspace::load_recent_notes();
                         // 退出图片预览：否则上一个库的图片会留在预览面板里
                         cx.update_global::<AppState, _>(|state, cx| {
                             state.preview.update(cx, |preview, cx| {
@@ -880,7 +839,6 @@ impl Render for FilesPanel {
                     }),
                 ),
             )
-            .child(self.render_recent(cx))
             .child(div().flex_none().p_2().text_xs().child(self.status.clone()))
             // 底部固定区：设置入口常驻侧边栏最底部（左下角），
             // 与上方区域同属 flex_col，但自身 flex_none，因此不随目录树滚动
