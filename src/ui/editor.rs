@@ -586,10 +586,16 @@ impl EditorPanel {
                             .border_color(gpui::rgba(0x00000033))
                             .cursor(CursorStyle::PointingHand)
                             .on_click(move |_, window, cx| {
-                                // 面板可能已被关闭（标签关闭后事件仍在队列里）
-                                let _ = panel.update(cx, |this, cx| {
-                                    this.apply_highlight(hex, window, cx);
-                                });
+                                // 面板可能已被关闭（标签关闭后事件仍在队列里），
+                                // 此时 update 返回 Err——不能静默吞掉，否则表现为"点了没反应"
+                                if panel
+                                    .update(cx, |this, cx| {
+                                        this.apply_highlight(hex, window, cx);
+                                    })
+                                    .is_err()
+                                {
+                                    eprintln!("[xink] 设置背景色失败：面板实体已释放");
+                                }
                             })
                     }))
                     .child(
