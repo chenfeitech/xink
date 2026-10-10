@@ -6,8 +6,8 @@ use std::time::Instant;
 use gpui_kit::base::TextViewState;
 use gpui_kit::base::dock::TabGroup;
 use gpui_kit::component::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::popover::Popover;
+use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size};
@@ -558,36 +558,26 @@ impl EditorPanel {
         let panel = self.self_entity.clone();
         let id = ("highlight-color", self.self_entity.entity_id());
 
-        Popover::new(id)
-            .trigger(
+        // 用 DropdownButton 而不是 Popover：Popover 在工具栏这种每帧重建的场景里
+        // 点击回调不稳定（实测选色无反应），下拉菜单是项目里已验证可用的交互
+        DropdownButton::new(id)
+            .button(
                 Button::new("highlight-color-trigger")
                     .small()
                     .ghost()
                     .icon(highlight_icon().with_size(Size::Size(px(icon_size as f32))))
                     .tooltip("文字背景色：选中文字后选色（在预览区查看效果）"),
             )
-            .content(move |_, _window, _cx| {
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_1()
-                    .p_2()
-                    .w(px(188.))
-                    .children(HIGHLIGHT_COLORS.iter().enumerate().map(|(i, (_, hex, rgb))| {
-                        let panel = panel.clone();
-                        let hex = *hex;
-                        div()
-                            // 可点击元素需要 id，否则拿不到 on_click
-                            .id(("highlight-swatch", i))
-                            .size(px(28.))
-                            .rounded(px(4.))
-                            .bg(gpui::rgb(*rgb))
-                            .border_1()
-                            .border_color(gpui::rgba(0x00000033))
-                            .cursor(CursorStyle::PointingHand)
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                for (name, hex, rgb) in HIGHLIGHT_COLORS.iter() {
+                    let panel = panel.clone();
+                    let hex = *hex;
+                    menu = menu.item(
+                        PopupMenuItem::new(*name)
+                            // 菜单项支持图标，用自绘色块保留"色板"的辨识度
+                            .icon(swatch_icon(*rgb))
                             .on_click(move |_, window, cx| {
-                                // 面板可能已被关闭（标签关闭后事件仍在队列里），
-                                // 此时 update 返回 Err——不能静默吞掉，否则表现为"点了没反应"
                                 if panel
                                     .update(cx, |this, cx| {
                                         this.apply_highlight(hex, window, cx);
@@ -596,24 +586,17 @@ impl EditorPanel {
                                 {
                                     eprintln!("[xink] 设置背景色失败：面板实体已释放");
                                 }
-                            })
-                    }))
-                    .child(
-                        Button::new("highlight-clear")
-                            .small()
-                            .ghost()
-                            .label("清除")
-                            .on_click({
-                                // `content` 是 Fn 闭包（每次渲染都会调用），
-                                // 因此这里先 clone 再 move 进 on_click
-                                let panel = panel.clone();
-                                move |_, window, cx| {
-                                    let _ = panel.update(cx, |this, cx| {
-                                        this.clear_highlight(window, cx);
-                                    });
-                                }
                             }),
-                    )
+                    );
+                }
+                let panel = panel.clone();
+                menu.separator().item(
+                    PopupMenuItem::new("清除背景色").on_click(move |_, window, cx| {
+                        let _ = panel.update(cx, |this, cx| {
+                            this.clear_highlight(window, cx);
+                        });
+                    }),
+                )
             })
     }
 
@@ -1084,6 +1067,15 @@ fn format_icon(cmd: Format) -> Icon {
 /// 刻意做成**实心填充 + 加粗底线**，而不是纯细线条描边：工具栏图标只有十几像素，
 /// 纯描边的小图标在浅色与深色背景下都容易糊成一团、辨识度不足。
 /// 造型为"马克笔 + 一道粗高亮线"，一眼能看出是上色而不是别的操作。
+/// 菜单里的色块图标：一个实心圆角方块，颜色即该预设色。
+fn swatch_icon(rgb: u32) -> Icon {
+    let color = format!("#{:06x}", rgb);
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4" fill="{color}" stroke="rgba(0,0,0,0.25)" stroke-width="1.5"/></svg>"#
+    );
+    Icon::default().data(svg.as_bytes())
+}
+
 fn highlight_icon() -> Icon {
     const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18" stroke-width="3.5"/><path d="M20 4 11 13l-2 5 5-2 9-9-3-3Z" fill="currentColor" stroke-width="1.5"/><path d="M15 9l3 3"/></svg>"#;
     Icon::default().data(SVG.as_bytes())
