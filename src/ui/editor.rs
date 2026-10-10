@@ -616,6 +616,7 @@ impl EditorPanel {
         let Some(_) = &self.note else {
             return;
         };
+        eprintln!("[xink] apply_highlight: {color}");
         let open = format!("<mark color=\"{color}\">");
         self.editor.update(cx, |state, cx| {
             let range = state.selected_range();
@@ -635,9 +636,11 @@ impl EditorPanel {
         });
         self.editor.update(cx, |state, cx| state.focus(window, cx));
         self.status = "已设置文字背景色".into();
-        // 程序化替换不会触发编辑控件的 Change 事件，必须显式同步，
-        // 否则预览要等到用户下一次输入才刷新（表现为"设了没反应"）
+        // 程序化替换不会触发编辑控件的 Change 事件，必须显式同步：
+        // 1) on_change 更新 note 文本与保存调度
+        // 2) refresh_doc 立即重算预览——不等防抖，否则用户看到的是"设了没反应"
         self.on_change(window, cx);
+        self.refresh_doc(cx);
     }
 
     /// 清除选中文字的背景色：去掉 `<mark>` 外壳并保留文字。
@@ -661,6 +664,7 @@ impl EditorPanel {
         self.editor.update(cx, |state, cx| state.focus(window, cx));
         self.status = "已清除文字背景色".into();
         self.on_change(window, cx);
+        self.refresh_doc(cx);
     }
 
     /// 创建一个工具栏按钮：仅显示图标，鼠标悬停时通过 tooltip 显示功能说明。
@@ -701,8 +705,9 @@ impl EditorPanel {
             .update(cx, |state, cx| state.focus(window, cx));
         self.status = format!("已插入：{}", cmd.label()).into();
         // 与高亮同理：程序化插入不触发编辑控件的 Change 事件，
-        // 必须显式同步，否则预览要等到用户下一次输入才刷新
+        // 必须显式同步（含立即重算预览），否则要等用户下一次输入才刷新
         self.on_change(window, cx);
+        self.refresh_doc(cx);
     }
 }
 
