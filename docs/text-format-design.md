@@ -147,3 +147,32 @@ a b blockquote br code del em h1-h6 i img li mark ol s script strong style table
 
 `cargo build` 通过、`cargo test` **128 passed / 0 failed**、`cargo clippy` 0 error。
 GUI 行为（打开色板、选色后预览呈现、清除）需人工验收，清单见 §8。
+
+### 10.4 修复：设置后预览没反应（2026-10-10）
+
+**现象**：选色后编辑区出现了 `<mark>` 标记，但预览区没有变化。
+
+**根因**：预览刷新链路是 `InputEvent::Change` → `on_change` → `note.set_text`（version+1）
+→ 防抖后 `refresh_doc`（版本守卫决定是否重算）。
+而编辑控件的程序化修改（`state.replace` / `state.insert`）**不会发出 Change 事件**，
+于是：
+
+- `note` 的文本根本没同步（version 不变 → `refresh_doc` 直接返回，预览不重算）；
+- 连带**自动保存也不会触发**——改动要等用户下一次输入才落盘。
+
+**修复**：程序化修改后显式调用 `self.on_change(window, cx)`。
+为此把应用/清除逻辑从自由函数改为 `EditorPanel` 的方法（需要访问 `note` 与保存调度），
+色板回调改为经面板实体（`WeakEntity<EditorPanel>`）执行。
+
+**顺带修复同类问题**：`apply_format`（加粗 / 斜体 / 列表等 13 个按钮）有完全相同的缺陷——
+插入标记后预览要等下一次输入才刷新。已一并加上 `on_change` 调用。
+
+> 经验：**任何用代码改编辑控件内容的地方，都要显式同步一次 `on_change`**，
+> 不能假设 Change 事件会自己来。
+
+### 10.5 图标调整（2026-10-10）
+
+初版用 Lucide 的 `Highlighter`（纯细线条描边），在十几像素的工具栏尺寸下辨识度不足。
+改为**自绘内联 SVG**：马克笔笔身用 `fill="currentColor"` 实心填充，底部高亮线
+`stroke-width="3.5"` 加粗。与工具栏其他图标同为内联 SVG（`highlight_icon`），
+不新增依赖，且在浅色 / 深色背景下都保持可见。

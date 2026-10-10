@@ -5,7 +5,6 @@ use std::time::Instant;
 
 use gpui_kit::base::TextViewState;
 use gpui_kit::base::dock::TabGroup;
-use gpui_kit::assets::IconName as AssetIcon;
 use gpui_kit::component::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::popover::Popover;
@@ -555,8 +554,8 @@ impl EditorPanel {
     /// 因此 tooltip 里明确写出这一点，避免被误认为没生效。
     fn highlight_color_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let icon_size = crate::app::config(cx).basic.icon_size;
-        let editor = self.editor.clone();
-        let clear_editor = self.editor.clone();
+        // 选色要改的是"笔记 + 预览"，不只是编辑控件，因此回调回到面板自身
+        let panel = self.self_entity.clone();
         let id = ("highlight-color", self.self_entity.entity_id());
 
         Popover::new(id)
@@ -564,10 +563,7 @@ impl EditorPanel {
                 Button::new("highlight-color-trigger")
                     .small()
                     .ghost()
-                    .icon(
-                        Icon::new(AssetIcon::Highlighter)
-                            .with_size(Size::Size(px(icon_size as f32))),
-                    )
+                    .icon(highlight_icon().with_size(Size::Size(px(icon_size as f32))))
                     .tooltip("文字背景色：选中文字后选色（在预览区查看效果）"),
             )
             .content(move |_, _window, _cx| {
@@ -578,7 +574,7 @@ impl EditorPanel {
                     .p_2()
                     .w(px(188.))
                     .children(HIGHLIGHT_COLORS.iter().enumerate().map(|(i, (_, hex, rgb))| {
-                        let editor = editor.clone();
+                        let panel = panel.clone();
                         let hex = *hex;
                         div()
                             // 可点击元素需要 id，否则拿不到 on_click
@@ -590,7 +586,10 @@ impl EditorPanel {
                             .border_color(gpui::rgba(0x00000033))
                             .cursor(CursorStyle::PointingHand)
                             .on_click(move |_, window, cx| {
-                                apply_highlight_color(&editor, hex, window, cx);
+                                // 面板可能已被关闭（标签关闭后事件仍在队列里）
+                                let _ = panel.update(cx, |this, cx| {
+                                    this.apply_highlight(hex, window, cx);
+                                });
                             })
                     }))
                     .child(
@@ -601,13 +600,67 @@ impl EditorPanel {
                             .on_click({
                                 // `content` 是 Fn 闭包（每次渲染都会调用），
                                 // 因此这里先 clone 再 move 进 on_click
-                                let editor = clear_editor.clone();
+                                let panel = panel.clone();
                                 move |_, window, cx| {
-                                    clear_highlight_color(&editor, window, cx);
+                                    let _ = panel.update(cx, |this, cx| {
+                                        this.clear_highlight(window, cx);
+                                    });
                                 }
                             }),
                     )
             })
+    }
+
+    /// 给选中文字设置背景色：已上色则换色（不嵌套）；未选中则插入空标记并把光标放中间。
+    fn apply_highlight(&mut self, color: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(_) = &self.note else {
+            return;
+        };
+        let open = format!("<mark color=\"{color}\">");
+        self.editor.update(cx, |state, cx| {
+            let range = state.selected_range();
+            if range.start != range.end {
+                let selected: String = state.selected_text().to_string();
+                state.replace(
+                    crate::core::markdown::apply_mark_color(&selected, color),
+                    window,
+                    cx,
+                );
+            } else {
+                state.insert(&open, window, cx);
+                let between = state.cursor_position();
+                state.insert("</mark>", window, cx);
+                state.set_cursor_position(between, window, cx);
+            }
+        });
+        self.editor.update(cx, |state, cx| state.focus(window, cx));
+        self.status = "已设置文字背景色".into();
+        // 程序化替换不会触发编辑控件的 Change 事件，必须显式同步，
+        // 否则预览要等到用户下一次输入才刷新（表现为"设了没反应"）
+        self.on_change(window, cx);
+    }
+
+    /// 清除选中文字的背景色：去掉 `<mark>` 外壳并保留文字。
+    fn clear_highlight(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(_) = &self.note else {
+            return;
+        };
+        let mut changed = false;
+        self.editor.update(cx, |state, cx| {
+            let range = state.selected_range();
+            if range.start == range.end {
+                return;
+            }
+            let selected: String = state.selected_text().to_string();
+            state.replace(crate::core::markdown::strip_mark(&selected), window, cx);
+            changed = true;
+        });
+        if !changed {
+            return;
+        }
+        self.editor.update(cx, |state, cx| state.focus(window, cx));
+        self.status = "已清除文字背景色".into();
+        self.on_change(window, cx);
     }
 
     /// 创建一个工具栏按钮：仅显示图标，鼠标悬停时通过 tooltip 显示功能说明。
@@ -647,7 +700,9 @@ impl EditorPanel {
         self.editor
             .update(cx, |state, cx| state.focus(window, cx));
         self.status = format!("已插入：{}", cmd.label()).into();
-        cx.notify();
+        // 与高亮同理：程序化插入不触发编辑控件的 Change 事件，
+        // 必须显式同步，否则预览要等到用户下一次输入才刷新
+        self.on_change(window, cx);
     }
 }
 
@@ -1014,6 +1069,16 @@ fn format_icon(cmd: Format) -> Icon {
     Icon::default().data(format_icon_svg(cmd).as_bytes())
 }
 
+/// 文字背景色（高亮）图标。
+///
+/// 刻意做成**实心填充 + 加粗底线**，而不是纯细线条描边：工具栏图标只有十几像素，
+/// 纯描边的小图标在浅色与深色背景下都容易糊成一团、辨识度不足。
+/// 造型为"马克笔 + 一道粗高亮线"，一眼能看出是上色而不是别的操作。
+fn highlight_icon() -> Icon {
+    const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18" stroke-width="3.5"/><path d="M20 4 11 13l-2 5 5-2 9-9-3-3Z" fill="currentColor" stroke-width="1.5"/><path d="M15 9l3 3"/></svg>"#;
+    Icon::default().data(SVG.as_bytes())
+}
+
 /// 在光标处插入一对标记并把光标置于中间；若有选中文本则整体包裹。
 fn surround(
     state: &mut EditorState,
@@ -1051,44 +1116,7 @@ const HIGHLIGHT_COLORS: [(&str, &str, u32); 10] = [
     ("灰", "#94a3b8", 0x94a3b8),
 ];
 
-/// 给选中文字设置背景色：已上色则换色（不嵌套）；未选中则插入空标记并把光标放中间。
-fn apply_highlight_color(
-    editor: &Entity<EditorState>,
-    color: &str,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    editor.update(cx, |state, cx| {
-        let range = state.selected_range();
-        if range.start != range.end {
-            let selected: String = state.selected_text().to_string();
-            state.replace(
-                crate::core::markdown::apply_mark_color(&selected, color),
-                window,
-                cx,
-            );
-        } else {
-            let open = format!("<mark color=\"{color}\">");
-            state.insert(&open, window, cx);
-            let between = state.cursor_position();
-            state.insert("</mark>", window, cx);
-            state.set_cursor_position(between, window, cx);
-        }
-        cx.notify();
-    });
-}
 
-/// 清除选中文字的背景色：去掉 `<mark>` 外壳并保留文字。
-fn clear_highlight_color(editor: &Entity<EditorState>, window: &mut Window, cx: &mut App) {
-    editor.update(cx, |state, cx| {
-        if state.selected_range().start == state.selected_range().end {
-            return;
-        }
-        let selected: String = state.selected_text().to_string();
-        state.replace(crate::core::markdown::strip_mark(&selected), window, cx);
-        cx.notify();
-    });
-}
 
 /// 由光标前一个字符判断是否处于行首：没有前驱字符，或前驱是换行。
 fn is_line_start(prev_char: Option<char>) -> bool {
