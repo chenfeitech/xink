@@ -6,8 +6,7 @@ use std::time::Instant;
 use gpui_kit::base::TextViewState;
 use gpui_kit::base::dock::TabGroup;
 use gpui_kit::component::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
-use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size};
@@ -545,114 +544,6 @@ impl EditorPanel {
                 Format::HorizontalRule,
                 cx,
             ))
-            .child(self.highlight_color_button(cx))
-    }
-
-    /// 文字背景色：点击弹出预设色板，选色后包裹（或换色）选中文本。
-    ///
-    /// 编辑区是源码模式，看不到颜色；效果在右侧**预览区**即时呈现，
-    /// 因此 tooltip 里明确写出这一点，避免被误认为没生效。
-    fn highlight_color_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let icon_size = crate::app::config(cx).basic.icon_size;
-        // 选色要改的是"笔记 + 预览"，不只是编辑控件，因此回调回到面板自身
-        let panel = self.self_entity.clone();
-        let id = ("highlight-color", self.self_entity.entity_id());
-
-        // 用 DropdownButton 而不是 Popover：Popover 在工具栏这种每帧重建的场景里
-        // 点击回调不稳定（实测选色无反应），下拉菜单是项目里已验证可用的交互
-        DropdownButton::new(id)
-            .button(
-                Button::new("highlight-color-trigger")
-                    .small()
-                    .ghost()
-                    .icon(highlight_icon().with_size(Size::Size(px(icon_size as f32))))
-                    .tooltip("文字背景色：选中文字后选色（在预览区查看效果）"),
-            )
-            .dropdown_menu(move |menu, _window, _cx| {
-                let mut menu = menu;
-                for (name, hex, rgb) in HIGHLIGHT_COLORS.iter() {
-                    let panel = panel.clone();
-                    let hex = *hex;
-                    menu = menu.item(
-                        PopupMenuItem::new(*name)
-                            // 菜单项支持图标，用自绘色块保留"色板"的辨识度
-                            .icon(swatch_icon(*rgb))
-                            .on_click(move |_, window, cx| {
-                                if panel
-                                    .update(cx, |this, cx| {
-                                        this.apply_highlight(hex, window, cx);
-                                    })
-                                    .is_err()
-                                {
-                                    eprintln!("[xink] 设置背景色失败：面板实体已释放");
-                                }
-                            }),
-                    );
-                }
-                let panel = panel.clone();
-                menu.separator().item(
-                    PopupMenuItem::new("清除背景色").on_click(move |_, window, cx| {
-                        let _ = panel.update(cx, |this, cx| {
-                            this.clear_highlight(window, cx);
-                        });
-                    }),
-                )
-            })
-    }
-
-    /// 给选中文字设置背景色：已上色则换色（不嵌套）；未选中则插入空标记并把光标放中间。
-    fn apply_highlight(&mut self, color: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(_) = &self.note else {
-            return;
-        };
-        let open = format!("<mark color=\"{color}\">");
-        self.editor.update(cx, |state, cx| {
-            let range = state.selected_range();
-            if range.start != range.end {
-                let selected: String = state.selected_text().to_string();
-                state.replace(
-                    crate::core::markdown::apply_mark_color(&selected, color),
-                    window,
-                    cx,
-                );
-            } else {
-                state.insert(&open, window, cx);
-                let between = state.cursor_position();
-                state.insert("</mark>", window, cx);
-                state.set_cursor_position(between, window, cx);
-            }
-        });
-        self.editor.update(cx, |state, cx| state.focus(window, cx));
-        self.status = "已设置文字背景色".into();
-        // 程序化替换不会触发编辑控件的 Change 事件，必须显式同步：
-        // 1) on_change 更新 note 文本与保存调度
-        // 2) refresh_doc 立即重算预览——不等防抖，否则用户看到的是"设了没反应"
-        self.on_change(window, cx);
-        self.refresh_doc(cx);
-    }
-
-    /// 清除选中文字的背景色：去掉 `<mark>` 外壳并保留文字。
-    fn clear_highlight(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(_) = &self.note else {
-            return;
-        };
-        let mut changed = false;
-        self.editor.update(cx, |state, cx| {
-            let range = state.selected_range();
-            if range.start == range.end {
-                return;
-            }
-            let selected: String = state.selected_text().to_string();
-            state.replace(crate::core::markdown::strip_mark(&selected), window, cx);
-            changed = true;
-        });
-        if !changed {
-            return;
-        }
-        self.editor.update(cx, |state, cx| state.focus(window, cx));
-        self.status = "已清除文字背景色".into();
-        self.on_change(window, cx);
-        self.refresh_doc(cx);
     }
 
     /// 创建一个工具栏按钮：仅显示图标，鼠标悬停时通过 tooltip 显示功能说明。
@@ -1062,25 +953,6 @@ fn format_icon(cmd: Format) -> Icon {
     Icon::default().data(format_icon_svg(cmd).as_bytes())
 }
 
-/// 文字背景色（高亮）图标。
-///
-/// 刻意做成**实心填充 + 加粗底线**，而不是纯细线条描边：工具栏图标只有十几像素，
-/// 纯描边的小图标在浅色与深色背景下都容易糊成一团、辨识度不足。
-/// 造型为"马克笔 + 一道粗高亮线"，一眼能看出是上色而不是别的操作。
-/// 菜单里的色块图标：一个实心圆角方块，颜色即该预设色。
-fn swatch_icon(rgb: u32) -> Icon {
-    let color = format!("#{:06x}", rgb);
-    let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4" fill="{color}" stroke="rgba(0,0,0,0.25)" stroke-width="1.5"/></svg>"#
-    );
-    Icon::default().data(svg.as_bytes())
-}
-
-fn highlight_icon() -> Icon {
-    const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18" stroke-width="3.5"/><path d="M20 4 11 13l-2 5 5-2 9-9-3-3Z" fill="currentColor" stroke-width="1.5"/><path d="M15 9l3 3"/></svg>"#;
-    Icon::default().data(SVG.as_bytes())
-}
-
 /// 在光标处插入一对标记并把光标置于中间；若有选中文本则整体包裹。
 fn surround(
     state: &mut EditorState,
@@ -1100,23 +972,6 @@ fn surround(
         state.set_cursor_position(between, window, cx);
     }
 }
-
-/// 预设文字背景色：（显示名、写入文本的 hex、色块用的 RGB）。
-///
-/// hex 必须是 `#RRGGBB`：预览侧的 `parse_mark_color` 只解析 hex 与
-/// black/white/blue/yellow 四个命名色（gpui-base text/format/html.rs:109）。
-const HIGHLIGHT_COLORS: [(&str, &str, u32); 10] = [
-    ("黄", "#facc15", 0xfacc15),
-    ("亮黄", "#fde047", 0xfde047),
-    ("橙", "#fb923c", 0xfb923c),
-    ("红", "#f87171", 0xf87171),
-    ("粉", "#f472b6", 0xf472b6),
-    ("紫", "#c084fc", 0xc084fc),
-    ("蓝", "#60a5fa", 0x60a5fa),
-    ("青", "#22d3ee", 0x22d3ee),
-    ("绿", "#4ade80", 0x4ade80),
-    ("灰", "#94a3b8", 0x94a3b8),
-];
 
 
 

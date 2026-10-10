@@ -291,68 +291,6 @@ fn hex_val(b: u8) -> Option<u8> {
 }
 
 /// 路径的最小 percent-encoding：保留 URL 安全字符，其余按字节转义（中文也会被编码）
-// ── 文字背景色（`<mark>` 标记）────────────────────────────────
-//
-// 预览渲染层只认 `<mark>` 的 `color` 属性（gpui-base text/format/html.rs:109），
-// 且只解析 `#hex` 与 black/white/blue/yellow 四个命名色。因此这里统一用 hex 写入。
-
-const MARK_OPEN_PREFIX: &str = "<mark";
-const MARK_CLOSE: &str = "</mark>";
-const CODE_OPEN: &str = "<code>";
-const CODE_CLOSE: &str = "</code>";
-
-/// 用背景色标记包裹文本。
-///
-/// 内层必须有 `<code>`：渲染层**只为行内代码绘制背景矩形**
-/// （`gpui-base text/inline_flow.rs:398/404-435`），`<mark>` 只负责提供颜色。
-/// 详见 `docs/text-format-design.md` §11。
-pub fn mark_text(text: &str, color: &str) -> String {
-    format!("<mark color=\"{color}\">{CODE_OPEN}{text}{CODE_CLOSE}</mark>")
-}
-
-/// 文本是否已整体被背景色标记包裹；是则返回**内部纯文本**。
-///
-/// 同时兼容内层有无 `<code>` 两种写法：早期写入的是 `<mark …>文本</mark>`，
-/// 这里一并识别，换色时会升级为带 `<code>` 的新写法，避免旧内容被二次包裹。
-pub fn marked_inner(text: &str) -> Option<&str> {
-    let rest = text.strip_prefix(MARK_OPEN_PREFIX)?;
-    let body = rest.split_once('>')?.1;
-    let body = body.strip_suffix(MARK_CLOSE)?;
-    // `<mark>外层<mark>内层</mark>`：内部仍含 `<mark`，不视为整体包裹
-    if body.contains(MARK_OPEN_PREFIX) {
-        return None;
-    }
-    if let Some(rest) = body.strip_prefix(CODE_OPEN) {
-        // 有 `<code>` 开头就必须成对闭合，否则结构不明
-        let inner = rest.strip_suffix(CODE_CLOSE)?;
-        if inner.contains(CODE_OPEN) {
-            return None;
-        }
-        return Some(inner);
-    }
-    // 旧写法：没有 code 内层时，正文里不应再出现 `<code>`
-    if body.contains(CODE_OPEN) {
-        return None;
-    }
-    Some(body)
-}
-
-/// 应用背景色：已整体包裹则替换颜色，否则包裹。
-pub fn apply_mark_color(text: &str, color: &str) -> String {
-    match marked_inner(text) {
-        Some(inner) => mark_text(inner, color),
-        None => mark_text(text, color),
-    }
-}
-
-/// 清除背景色：去掉 `<mark>` 外壳并保留文字；未包裹则原样返回。
-pub fn strip_mark(text: &str) -> String {
-    match marked_inner(text) {
-        Some(inner) => inner.to_string(),
-        None => text.to_string(),
-    }
-}
-
 fn encode_path(path: &Path) -> String {
     let s = path.to_string_lossy();
     let mut out = String::with_capacity(s.len() * 2);
