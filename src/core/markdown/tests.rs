@@ -274,59 +274,83 @@ fn sanitized_common_constructs_do_not_panic_parser() {
     }
 }
 
-// ── 文字背景色（`<mark>`）─────────────────────────────────────
+// ── 文字背景色（`<mark>` 包裹 `<code>`）───────────────────────
+//
+// 渲染层只为行内代码绘制背景矩形，所以外层 `<mark>` 提供颜色、内层 `<code>`
+// 触发绘制（依据见设计文档 §11）。
+
+const YELLOW: &str = "#facc15";
+const BLUE: &str = "#60a5fa";
+const GREEN: &str = "#4ade80";
+
+fn marked(color: &str, text: &str) -> String {
+    format!("<mark color=\"{color}\"><code>{text}</code></mark>")
+}
 
 #[test]
-fn mark_text_wraps_with_hex_color() {
-    assert_eq!(
-        mark_text("重点", "#facc15"),
-        "<mark color=\"#facc15\">重点</mark>"
-    );
+fn mark_text_wraps_with_code_inner() {
+    assert_eq!(mark_text("重点", YELLOW), marked(YELLOW, "重点"));
 }
 
 #[test]
 fn apply_mark_color_wraps_plain_text() {
-    assert_eq!(
-        apply_mark_color("重点", "#facc15"),
-        "<mark color=\"#facc15\">重点</mark>"
-    );
+    assert_eq!(apply_mark_color("重点", YELLOW), marked(YELLOW, "重点"));
 }
 
 #[test]
 fn apply_mark_color_replaces_instead_of_nesting() {
-    let once = apply_mark_color("重点", "#facc15");
-    let twice = apply_mark_color(&once, "#60a5fa");
+    let once = apply_mark_color("重点", YELLOW);
+    let twice = apply_mark_color(&once, BLUE);
 
-    assert_eq!(twice, "<mark color=\"#60a5fa\">重点</mark>");
-    assert!(!twice.contains("<mark color=\"#facc15\""), "旧颜色应被替换");
-    assert_eq!(twice.matches("<mark").count(), 1, "不应嵌套出多层标记");
+    assert_eq!(twice, marked(BLUE, "重点"));
+    assert!(!twice.contains(YELLOW), "旧颜色应被替换");
+    assert_eq!(twice.matches("<mark").count(), 1, "不应嵌套多层 mark");
+    assert_eq!(twice.matches("<code>").count(), 1, "内层 code 也应只有一个");
 }
 
 #[test]
 fn apply_mark_color_keeps_inner_text_unchanged() {
-    let marked = apply_mark_color("**加粗** 的文字", "#facc15");
-    let recolored = apply_mark_color(&marked, "#4ade80");
+    let once = apply_mark_color("**加粗** 的文字", YELLOW);
+    let recolored = apply_mark_color(&once, GREEN);
     assert!(
         recolored.contains("**加粗** 的文字"),
-        "换色不应破坏内部内容: {recolored}"
+        "换色不应破坏内容: {recolored}"
     );
 }
 
 #[test]
 fn strip_mark_removes_wrapper_and_keeps_text() {
-    assert_eq!(
-        strip_mark("<mark color=\"#facc15\">重点</mark>"),
-        "重点",
-        "清除后保留文字"
-    );
-    // 未包裹的文本原样返回
-    assert_eq!(strip_mark("普通文字"), "普通文字");
+    assert_eq!(strip_mark(&marked(YELLOW, "重点")), "重点");
+    assert_eq!(strip_mark("普通文字"), "普通文字", "未包裹则原样返回");
 }
 
 #[test]
-fn marked_inner_rejects_nested_mark() {
-    // 内层含 <mark> 时不视为"整体包裹"，避免换色时误删外层结构
-    assert_eq!(marked_inner("<mark>x<mark>y</mark></mark>"), None);
-    assert_eq!(marked_inner("<mark color=\"#fff\">y</mark>"), Some("y"));
+fn marked_inner_accepts_both_writings() {
+    assert_eq!(marked_inner(&marked(YELLOW, "y")), Some("y"));
+    // 旧写法（无 code 内层）也要能识别，避免旧笔记被二次包裹
+    assert_eq!(marked_inner("<mark color=\"#facc15\">y</mark>"), Some("y"));
     assert_eq!(marked_inner("普通文字"), None);
+}
+
+#[test]
+fn marked_inner_rejects_nested_or_broken_mark() {
+    assert_eq!(
+        marked_inner("<mark>x<mark>y</mark></mark>"),
+        None,
+        "嵌套不视为整体包裹"
+    );
+    assert_eq!(
+        marked_inner("<mark color=\"#facc15\"><code>y</mark>"),
+        None,
+        "code 未闭合：结构不明"
+    );
+}
+
+#[test]
+fn legacy_mark_is_upgraded_on_recolor() {
+    // 早期写入的旧格式：换色时升级为新格式，而不是再包一层
+    let legacy = "<mark color=\"#facc15\">重点</mark>";
+    let upgraded = apply_mark_color(legacy, BLUE);
+    assert_eq!(upgraded, marked(BLUE, "重点"));
+    assert_eq!(upgraded.matches("<mark").count(), 1);
 }

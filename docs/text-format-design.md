@@ -176,3 +176,98 @@ GUI 行为（打开色板、选色后预览呈现、清除）需人工验收，�
 改为**自绘内联 SVG**：马克笔笔身用 `fill="currentColor"` 实心填充，底部高亮线
 `stroke-width="3.5"` 加粗。与工具栏其他图标同为内联 SVG（`highlight_icon`），
 不新增依赖，且在浅色 / 深色背景下都保持可见。
+
+---
+
+## 11. 文字底色自研支持评估（2026-10-10）
+
+### 11.1 决定性证据：框架只为"行内代码"绘制背景
+
+`mark_highlight()`（`gpui-base text/node.rs:1683-1690`）：
+
+```rust
+if mark.code {
+    highlight = highlight.highlight(node_cx.style.inline_code_highlight());
+    font_family = Some(mono);                       // 等宽字体
+}
+if let Some(color) = mark.highlight {
+    highlight.background_color = Some(color);       // ← 我们 <mark> 的颜色确实写进去了
+}
+InlineHighlight { style: highlight, font_size_scale: mark.code.then_some(0.875) }
+```
+
+而绘制端（`text/inline_flow.rs:398 / 404-435`）：
+
+```rust
+let is_code = highlights.iter().any(|(_, h)| h.font_size_scale.is_some());  // 只有 code 有
+let background = if is_code {
+    let color = highlights.iter().find_map(|(_, h)| h.style.background_color);
+    for (_, h) in &mut highlights { h.style.background_color = None; }  // 取出来自己画矩形
+    color.map(|c| (bounds, c))
+} else {
+    None                                            // ← 普通文本：不画背景
+};
+```
+
+**结论**：`<mark>` 的 highlight **写入了** `style.background_color`，但框架**只在行内代码分支**把它画成背景矩形；普通文本的 run 背景不会被绘制。这与实测"文字正常、无底色"完全一致。
+
+### 11.2 三条路径
+
+| 路径 | 做法 | 视觉效果 | 成本 | 风险 |
+|---|---|---|---|---|
+| **A 曲线复用** | 预处理把高亮改写成 `<mark color><code>…</code></mark>`：code 触发绘制分支，mark 提供颜色 | 底色出现，但**字体变等宽、字号 ×0.875**（行内代码样式） | 低（改预处理 + 单测） | 视觉是"代码"而非"高亮"，可能不符预期 |
+| **B 改框架** | fork / patch `inline_flow.rs`，让非 code 的 highlight 也绘制背景 | 正确的"高亮"外观 | 高 | 需维护框架分支，gpui-kit 升级时冲突 |
+| **C 放弃** | 撤下按钮与色板 | — | 低 | 功能缺失（与文字色、字体同因） |
+
+### 11.3 若要实施，需要支持的场景
+
+1. 选中文字上色（含同一段落内的部分选中）
+2. 已上色文字换色（替换颜色，不产生嵌套）
+3. 清除底色（保留文字）
+4. 空选区时插入标记并把光标放中间
+5. 与既有行内语法共存：加粗、斜体、删除线、链接、行内代码（需定义嵌套与 merge 规则）
+6. 明暗主题下均可读
+7. 导出的 Markdown 在外部渲染器（支持 `<mark>`）中同样有效
+
+### 11.4 期望的视觉表现
+
+- 背景**贴合文字实际范围**；跨行时按行分段绘制，不越界
+- **不改变字体族与字号**——这是路径 A 的最大偏差，也是判断它能否被接受的关键
+- 与行高协调：不遮挡上下行文字
+- 明暗主题下文字与底色对比度足够（不能出现"黄底白字看不清"）
+- 与编辑器的选区高亮可区分（避免误认为被选中）
+
+### 11.5 必须满足的约束
+
+| # | 约束 |
+|---|---|
+| C1 | 颜色不硬编码，取值需与渲染能力匹配（当前只认 `#hex` 与四个命名色） |
+| C2 | 包裹/换色/清除/嵌套规则抽为纯函数并单测（已有 6 例，需扩展） |
+| C3 | 不破坏既有渲染：图片、表格、代码块、链接的表现不得回退 |
+| C4 | 性能：大文档（10MB 级）下不引入额外解析开销或掉帧 |
+| C5 | 持久化：标记随正文保存，不引入新的配置或存储结构 |
+| C6 | 可回退：撤下功能后已写入的标记仍是合法 Markdown，不损坏笔记内容 |
+
+### 11.6 待决策
+
+- 路径 A 的"等宽 + 缩小字号"是否可接受？（可接受则低成本落地）
+- 是否值得为路径 B 承担维护框架分支的成本？
+- 若都不可接受 → 路径 C，撤下按钮并把结论固化在本文档与 REQUIREMENTS。
+
+### 11.7 决策与实施（2026-10-10）：采纳路径 A
+
+**决策**：采纳 A——`<mark color="#hex"><code>文本</code></mark>`。
+code 触发背景绘制分支，mark 提供颜色。**已接受的视觉偏差**：文字呈等宽字体、字号 ×0.875。
+
+**实现**：`core/markdown.rs` 的 `mark_text` 生成双层包裹；`marked_inner` 同时识别
+新旧两种写法（旧格式换色时自动升级为新格式，不会被二次包裹）。
+
+**测试**（8 例）：包裹结构、换色不嵌套（mark 与 code 各只有一个）、换色不破坏内容、
+清除保留文字、两种写法识别、嵌套/未闭合拒绝、旧格式升级。
+
+**其余工作**：移除排查用的临时日志（保留面板释放的错误日志）；
+`apply_highlight` / `clear_highlight` / `apply_format` 仍保留"on_change + 立即 refresh_doc"
+的同步，确保选色后预览当下重算。
+
+**验收重点**（人工）：预览区是否出现底色、底色是否用了所选颜色、
+文字是否变为等宽小字（已知偏差）、清除与换色是否正常。

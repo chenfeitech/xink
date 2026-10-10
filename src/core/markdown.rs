@@ -298,23 +298,43 @@ fn hex_val(b: u8) -> Option<u8> {
 
 const MARK_OPEN_PREFIX: &str = "<mark";
 const MARK_CLOSE: &str = "</mark>";
+const CODE_OPEN: &str = "<code>";
+const CODE_CLOSE: &str = "</code>";
 
-/// 用 `<mark color="...">` 包裹文本。
+/// 用背景色标记包裹文本。
+///
+/// 内层必须有 `<code>`：渲染层**只为行内代码绘制背景矩形**
+/// （`gpui-base text/inline_flow.rs:398/404-435`），`<mark>` 只负责提供颜色。
+/// 详见 `docs/text-format-design.md` §11。
 pub fn mark_text(text: &str, color: &str) -> String {
-    format!("<mark color=\"{color}\">{text}</mark>")
+    format!("<mark color=\"{color}\">{CODE_OPEN}{text}{CODE_CLOSE}</mark>")
 }
 
-/// 文本是否已整体被 `<mark …>` 包裹；是则返回内部文本。
+/// 文本是否已整体被背景色标记包裹；是则返回**内部纯文本**。
+///
+/// 同时兼容内层有无 `<code>` 两种写法：早期写入的是 `<mark …>文本</mark>`，
+/// 这里一并识别，换色时会升级为带 `<code>` 的新写法，避免旧内容被二次包裹。
 pub fn marked_inner(text: &str) -> Option<&str> {
     let rest = text.strip_prefix(MARK_OPEN_PREFIX)?;
-    let inner = rest.split_once('>')?.1;
-    let inner = inner.strip_suffix(MARK_CLOSE)?;
-    // 形如 `<mark>外层<mark>内层</mark>` 会被 `strip_suffix` 切在最外层闭合处，
-    // 此时内部仍含 `<mark`，视为未整体包裹，避免误判成可换色。
-    if inner.contains(MARK_OPEN_PREFIX) {
+    let body = rest.split_once('>')?.1;
+    let body = body.strip_suffix(MARK_CLOSE)?;
+    // `<mark>外层<mark>内层</mark>`：内部仍含 `<mark`，不视为整体包裹
+    if body.contains(MARK_OPEN_PREFIX) {
         return None;
     }
-    Some(inner)
+    if let Some(rest) = body.strip_prefix(CODE_OPEN) {
+        // 有 `<code>` 开头就必须成对闭合，否则结构不明
+        let inner = rest.strip_suffix(CODE_CLOSE)?;
+        if inner.contains(CODE_OPEN) {
+            return None;
+        }
+        return Some(inner);
+    }
+    // 旧写法：没有 code 内层时，正文里不应再出现 `<code>`
+    if body.contains(CODE_OPEN) {
+        return None;
+    }
+    Some(body)
 }
 
 /// 应用背景色：已整体包裹则替换颜色，否则包裹。

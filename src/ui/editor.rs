@@ -622,7 +622,6 @@ impl EditorPanel {
         let Some(_) = &self.note else {
             return;
         };
-        eprintln!("[xink] apply_highlight: {color}");
         let open = format!("<mark color=\"{color}\">");
         self.editor.update(cx, |state, cx| {
             let range = state.selected_range();
