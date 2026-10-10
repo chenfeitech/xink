@@ -291,6 +291,48 @@ fn hex_val(b: u8) -> Option<u8> {
 }
 
 /// 路径的最小 percent-encoding：保留 URL 安全字符，其余按字节转义（中文也会被编码）
+// ── 文字背景色（`<mark>` 标记）────────────────────────────────
+//
+// 预览渲染层只认 `<mark>` 的 `color` 属性（gpui-base text/format/html.rs:109），
+// 且只解析 `#hex` 与 black/white/blue/yellow 四个命名色。因此这里统一用 hex 写入。
+
+const MARK_OPEN_PREFIX: &str = "<mark";
+const MARK_CLOSE: &str = "</mark>";
+
+/// 用 `<mark color="...">` 包裹文本。
+pub fn mark_text(text: &str, color: &str) -> String {
+    format!("<mark color=\"{color}\">{text}</mark>")
+}
+
+/// 文本是否已整体被 `<mark …>` 包裹；是则返回内部文本。
+pub fn marked_inner(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix(MARK_OPEN_PREFIX)?;
+    let inner = rest.split_once('>')?.1;
+    let inner = inner.strip_suffix(MARK_CLOSE)?;
+    // 形如 `<mark>外层<mark>内层</mark>` 会被 `strip_suffix` 切在最外层闭合处，
+    // 此时内部仍含 `<mark`，视为未整体包裹，避免误判成可换色。
+    if inner.contains(MARK_OPEN_PREFIX) {
+        return None;
+    }
+    Some(inner)
+}
+
+/// 应用背景色：已整体包裹则替换颜色，否则包裹。
+pub fn apply_mark_color(text: &str, color: &str) -> String {
+    match marked_inner(text) {
+        Some(inner) => mark_text(inner, color),
+        None => mark_text(text, color),
+    }
+}
+
+/// 清除背景色：去掉 `<mark>` 外壳并保留文字；未包裹则原样返回。
+pub fn strip_mark(text: &str) -> String {
+    match marked_inner(text) {
+        Some(inner) => inner.to_string(),
+        None => text.to_string(),
+    }
+}
+
 fn encode_path(path: &Path) -> String {
     let s = path.to_string_lossy();
     let mut out = String::with_capacity(s.len() * 2);

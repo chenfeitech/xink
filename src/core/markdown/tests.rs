@@ -273,3 +273,60 @@ fn sanitized_common_constructs_do_not_panic_parser() {
         );
     }
 }
+
+// ── 文字背景色（`<mark>`）─────────────────────────────────────
+
+#[test]
+fn mark_text_wraps_with_hex_color() {
+    assert_eq!(
+        mark_text("重点", "#facc15"),
+        "<mark color=\"#facc15\">重点</mark>"
+    );
+}
+
+#[test]
+fn apply_mark_color_wraps_plain_text() {
+    assert_eq!(
+        apply_mark_color("重点", "#facc15"),
+        "<mark color=\"#facc15\">重点</mark>"
+    );
+}
+
+#[test]
+fn apply_mark_color_replaces_instead_of_nesting() {
+    let once = apply_mark_color("重点", "#facc15");
+    let twice = apply_mark_color(&once, "#60a5fa");
+
+    assert_eq!(twice, "<mark color=\"#60a5fa\">重点</mark>");
+    assert!(!twice.contains("<mark color=\"#facc15\""), "旧颜色应被替换");
+    assert_eq!(twice.matches("<mark").count(), 1, "不应嵌套出多层标记");
+}
+
+#[test]
+fn apply_mark_color_keeps_inner_text_unchanged() {
+    let marked = apply_mark_color("**加粗** 的文字", "#facc15");
+    let recolored = apply_mark_color(&marked, "#4ade80");
+    assert!(
+        recolored.contains("**加粗** 的文字"),
+        "换色不应破坏内部内容: {recolored}"
+    );
+}
+
+#[test]
+fn strip_mark_removes_wrapper_and_keeps_text() {
+    assert_eq!(
+        strip_mark("<mark color=\"#facc15\">重点</mark>"),
+        "重点",
+        "清除后保留文字"
+    );
+    // 未包裹的文本原样返回
+    assert_eq!(strip_mark("普通文字"), "普通文字");
+}
+
+#[test]
+fn marked_inner_rejects_nested_mark() {
+    // 内层含 <mark> 时不视为"整体包裹"，避免换色时误删外层结构
+    assert_eq!(marked_inner("<mark>x<mark>y</mark></mark>"), None);
+    assert_eq!(marked_inner("<mark color=\"#fff\">y</mark>"), Some("y"));
+    assert_eq!(marked_inner("普通文字"), None);
+}
