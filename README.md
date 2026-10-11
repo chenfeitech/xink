@@ -168,6 +168,8 @@ VERSION=0.2.0 ./scripts/build_macos.sh                 # 覆盖版本号
 
 示例库里的 `图片测试.md` 可用于快速验证：本地相对路径图片、代码块语法高亮、表格渲染。
 
+![](docs/imgs/image.png)
+
 ## 许可
 
 待定。
