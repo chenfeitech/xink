@@ -12,7 +12,7 @@ use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::tree::{TreeItem, TreeState, tree};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Size};
-use gpui_kit::{ClipboardEntry, ExternalPaths, ImageFormat};
+use gpui_kit::{ClipboardEntry, DragMoveEvent, ExternalPaths, ImageFormat};
 
 use crate::core::media::is_image_path;
 use gpui_kit::*;
@@ -39,6 +39,10 @@ pub struct FilesPanel {
     watcher_task: Option<Task<()>>,
     /// 上次**手动**刷新的时刻，用于抑制连点（扫描虽在后台，连点仍会排队多次）
     last_manual_refresh: Option<Instant>,
+    /// 树内拖拽时悬停的落点目录，用于高亮反馈；`None` 表示无高亮。
+    ///
+    /// 只在落点**变化**时写入，避免每帧重复 notify 造成闪烁。
+    drag_hover: Option<PathBuf>,
 
     /// 路径 → 是否为目录。
     ///
@@ -61,6 +65,7 @@ impl FilesPanel {
             watcher: None,
             watcher_task: None,
             last_manual_refresh: None,
+            drag_hover: None,
 
             dir_flags: Rc::new(HashMap::new()),
         }
@@ -625,6 +630,52 @@ impl FilesPanel {
         }
     }
 
+    /// 拖拽把节点移动到目标目录。
+    ///
+    /// 安全规则：
+    /// - 不能移到它自己或它的子目录里；
+    /// - 目标同名时**自动改名**（`unique_name`），绝不静默覆盖；
+    /// - 跨设备移动由 `core::fs::move_path` 处理（复制 + 校验 + 删源）。
+    fn drop_move(
+        &mut self,
+        src: PathBuf,
+        target_dir: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if target_dir == src || target_dir.starts_with(&src) {
+            self.status = "不能移动到它自己或它的子目录".into();
+            cx.notify();
+            return;
+        }
+        let Some(name) = src.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
+            self.status = "无法取得文件名".into();
+            cx.notify();
+            return;
+        };
+
+        let dst = crate::core::fs::unique_name(&target_dir, &name);
+        self.status = "正在移动…".into();
+        cx.notify();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { crate::core::fs::move_path(&src, &dst) });
+
+        cx.spawn_in(window, async move |this, window| {
+            let result = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                this.status = match result {
+                    Ok(()) => "已移动".to_string(),
+                    Err(err) => format!("移动失败: {err}"),
+                }
+                .into();
+                this.refresh(window, cx);
+            });
+        })
+        .detach();
+    }
+
     fn apply_tree(&mut self, node: FileNode, cx: &mut Context<Self>) {
         let notes = count_notes(&node);
         // 目录类型随树一起缓存：空文件夹没有子节点，无法靠子节点数量判断
@@ -638,6 +689,24 @@ impl FilesPanel {
         println!("[xink] 文件树已更新: {notes} 篇笔记");
         self.status = format!("{notes} 篇笔记").into();
         cx.notify();
+    }
+}
+
+/// 树内拖拽时跟随光标的预览：只显示被拖动的文件名
+struct DragPreview {
+    label: SharedString,
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(cx.theme().accent)
+            .text_color(cx.theme().accent_foreground)
+            .text_xs()
+            .child(self.label.clone())
     }
 }
 
@@ -864,6 +933,16 @@ impl Render for FilesPanel {
                 div()
                     .flex_1()
                     .min_h_0()
+                    // 树内拖拽经过空白区域：落点改为库根，高亮随之切换
+                    .on_drag_move::<PathBuf>(cx.listener(
+                        |this, _: &DragMoveEvent<PathBuf>, _window, cx| {
+                            let root = this.vault.as_ref().map(|v| v.root().to_path_buf());
+                            if this.drag_hover != root {
+                                this.drag_hover = root;
+                                cx.notify();
+                            }
+                        },
+                    ))
                     // 拖到树的空白区域：落到库根目录
                     .on_drop::<ExternalPaths>(cx.listener(
                         |this, paths: &ExternalPaths, window, cx| {
@@ -878,98 +957,125 @@ impl Render for FilesPanel {
                         },
                     ))
                     .child(
-                        tree(&self.tree_state, move |ix, entry, _selected, _w, _cx| {
-                            let item = entry.item();
-                            let depth = entry.depth();
-                            let path = PathBuf::from(item.id.to_string());
-                            // 目录类型取自扫描时缓存的标记。不能再用「有没有子节点」推断——
-                            // 空文件夹没有子节点，会被误判成文件（图标、加粗、点击行为全错）。
-                            // 查不到时退回一次磁盘判断，兼容 id 与原始路径不完全一致的情况。
-                            let is_dir = dir_flags
-                                .get(&path)
-                                .copied()
-                                .unwrap_or_else(|| path.is_dir());
-                            let state = tree_state.clone();
-                            let weak_click = weak.clone();
+                        tree(
+                            &self.tree_state,
+                            move |ix, entry, _selected, _window, cx| {
+                                let item = entry.item();
+                                let depth = entry.depth();
+                                let path = PathBuf::from(item.id.to_string());
+                                // 目录类型取自扫描时缓存的标记。不能再用「有没有子节点」推断——
+                                // 空文件夹没有子节点，会被误判成文件（图标、加粗、点击行为全错）。
+                                // 查不到时退回一次磁盘判断，兼容 id 与原始路径不完全一致的情况。
+                                let is_dir = dir_flags
+                                    .get(&path)
+                                    .copied()
+                                    .unwrap_or_else(|| path.is_dir());
+                                let state = tree_state.clone();
+                                let weak_click = weak.clone();
 
-                            // 目录：折叠用闭口文件夹 + 向右箭头，展开用开口文件夹 + 向下箭头
-                            // 文件：文件图标，左侧留白与箭头对齐，保证名称落在同一列
-                            // 目录树的字体与图标尺寸均取自配置，改完立即生效
-                            let font = &cfg.basic.tree_font;
-                            let icon_px = px(cfg.basic.icon_size as f32);
-                            // 用完整图标集（gpui_kit::assets）：组件库内置的那 101 个
-                            // 图标里没有图片相关图标
-                            // 图标包一层 `flex_none`：它是固定尺寸元素，可用宽度不足时
-                            // 绝不能被 flex 压缩，否则名称起始列会随文件名长度漂移。
-                            let icon = |name: AssetIcon| {
-                                div()
-                                    .flex_none()
-                                    .child(Icon::new(name).with_size(Size::Size(icon_px)))
-                            };
-                            let mut row = div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                // 行宽恒等于可用宽度：既不因长文件名撑开，也不随面板宽度抖动
-                                .w_full()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .font_family(font.family.clone())
-                                .text_size(px(font.size))
-                                .line_height(px(font.size * font.line_height))
-                                .font_weight(FontWeight(font.weight.value()));
-                            if is_dir {
-                                if entry.is_expanded() {
+                                // 目录：折叠用闭口文件夹 + 向右箭头，展开用开口文件夹 + 向下箭头
+                                // 文件：文件图标，左侧留白与箭头对齐，保证名称落在同一列
+                                // 目录树的字体与图标尺寸均取自配置，改完立即生效
+                                let font = &cfg.basic.tree_font;
+                                let icon_px = px(cfg.basic.icon_size as f32);
+                                // 用完整图标集（gpui_kit::assets）：组件库内置的那 101 个
+                                // 图标里没有图片相关图标
+                                // 图标包一层 `flex_none`：它是固定尺寸元素，可用宽度不足时
+                                // 绝不能被 flex 压缩，否则名称起始列会随文件名长度漂移。
+                                let icon = |name: AssetIcon| {
+                                    div()
+                                        .flex_none()
+                                        .child(Icon::new(name).with_size(Size::Size(icon_px)))
+                                };
+                                let mut row = div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    // 行宽恒等于可用宽度：既不因长文件名撑开，也不随面板宽度抖动
+                                    .w_full()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .font_family(font.family.clone())
+                                    .text_size(px(font.size))
+                                    .line_height(px(font.size * font.line_height))
+                                    .font_weight(FontWeight(font.weight.value()));
+                                if is_dir {
+                                    if entry.is_expanded() {
+                                        row = row
+                                            .child(icon(AssetIcon::ChevronDown))
+                                            .child(icon(AssetIcon::FolderOpen));
+                                    } else {
+                                        row = row
+                                            .child(icon(AssetIcon::ChevronRight))
+                                            .child(icon(AssetIcon::FolderClosed));
+                                    }
+                                } else if is_image_path(&path) {
+                                    // 图片文件：专用图标，点击打开图片预览而不是当笔记打开
                                     row = row
-                                        .child(icon(AssetIcon::ChevronDown))
-                                        .child(icon(AssetIcon::FolderOpen));
+                                        .child(div().flex_none().w(icon_px))
+                                        .child(icon(AssetIcon::FileImage));
                                 } else {
                                     row = row
-                                        .child(icon(AssetIcon::ChevronRight))
-                                        .child(icon(AssetIcon::FolderClosed));
+                                        .child(div().flex_none().w(icon_px))
+                                        .child(icon(AssetIcon::FileText));
                                 }
-                            } else if is_image_path(&path) {
-                                // 图片文件：专用图标，点击打开图片预览而不是当笔记打开
-                                row = row
-                                    .child(div().flex_none().w(icon_px))
-                                    .child(icon(AssetIcon::FileImage));
-                            } else {
-                                row = row
-                                    .child(div().flex_none().w(icon_px))
-                                    .child(icon(AssetIcon::FileText));
-                            }
-                            // 目录名加粗，与文件形成强弱对比。
-                            // 名称占满剩余空间并单行截断：超长时不挤压前面的图标列，也不撑宽行。
-                            // 框架没有省略号（truncate）API，这里用 nowrap + 裁剪代替。
-                            let name = div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .child(item.label.to_string());
-                            let name = if is_dir {
-                                name.font_weight(FontWeight::BOLD)
-                            } else {
-                                name
-                            };
-                            row = row.child(name);
+                                // 目录名加粗，与文件形成强弱对比。
+                                // 名称占满剩余空间并单行截断：超长时不挤压前面的图标列，也不撑宽行。
+                                // 框架没有省略号（truncate）API，这里用 nowrap + 裁剪代替。
+                                let name = div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .child(item.label.to_string());
+                                let name = if is_dir {
+                                    name.font_weight(FontWeight::BOLD)
+                                } else {
+                                    name
+                                };
+                                row = row.child(name);
 
-                            // 拖入落点：目录就是它自己，文件则落到它所在的目录。
-                            // 必须在 on_click 的 move 闭包之前算好，否则 path 已被移走。
-                            let drop_target = if is_dir {
-                                Some(path.clone())
-                            } else {
-                                path.parent().map(|p| p.to_path_buf())
-                            };
+                                // 拖入落点：目录就是它自己，文件则落到它所在的目录。
+                                // 必须在 on_click 的 move 闭包之前算好，否则 path 已被移走。
+                                let drop_target = if is_dir {
+                                    Some(path.clone())
+                                } else {
+                                    path.parent().map(|p| p.to_path_buf())
+                                };
+                                // 下面多个 move 闭包都要用到路径与落点，先各取一份副本，
+                                // 否则第一个闭包就会把原值移走
+                                let drag_source = path.clone();
+                                let drag_target = drop_target.clone();
+                                let move_target = drop_target.clone();
+                                let import_target = drop_target.clone();
 
-                            ListItem::new(("file-tree-item", ix))
-                                // 按层级缩进，让父子关系一眼可辨。
-                                // 固定像素缩进：不随面板宽度变化，各层级列位置恒定。
-                                .pl(px(6. + depth as f32 * 16.))
-                                .min_w_0()
-                                .overflow_hidden()
-                                .child(row)
-                                .on_click(move |_, window, cx| {
+                                // 拖拽高亮：本节点是否为当前悬停的落点
+                                let hovered = weak
+                                    .upgrade()
+                                    .map(|panel| {
+                                        panel.read(cx).drag_hover.as_deref()
+                                            == drop_target.as_deref()
+                                    })
+                                    .unwrap_or(false);
+
+                                let item = ListItem::new(("file-tree-item", ix))
+                                    // 按层级缩进，让父子关系一眼可辨。
+                                    // 固定像素缩进：不随面板宽度变化，各层级列位置恒定。
+                                    .pl(px(6. + depth as f32 * 16.))
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .child(row);
+                                // 高亮：强调色浅底 + 同色边框。与"选中态"（实心强调色）区分，
+                                // 视觉强度克制——能一眼看到落点，又不抢走内容注意力。
+                                let item = if hovered {
+                                    item.bg(cx.theme().accent.opacity(0.18))
+                                        .border_1()
+                                        .border_color(cx.theme().accent)
+                                } else {
+                                    item
+                                };
+
+                                item.on_click(move |_, window, cx| {
                                     state.update(cx, |state, cx| {
                                         state.set_selected_index(Some(ix), cx);
                                     });
@@ -988,8 +1094,9 @@ impl Render for FilesPanel {
                                 // 从访达（Finder）把文件/目录拖到这个节点上 → 导入
                                 .on_drop::<ExternalPaths>({
                                     let weak = weak.clone();
+                                    let target = import_target.clone();
                                     move |paths, window, cx| {
-                                        let Some(target) = drop_target.clone() else {
+                                        let Some(target) = target.clone() else {
                                             return;
                                         };
                                         let paths = paths.paths().to_vec();
@@ -1003,7 +1110,50 @@ impl Render for FilesPanel {
                                         }
                                     }
                                 })
-                        })
+                                // 树内拖拽：发起，载荷是被拖节点的路径
+                                .on_drag(drag_source, move |dragged, _offset, _window, cx| {
+                                    let label = dragged
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or_default()
+                                        .to_string();
+                                    cx.new(|_| DragPreview {
+                                        label: label.into(),
+                                    })
+                                })
+                                // 悬停：更新高亮落点，只在变化时写入以避免闪烁
+                                .on_drag_move::<PathBuf>({
+                                    let weak = weak.clone();
+                                    let target = drag_target.clone();
+                                    move |_, _window, cx| {
+                                        if let Some(panel) = weak.upgrade() {
+                                            panel.update(cx, |this, cx| {
+                                                if this.drag_hover.as_deref() != target.as_deref() {
+                                                    this.drag_hover = target.clone();
+                                                    cx.notify();
+                                                }
+                                            });
+                                        }
+                                    }
+                                })
+                                // 树内拖拽放下：执行移动
+                                .on_drop::<PathBuf>({
+                                    let weak = weak.clone();
+                                    let target = move_target.clone();
+                                    move |src, window, cx| {
+                                        let Some(target) = target.clone() else {
+                                            return;
+                                        };
+                                        if let Some(panel) = weak.upgrade() {
+                                            _ = panel.update(cx, |this, cx| {
+                                                this.drag_hover = None;
+                                                this.drop_move(src.clone(), target, window, cx);
+                                            });
+                                        }
+                                    }
+                                })
+                            },
+                        )
                         // 右键上下文菜单：面向单节点，提供重命名 / 删除 / 新建 / 移动等操作
                         .context_menu(
                             move |ix, entry, menu, _window, _cx| {
