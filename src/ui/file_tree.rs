@@ -36,6 +36,8 @@ pub struct FilesPanel {
     /// 库目录监听（外部编辑器改动）
     watcher: Option<VaultWatcher>,
     watcher_task: Option<Task<()>>,
+    /// 上次**手动**刷新的时刻，用于抑制连点（扫描虽在后台，连点仍会排队多次）
+    last_manual_refresh: Option<Instant>,
 
     /// 路径 → 是否为目录。
     ///
@@ -57,6 +59,7 @@ impl FilesPanel {
             applied_vault_root: None,
             watcher: None,
             watcher_task: None,
+            last_manual_refresh: None,
 
             dir_flags: Rc::new(HashMap::new()),
         }
@@ -494,6 +497,22 @@ impl FilesPanel {
         .detach();
     }
 
+    /// 手动刷新：立即重新扫描当前库。
+    ///
+    /// 监听（`VaultWatcher`）已经会自动同步外部改动，这个按钮是**兜底**——
+    /// 用于监听可能漏掉的场景（休眠唤醒后、网络盘、权限变化），
+    /// 或用户只是想马上确认一次目录状态。
+    fn refresh_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(last) = self.last_manual_refresh {
+            if last.elapsed() < std::time::Duration::from_millis(300) {
+                return;
+            }
+        }
+        self.last_manual_refresh = Some(Instant::now());
+        self.status = "正在扫描…".into();
+        self.refresh(window, cx);
+    }
+
     fn apply_tree(&mut self, node: FileNode, cx: &mut Context<Self>) {
         let notes = count_notes(&node);
         // 目录类型随树一起缓存：空文件夹没有子节点，无法靠子节点数量判断
@@ -685,6 +704,16 @@ impl Render for FilesPanel {
                             .tooltip("移动到其他目录")
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.move_item(window, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("refresh-tree")
+                            // 组件库内置图标集没有刷新，用完整图标集（Lucide）
+                            .icon(Icon::new(AssetIcon::RefreshCw))
+                            .small()
+                            .tooltip("刷新：重新扫描当前库（监听失灵时的兜底）")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.refresh_now(window, cx)),
                             ),
                     )
                     .child(
