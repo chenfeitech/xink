@@ -187,8 +187,14 @@ impl BasePanel for PreviewPanel {
 }
 
 impl Panel for PreviewPanel {
-    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        "预览"
+    fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 密度菜单与"预览"同一行：水平对齐、间距由 gap 统一控制
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child("预览")
+            .child(density_menu(crate::app::config(cx).preview.density))
     }
 }
 
@@ -253,45 +259,6 @@ impl Render for PreviewPanel {
         let density = cfg.preview.density;
         let layout = density.layout();
 
-        // 顶部一行：版面密度切换（紧凑 / 适中 / 宽松）
-        let density_bar = div()
-            .id("preview-density-bar")
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_end()
-            .px_2()
-            .py_1()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(
-                DropdownButton::new("preview-density")
-                    .button(
-                        Button::new("preview-density-trigger")
-                            .small()
-                            .ghost()
-                            .label(density.label()),
-                    )
-                    .dropdown_menu(|menu, _window, _cx| {
-                        let mut menu = menu;
-                        for option in [
-                            PreviewDensity::Compact,
-                            PreviewDensity::Normal,
-                            PreviewDensity::Relaxed,
-                        ] {
-                            menu = menu.item(PopupMenuItem::new(option.label()).on_click(
-                                move |_, _, cx| {
-                                    // 走统一入口：改内存 → 落盘 → 刷新窗口，与设置页一致
-                                    crate::app::update_config(cx, |cfg| {
-                                        cfg.preview.density = option;
-                                    });
-                                },
-                            ));
-                        }
-                        menu
-                    }),
-            );
-
         // 排版样式：段间距与标题层级随密度变化；颜色沿用主题，明暗自动一致
         // `from_theme` 要 gpui_base 的 Theme（与 gpui_component 的 Theme 是不同类型），
         // 它是全局的，直接取即可——这样颜色随主题，只覆盖布局相关的几项
@@ -313,15 +280,12 @@ impl Render for PreviewPanel {
         let view = div()
             .id("preview-panel")
             .size_full()
-            .flex()
-            .flex_col()
             .overflow_hidden()
             .font_family(font.family.clone())
             .text_size(px(font.size))
             .line_height(px(font.size * font.line_height))
             // 字重接线：之前只应用了字体三件套，weight 配了不生效
-            .font_weight(FontWeight(font.weight.value()))
-            .child(density_bar);
+            .font_weight(FontWeight(font.weight.value()));
 
         // 正文最大宽度：用户显式设置优先，其次用当前档位的默认值
         let max_width = if cfg.preview.max_width > 0 {
@@ -370,6 +334,43 @@ impl Render for PreviewPanel {
         crate::ui::log_slow("PreviewPanel::render", started);
         view
     }
+}
+
+/// 版面密度菜单（紧凑 / 适中 / 宽松）。
+///
+/// 挂进面板标题，与"预览"同一行：不额外占一行，且和标题水平对齐。
+fn density_menu(density: PreviewDensity) -> impl IntoElement {
+    div()
+        // 独占点击：避免点菜单时顺带触发标签选中
+        .occlude()
+        .flex_none()
+        .child(
+            DropdownButton::new("preview-density")
+                .button(
+                    Button::new("preview-density-trigger")
+                        .small()
+                        .ghost()
+                        .label(density.label()),
+                )
+                .dropdown_menu(|menu, _window, _cx| {
+                    let mut menu = menu;
+                    for option in [
+                        PreviewDensity::Compact,
+                        PreviewDensity::Normal,
+                        PreviewDensity::Relaxed,
+                    ] {
+                        menu = menu.item(PopupMenuItem::new(option.label()).on_click(
+                            move |_, _, cx| {
+                                // 走统一入口：改内存 → 落盘 → 刷新窗口，与设置页一致
+                                crate::app::update_config(cx, |cfg| {
+                                    cfg.preview.density = option;
+                                });
+                            },
+                        ));
+                    }
+                    menu
+                }),
+        )
 }
 
 /// 点击预览区链接 / 图片的行为
