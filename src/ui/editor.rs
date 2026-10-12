@@ -397,6 +397,20 @@ impl EditorPanel {
         }));
     }
 
+    /// 在光标处插入文本（供目录树"插入到当前笔记"使用）。
+    ///
+    /// 插入后走与用户输入相同的同步：更新笔记、防抖保存、重算预览。
+    pub fn insert_at_cursor(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.note.is_none() {
+            return;
+        }
+        self.editor
+            .update(cx, |state, cx| state.insert(text, window, cx));
+        self.editor.update(cx, |state, cx| state.focus(window, cx));
+        self.on_change(window, cx);
+        self.refresh_doc(cx);
+    }
+
     fn save_now(&mut self, cx: &mut Context<Self>) {
         let Some(note) = &mut self.note else {
             return;

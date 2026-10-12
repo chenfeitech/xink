@@ -38,8 +38,8 @@ impl Vault {
     /// 取舍：当前为全量扫描（MVP）。`TreeState` 需要完整的 `TreeItem` 树才能渲染展开箭头，
     /// 因此暂不做子目录懒加载；万级文件规模的扫描耗时在可接受范围。
     /// 后续由 `core/watcher.rs` 的增量事件驱动刷新。
-    pub fn scan(&self) -> Result<FileNode> {
-        scan_dir(&self.root)
+    pub fn scan(&self, show_all: bool) -> Result<FileNode> {
+        scan_dir(&self.root, show_all)
     }
 
     /// 在 dir 下新建笔记，返回最终路径（自动补 .md 后缀）
@@ -94,10 +94,15 @@ impl Vault {
 }
 
 /// 默认忽略规则：版本控制目录、依赖目录、隐藏文件、应用自身临时文件
-pub fn should_ignore(name: &str) -> bool {
+/// 是否跳过该条目。
+///
+/// - `.git` / `node_modules` / `target` / `.DS_Store`：**始终跳过**——展开后节点数以万计，会拖垮扫描与渲染；
+/// - `*.md.tmp`：应用自己的临时文件，始终跳过；
+/// - 点开头的其余隐藏项：由 `show_hidden` 决定（默认显示）。
+pub fn should_ignore(name: &str, show_all: bool) -> bool {
     matches!(name, ".git" | "node_modules" | "target" | ".DS_Store")
-        || name.starts_with('.')
         || name.ends_with(".md.tmp")
+        || (!show_all && name.starts_with('.'))
 }
 
 fn is_markdown(name: &str) -> bool {
@@ -112,7 +117,7 @@ fn ensure_md_suffix(name: &str) -> String {
     }
 }
 
-fn scan_dir(dir: &Path) -> Result<FileNode> {
+fn scan_dir(dir: &Path, show_all: bool) -> Result<FileNode> {
     let name = dir
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -124,13 +129,14 @@ fn scan_dir(dir: &Path) -> Result<FileNode> {
     for entry in entries.flatten() {
         let path = entry.path();
         let file_name = entry.file_name().to_string_lossy().to_string();
-        if should_ignore(&file_name) {
+        if should_ignore(&file_name, show_all) {
             continue;
         }
         if path.is_dir() {
-            children.push(scan_dir(&path)?);
-        } else if is_markdown(&file_name) || is_image_path(&path) {
-            // 目录树里显示笔记与图片：图片可在树中直接点开预览
+            children.push(scan_dir(&path, show_all)?);
+        } else if show_all || is_markdown(&file_name) || is_image_path(&path) {
+            // 默认只显示笔记与图片（图片可在树中直接点开预览）；
+            // 打开"显示全部"后，其他类型的文件也进树，便于查看与引用
             children.push(FileNode {
                 path,
                 name: file_name,

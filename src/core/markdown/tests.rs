@@ -295,3 +295,45 @@ fn sanitized_common_constructs_do_not_panic_parser() {
         );
     }
 }
+
+#[test]
+fn relative_path_same_dir() {
+    let base = Path::new("/vault/notes");
+    let target = Path::new("/vault/notes/a.png");
+    assert_eq!(relative_path(base, target), "a.png");
+}
+
+#[test]
+fn relative_path_sub_dir() {
+    let base = Path::new("/vault");
+    let target = Path::new("/vault/assets/a.png");
+    assert_eq!(relative_path(base, target), "assets/a.png");
+}
+
+#[test]
+fn relative_path_parent_dir() {
+    let base = Path::new("/vault/notes");
+    let target = Path::new("/vault/assets/a.png");
+    assert_eq!(relative_path(base, target), "../assets/a.png");
+}
+
+#[test]
+fn markdown_link_for_image_and_file() {
+    assert_eq!(
+        markdown_link("a", "assets/a.png", true),
+        "![a](assets/a.png)"
+    );
+    assert_eq!(
+        markdown_link("说明", "notes/x.md", false),
+        "[说明](notes/x.md)"
+    );
+}
+
+#[test]
+fn markdown_link_wraps_paths_with_spaces() {
+    // 含空格不包裹的话 Markdown 会把链接截断
+    assert_eq!(
+        markdown_link("a b", "assets/a b.png", true),
+        "![a b](<assets/a b.png>)"
+    );
+}

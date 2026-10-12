@@ -483,10 +483,11 @@ impl FilesPanel {
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(vault) = &self.vault else { return };
         let root = vault.root().to_path_buf();
+        let show_all = crate::app::config(cx).basic.show_all_files;
 
         let scan = cx
             .background_executor()
-            .spawn(async move { scan_root(root) });
+            .spawn(async move { scan_root(root, show_all) });
 
         cx.spawn_in(window, async move |this, window| match scan.await {
             Ok(node) => {
@@ -733,6 +734,19 @@ fn kind_icon_svg(kind: FileKind) -> &'static str {
     }
 }
 
+/// 引用其他文件时的基准目录：当前活动笔记所在目录；没有打开笔记时用库根目录。
+fn base_dir_for_link(cx: &App) -> PathBuf {
+    if let Some(dir) = cx.try_global::<crate::app::AppState>().and_then(|state| {
+        let active = state.tabs.active()?.clone();
+        active.parent().map(|p| p.to_path_buf())
+    }) {
+        return dir;
+    }
+    cx.try_global::<crate::app::AppState>()
+        .and_then(|state| state.vaults.active_root())
+        .unwrap_or_default()
+}
+
 /// 剪贴板图片格式 → 文件扩展名
 fn image_extension(format: ImageFormat) -> &'static str {
     match format {
@@ -756,8 +770,8 @@ fn refresh_icon() -> Icon {
 }
 
 /// 在后台线程执行：构造 Vault 并扫描
-fn scan_root(root: PathBuf) -> anyhow::Result<FileNode> {
-    Vault::open(root)?.scan()
+fn scan_root(root: PathBuf, show_all: bool) -> anyhow::Result<FileNode> {
+    Vault::open(root)?.scan(show_all)
 }
 
 fn to_tree_item(node: &FileNode) -> TreeItem {
@@ -1055,6 +1069,12 @@ impl Render for FilesPanel {
                                 } else {
                                     name
                                 };
+                                // 隐藏项（点开头）淡化显示，与正常文件区分
+                                let name = if item.label.starts_with('.') {
+                                    name.text_color(cx.theme().muted_foreground)
+                                } else {
+                                    name
+                                };
                                 row = row.child(name);
 
                                 // 拖入落点：目录就是它自己，文件则落到它所在的目录。
@@ -1194,6 +1214,9 @@ impl Render for FilesPanel {
                                 let p_move = path.clone();
                                 let w_paste = weak.clone();
                                 let p_paste = path.clone();
+                                let p_copy_path = path.clone();
+                                let p_copy_link = path.clone();
+                                let p_insert = path.clone();
 
                                 menu.item(PopupMenuItem::new("重命名").on_click(
                                     move |_, window, cx| {
@@ -1245,6 +1268,70 @@ impl Render for FilesPanel {
                                     },
                                 ))
                                 .separator()
+                                .item(PopupMenuItem::new("复制相对路径").on_click(
+                                    move |_, _, cx| {
+                                        let rel = crate::core::markdown::relative_path(
+                                            &base_dir_for_link(cx),
+                                            &p_copy_path,
+                                        );
+                                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                            rel,
+                                        ));
+                                    },
+                                ))
+                                .item(PopupMenuItem::new("复制为 Markdown 链接").on_click(
+                                    move |_, _, cx| {
+                                        let base = base_dir_for_link(cx);
+                                        let rel = crate::core::markdown::relative_path(
+                                            &base,
+                                            &p_copy_link,
+                                        );
+                                        let name = p_copy_link
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or_default();
+                                        let link = crate::core::markdown::markdown_link(
+                                            name,
+                                            &rel,
+                                            crate::core::media::is_image_path(&p_copy_link),
+                                        );
+                                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                            link,
+                                        ));
+                                    },
+                                ))
+                                .item(PopupMenuItem::new("插入到当前笔记").on_click(
+                                    move |_, window, cx| {
+                                        let target = cx.update_global::<crate::app::AppState, _>(
+                                            |state, _cx| {
+                                                let active = state.tabs.active()?.clone();
+                                                let panel = state.tabs.get(&active)?;
+                                                Some((active, panel))
+                                            },
+                                        );
+                                        let Some((note_path, panel)) = target else {
+                                            return;
+                                        };
+                                        let base = note_path
+                                            .parent()
+                                            .map(|p| p.to_path_buf())
+                                            .unwrap_or_default();
+                                        let rel =
+                                            crate::core::markdown::relative_path(&base, &p_insert);
+                                        let name = p_insert
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or_default();
+                                        let link = crate::core::markdown::markdown_link(
+                                            name,
+                                            &rel,
+                                            crate::core::media::is_image_path(&p_insert),
+                                        );
+                                        _ = panel.update(cx, |p, cx| {
+                                            p.insert_at_cursor(&link, window, cx);
+                                        });
+                                    },
+                                ))
                                 .item(
                                     PopupMenuItem::new("粘贴到此目录").on_click(
                                         move |_, window, cx| {

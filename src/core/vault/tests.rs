@@ -6,13 +6,13 @@ fn tmp() -> tempfile::TempDir {
 
 #[test]
 fn should_ignore_common_noise() {
-    assert!(should_ignore(".git"));
-    assert!(should_ignore("node_modules"));
-    assert!(should_ignore(".DS_Store"));
-    assert!(should_ignore(".hidden"));
-    assert!(should_ignore("draft.md.tmp"));
-    assert!(!should_ignore("note.md"));
-    assert!(!should_ignore("folder"));
+    assert!(should_ignore(".git", false));
+    assert!(should_ignore("node_modules", false));
+    assert!(should_ignore(".DS_Store", false));
+    assert!(should_ignore(".hidden", false));
+    assert!(should_ignore("draft.md.tmp", false));
+    assert!(!should_ignore("note.md", false));
+    assert!(!should_ignore("folder", false));
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn scan_collects_image_files() {
     fs::write(root.join("main.rs"), "").unwrap();
 
     let vault = Vault::open(root.to_path_buf()).unwrap();
-    let tree = vault.scan().unwrap();
+    let tree = vault.scan(false).unwrap();
 
     let names: Vec<String> = tree.children.iter().map(|c| c.name.clone()).collect();
     for name in ["shot.png", "photo.jpg", "anim.gif", "icon.svg", "pic.webp"] {
@@ -59,7 +59,7 @@ fn scan_collects_markdown_and_dirs_sorted() {
     fs::create_dir(root.join(".git")).unwrap();
 
     let vault = Vault::open(root.to_path_buf()).unwrap();
-    let tree = vault.scan().unwrap();
+    let tree = vault.scan(false).unwrap();
 
     let names: Vec<&str> = tree.children.iter().map(|n| n.name.as_str()).collect();
     // 目录排在前，文件按名称排序
@@ -283,4 +283,53 @@ fn empty_registry_resolves_without_notes() {
     let notes = reg.resolve_active();
     assert!(notes.is_empty(), "空注册表不该产生噪音: {notes:?}");
     assert!(reg.active.is_none());
+}
+
+#[test]
+fn should_ignore_keeps_noise_dirs_always() {
+    // 噪音目录无论开关如何都跳过
+    for name in [".git", "node_modules", "target", ".DS_Store"] {
+        assert!(should_ignore(name, false), "{name} 应始终跳过");
+        assert!(should_ignore(name, true), "{name} 应始终跳过");
+    }
+}
+
+#[test]
+fn should_ignore_hides_dot_files_only_when_disabled() {
+    assert!(should_ignore(".hidden", false), "关闭时应跳过点开头");
+    assert!(!should_ignore(".hidden", true), "开启时应显示点开头");
+    assert!(!should_ignore(".obsidian", true));
+    assert!(!should_ignore(".gitignore", true));
+}
+
+#[test]
+fn should_ignore_always_skips_temp_files() {
+    assert!(should_ignore("draft.md.tmp", true));
+    assert!(should_ignore("draft.md.tmp", false));
+}
+
+#[test]
+fn scan_can_include_hidden_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join(".gitignore"), b"x").unwrap();
+    std::fs::write(root.join("note.md"), b"x").unwrap();
+    std::fs::create_dir(root.join(".git")).unwrap();
+
+    let vault = Vault::open(root.to_path_buf()).unwrap();
+    let shown = vault.scan(true).unwrap();
+    let hidden = vault.scan(false).unwrap();
+
+    let names =
+        |n: &FileNode| -> Vec<String> { n.children.iter().map(|c| c.name.clone()).collect() };
+    assert!(
+        names(&shown).contains(&".gitignore".to_string()),
+        "开启时可见"
+    );
+    assert!(
+        !names(&hidden).contains(&".gitignore".to_string()),
+        "关闭时不可见"
+    );
+    // .git 始终不出现
+    assert!(!names(&shown).contains(&".git".to_string()));
 }

@@ -363,6 +363,16 @@ fn all_fields() -> Vec<SettingField> {
                 }
             },
         ),
+        bool_field(
+            "basic.show_all_files",
+            "显示所有文件",
+            "目录树显示非笔记/图片的文件，以及点开头的隐藏项（`.git`、`node_modules`、`target` 等始终不显示）",
+            Basic,
+            "目录树",
+            None,
+            |c| c.basic.show_all_files,
+            |c, v| c.basic.show_all_files = v,
+        ),
         // ── 编辑器 · 编辑行为 ──
         bool_field(
             "editor.auto_save",

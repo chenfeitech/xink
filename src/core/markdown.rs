@@ -304,3 +304,47 @@ fn encode_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests;
+
+// ── 引用其他文件 ─────────────────────────────────────────────
+
+/// 计算从 `base_dir`（当前笔记所在目录）到 `target` 的相对路径。
+///
+/// 结果用 `/` 连接，便于直接写进 Markdown 链接；两级相等时返回目标文件名。
+pub fn relative_path(base_dir: &Path, target: &Path) -> String {
+    let base: Vec<_> = base_dir.components().collect();
+    let tgt: Vec<_> = target.components().collect();
+
+    let mut common = 0;
+    while common < base.len() && common < tgt.len() && base[common] == tgt[common] {
+        common += 1;
+    }
+
+    let mut parts: Vec<String> = vec!["..".to_string(); base.len() - common];
+    for c in &tgt[common..] {
+        parts.push(c.as_os_str().to_string_lossy().to_string());
+    }
+
+    if parts.is_empty() {
+        return target
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+    }
+    parts.join("/")
+}
+
+/// 生成 Markdown 链接：图片用 `![]()`，其余用 `[]()`。
+///
+/// 路径含空格或括号时用尖括号包裹，否则 Markdown 会把链接截断。
+pub fn markdown_link(name: &str, rel: &str, is_image: bool) -> String {
+    let path = if rel.contains(' ') || rel.contains('(') || rel.contains(')') {
+        format!("<{rel}>")
+    } else {
+        rel.to_string()
+    };
+    if is_image {
+        format!("![{name}]({path})")
+    } else {
+        format!("[{name}]({path})")
+    }
+}

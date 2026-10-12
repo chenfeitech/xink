@@ -138,6 +138,8 @@ pub struct BasicConfig {
     pub icon_size: u32,
     /// 目录树字体
     pub tree_font: FontConfig,
+    /// 目录树是否显示**所有**文件（含非笔记/图片的文件与点开头的隐藏项）
+    pub show_all_files: bool,
 }
 
 /// 编辑器配置：行为与外观
@@ -329,6 +331,8 @@ impl Default for BasicConfig {
             language: Language::default(),
             icon_size: 16,
             tree_font: FontConfig::body(),
+            // 默认显示全部：其他类型的文件也常需要在树里查看或引用（噪音目录仍始终跳过）
+            show_all_files: true,
         }
     }
 }
