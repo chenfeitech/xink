@@ -171,6 +171,95 @@ pub struct PreviewConfig {
     pub sync_scroll: bool,
     /// 正文最大宽度（像素），0 表示不限制
     pub max_width: u32,
+    /// 版面密度：留白与段间距的整体松紧
+    pub density: PreviewDensity,
+}
+
+/// 预览版面密度
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PreviewDensity {
+    /// 紧凑：留白小、段间距小，一屏能看更多
+    Compact,
+    /// 适中（默认）
+    #[default]
+    Normal,
+    /// 宽松：留白大、段间距大，长时间阅读更舒服
+    Relaxed,
+}
+
+/// 由密度决定的版面数值（纯数据，便于单测）
+///
+/// 只管**版面松紧**；字体与行高仍由 `PreviewConfig.font` 控制，
+/// 避免两套设置互相覆盖。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PreviewLayout {
+    /// 左右内边距（px）
+    pub pad_x: f32,
+    /// 上下内边距（px）
+    pub pad_y: f32,
+    /// 段间距（rem）
+    pub paragraph_gap: f32,
+    /// 标题基准字号相对正文字号的倍数
+    pub heading_scale: f32,
+    /// 正文最大宽度（px）；用户在 `max_width` 里显式设置时优先用用户的
+    pub max_width: f32,
+}
+
+impl PreviewDensity {
+    /// 该档位的版面参数
+    pub fn layout(self) -> PreviewLayout {
+        match self {
+            PreviewDensity::Compact => PreviewLayout {
+                pad_x: 16.,
+                pad_y: 8.,
+                paragraph_gap: 0.55,
+                heading_scale: 1.45,
+                max_width: 960.,
+            },
+            PreviewDensity::Normal => PreviewLayout {
+                pad_x: 24.,
+                pad_y: 16.,
+                paragraph_gap: 0.90,
+                heading_scale: 1.70,
+                max_width: 780.,
+            },
+            PreviewDensity::Relaxed => PreviewLayout {
+                pad_x: 32.,
+                pad_y: 24.,
+                paragraph_gap: 1.30,
+                heading_scale: 1.90,
+                max_width: 680.,
+            },
+        }
+    }
+
+    /// 设置界面 / 菜单里的中文名
+    pub fn label(self) -> &'static str {
+        match self {
+            PreviewDensity::Compact => "紧凑",
+            PreviewDensity::Normal => "适中",
+            PreviewDensity::Relaxed => "宽松",
+        }
+    }
+
+    /// 从设置里的取值还原（未知值回落到适中）
+    pub fn from_value(v: &str) -> Self {
+        match v {
+            "compact" => PreviewDensity::Compact,
+            "relaxed" => PreviewDensity::Relaxed,
+            _ => PreviewDensity::Normal,
+        }
+    }
+
+    /// 设置里的取值
+    pub fn value(self) -> String {
+        match self {
+            PreviewDensity::Compact => "compact".into(),
+            PreviewDensity::Normal => "normal".into(),
+            PreviewDensity::Relaxed => "relaxed".into(),
+        }
+    }
 }
 
 /// 完整应用配置
@@ -266,6 +355,7 @@ impl Default for PreviewConfig {
             font: FontConfig::body(),
             // 默认跟随明暗：浅色主题下代码块不再固定用深色高亮
             code_theme: AUTO_CODE_THEME.into(),
+            density: PreviewDensity::default(),
             image_display: ImageDisplay::default(),
             // 100% = 占满预览区宽度（与框架默认行为一致）
             image_width_percent: 100,

@@ -22,7 +22,7 @@ use gpui_kit::*;
 
 use crate::core::config::{
     AUTO_CODE_THEME, AppConfig, ColorScheme, FontWeight, ImageDisplay, Language, LinkOpen,
-    ThemeMode,
+    PreviewDensity, ThemeMode,
 };
 use crate::core::highlight::theme_names;
 
@@ -700,6 +700,24 @@ fn all_fields() -> Vec<SettingField> {
             || font_weight_options(),
             |c| font_weight_value(c.preview.font.weight),
             |c, v| c.preview.font.weight = font_weight_parse(&v),
+        ),
+        choice_field(
+            "preview.density",
+            "版面密度",
+            "预览留白与段间距：紧凑 / 适中 / 宽松",
+            Preview,
+            "排版",
+            None,
+            FieldKind::Choice,
+            || {
+                vec![
+                    ("compact".into(), "紧凑".into()),
+                    ("normal".into(), "适中".into()),
+                    ("relaxed".into(), "宽松".into()),
+                ]
+            },
+            |c| c.preview.density.value(),
+            |c, v| c.preview.density = PreviewDensity::from_value(&v),
         ),
         number_field(
             "preview.max_width",

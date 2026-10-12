@@ -338,3 +338,59 @@ fn modified_config_keeps_unmodified_fields_at_defaults() {
     expected.editor.show_line_numbers = true;
     assert_eq!(back, expected, "只改一项时，其余字段必须保持原样");
 }
+
+#[test]
+fn preview_density_defaults_to_normal() {
+    let c = AppConfig::default();
+    assert_eq!(c.preview.density, PreviewDensity::Normal, "默认应为适中");
+}
+
+#[test]
+fn preview_density_is_lowercase_in_json() {
+    let mut c = AppConfig::default();
+    c.preview.density = PreviewDensity::Relaxed;
+    let text = serde_json::to_string(&c).unwrap();
+    assert!(text.contains("\"density\":\"relaxed\""), "实际: {text}");
+}
+
+#[test]
+fn preview_density_survives_roundtrip() {
+    let mut c = AppConfig::default();
+    c.preview.density = PreviewDensity::Compact;
+    let text = serde_json::to_string(&c).unwrap();
+    let back: AppConfig = serde_json::from_str(&text).unwrap();
+    assert_eq!(back.preview.density, PreviewDensity::Compact);
+}
+
+#[test]
+fn density_layouts_are_ordered_by_looseness() {
+    let c = PreviewDensity::Compact.layout();
+    let n = PreviewDensity::Normal.layout();
+    let r = PreviewDensity::Relaxed.layout();
+
+    assert!(
+        c.paragraph_gap < n.paragraph_gap && n.paragraph_gap < r.paragraph_gap,
+        "段间距应递增"
+    );
+    assert!(c.pad_x < n.pad_x && n.pad_x < r.pad_x, "左右留白应递增");
+    assert!(
+        c.max_width > n.max_width && n.max_width > r.max_width,
+        "越宽松正文越窄"
+    );
+}
+
+#[test]
+fn density_value_roundtrip_and_fallback() {
+    for d in [
+        PreviewDensity::Compact,
+        PreviewDensity::Normal,
+        PreviewDensity::Relaxed,
+    ] {
+        assert_eq!(PreviewDensity::from_value(&d.value()), d);
+    }
+    assert_eq!(
+        PreviewDensity::from_value("unknown"),
+        PreviewDensity::Normal,
+        "未知取值应回落到适中"
+    );
+}

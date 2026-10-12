@@ -648,26 +648,24 @@ impl FilesPanel {
             cx.notify();
             return;
         }
-        let Some(name) = src.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
-            self.status = "无法取得文件名".into();
-            cx.notify();
-            return;
-        };
-
-        let dst = crate::core::fs::unique_name(&target_dir, &name);
         self.status = "正在移动…".into();
         cx.notify();
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { crate::core::fs::move_path(&src, &dst) });
+        // 复用与导入相同的通道（Move 模式）：重名改名、跨设备回退都在里面
+        let task = cx.background_executor().spawn(async move {
+            crate::core::fs::import_paths(&[src], &target_dir, crate::core::fs::ImportMode::Move)
+        });
 
         cx.spawn_in(window, async move |this, window| {
-            let result = task.await;
+            let results = task.await;
             _ = this.update_in(window, |this, window, cx| {
-                this.status = match result {
-                    Ok(()) => "已移动".to_string(),
-                    Err(err) => format!("移动失败: {err}"),
+                this.status = match results.first() {
+                    Some(Ok(path)) => format!(
+                        "已移动 {}",
+                        path.file_name().and_then(|n| n.to_str()).unwrap_or("")
+                    ),
+                    Some(Err(err)) => format!("移动失败: {err}"),
+                    None => "移动失败：没有可移动的对象".to_string(),
                 }
                 .into();
                 this.refresh(window, cx);

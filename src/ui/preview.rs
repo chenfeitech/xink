@@ -3,15 +3,18 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use gpui_kit::base::{ScrollbarHandle, TextView, TextViewState};
-use gpui_kit::component::ActiveTheme;
+use gpui_kit::base::Theme as BaseTheme;
+use gpui_kit::base::{ScrollbarHandle, TextView, TextViewState, TextViewStyle};
+use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
+use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::*;
 
 use crate::app::{
     ActiveDocChanged, AppState, EditorScrolled, PreviewImageChanged, PreviewScrolled,
 };
-use crate::core::config::{LinkOpen, resolve_code_theme};
+use crate::core::config::{LinkOpen, PreviewDensity, resolve_code_theme};
 use crate::core::highlight::highlight_with_theme;
 use crate::core::markdown::path_from_file_url;
 use crate::core::media::is_image_path;
@@ -247,47 +250,121 @@ impl Render for PreviewPanel {
         let code_theme = resolve_code_theme(&cfg.preview.code_theme, crate::app::is_dark(cx));
         let font = cfg.preview.font.clone();
 
-        let mut view = div()
+        let density = cfg.preview.density;
+        let layout = density.layout();
+
+        // 顶部一行：版面密度切换（紧凑 / 适中 / 宽松）
+        let density_bar = div()
+            .id("preview-density-bar")
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_end()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(
+                DropdownButton::new("preview-density")
+                    .button(
+                        Button::new("preview-density-trigger")
+                            .small()
+                            .ghost()
+                            .label(density.label()),
+                    )
+                    .dropdown_menu(|menu, _window, _cx| {
+                        let mut menu = menu;
+                        for option in [
+                            PreviewDensity::Compact,
+                            PreviewDensity::Normal,
+                            PreviewDensity::Relaxed,
+                        ] {
+                            menu = menu.item(PopupMenuItem::new(option.label()).on_click(
+                                move |_, _, cx| {
+                                    // 走统一入口：改内存 → 落盘 → 刷新窗口，与设置页一致
+                                    crate::app::update_config(cx, |cfg| {
+                                        cfg.preview.density = option;
+                                    });
+                                },
+                            ));
+                        }
+                        menu
+                    }),
+            );
+
+        // 排版样式：段间距与标题层级随密度变化；颜色沿用主题，明暗自动一致
+        // `from_theme` 要 gpui_base 的 Theme（与 gpui_component 的 Theme 是不同类型），
+        // 它是全局的，直接取即可——这样颜色随主题，只覆盖布局相关的几项
+        let text_style = TextViewStyle::from_theme(&cx.global::<BaseTheme>())
+            .with_paragraph_gap(rems(layout.paragraph_gap))
+            .with_heading_base_font_size(px(font.size * layout.heading_scale))
+            .with_heading_font_size(|level: u8, base: Pixels| {
+                let factor = match level {
+                    1 => 1.0,
+                    2 => 0.87,
+                    3 => 0.77,
+                    4 => 0.68,
+                    5 => 0.62,
+                    _ => 0.58,
+                };
+                base * factor
+            });
+
+        let view = div()
             .id("preview-panel")
             .size_full()
+            .flex()
+            .flex_col()
             .overflow_hidden()
             .font_family(font.family.clone())
             .text_size(px(font.size))
             .line_height(px(font.size * font.line_height))
             // 字重接线：之前只应用了字体三件套，weight 配了不生效
-            .font_weight(FontWeight(font.weight.value()));
+            .font_weight(FontWeight(font.weight.value()))
+            .child(density_bar);
 
-        // 正文最大宽度：0 表示不限，用于收窄阅读区
-        if cfg.preview.max_width > 0 {
-            view = view.max_w(px(cfg.preview.max_width as f32)).mx_auto();
-        }
+        // 正文最大宽度：用户显式设置优先，其次用当前档位的默认值
+        let max_width = if cfg.preview.max_width > 0 {
+            cfg.preview.max_width as f32
+        } else {
+            layout.max_width
+        };
 
         let view = view.child(
-            TextView::new(&doc)
-                .size_full()
-                .scrollable(true)
-                .px_4()
-                .py_2()
-                .code_block_highlighter(move |block| {
-                    // 代码块可能没有标注语言
-                    let lang = block.lang();
-                    let lang = lang.as_ref().map(|s| s.as_ref()).unwrap_or("");
-                    highlight_with_theme(lang, block.code().as_ref(), &code_theme)
-                        .into_iter()
-                        .map(|(range, color)| {
-                            (
-                                range,
-                                HighlightStyle {
-                                    color: Some(color),
-                                    ..Default::default()
-                                },
-                            )
+            div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .max_w(px(max_width))
+                .mx_auto()
+                .child(
+                    TextView::new(&doc)
+                        .size_full()
+                        .scrollable(true)
+                        .px(px(layout.pad_x))
+                        .py(px(layout.pad_y))
+                        .style(text_style)
+                        .code_block_highlighter(move |block| {
+                            // 代码块可能没有标注语言
+                            let lang = block.lang();
+                            let lang = lang.as_ref().map(|s| s.as_ref()).unwrap_or("");
+                            highlight_with_theme(lang, block.code().as_ref(), &code_theme)
+                                .into_iter()
+                                .map(|(range, color)| {
+                                    (
+                                        range,
+                                        HighlightStyle {
+                                            color: Some(color),
+                                            ..Default::default()
+                                        },
+                                    )
+                                })
+                                .collect()
                         })
-                        .collect()
-                })
-                .on_link_click(|url, _event, window, cx| {
-                    handle_link_click(url, window, cx);
-                }),
+                        .on_link_click(|url, _event, window, cx| {
+                            handle_link_click(url, window, cx);
+                        }),
+                ),
         );
 
         crate::ui::log_slow("PreviewPanel::render", started);
