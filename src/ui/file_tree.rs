@@ -14,7 +14,7 @@ use gpui_kit::component::tree::{TreeItem, TreeState, tree};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Size};
 use gpui_kit::{ClipboardEntry, DragMoveEvent, ExternalPaths, ImageFormat};
 
-use crate::core::media::is_image_path;
+use crate::core::media::{FileKind, file_kind, is_image_path};
 use gpui_kit::*;
 
 use anyhow::anyhow;
@@ -708,6 +708,20 @@ impl Render for DragPreview {
     }
 }
 
+/// 文件类型 → 目录树图标
+///
+/// 图片、代码、压缩包、表格各有专属图标；Markdown 与其余文件（含 json/yaml、
+/// 音视频等）统一用文本文档图标——按设计决策，风格与 Markdown 保持一致。
+fn kind_icon(kind: FileKind) -> AssetIcon {
+    match kind {
+        FileKind::Image => AssetIcon::FileImage,
+        FileKind::Code => AssetIcon::FileCode,
+        FileKind::Archive => AssetIcon::FileArchive,
+        FileKind::Spreadsheet => AssetIcon::FileSpreadsheet,
+        FileKind::Markdown | FileKind::Other | FileKind::Dir => AssetIcon::FileText,
+    }
+}
+
 /// 剪贴板图片格式 → 文件扩展名
 fn image_extension(format: ImageFormat) -> &'static str {
     match format {
@@ -1007,15 +1021,12 @@ impl Render for FilesPanel {
                                             .child(icon(AssetIcon::ChevronRight))
                                             .child(icon(AssetIcon::FolderClosed));
                                     }
-                                } else if is_image_path(&path) {
-                                    // 图片文件：专用图标，点击打开图片预览而不是当笔记打开
-                                    row = row
-                                        .child(div().flex_none().w(icon_px))
-                                        .child(icon(AssetIcon::FileImage));
                                 } else {
+                                    // 按类型取图标：图片 / 代码 / 压缩包 / 表格各有专属图标，
+                                    // Markdown 与其余文件统一用文本文档图标（见 `kind_icon`）
                                     row = row
                                         .child(div().flex_none().w(icon_px))
-                                        .child(icon(AssetIcon::FileText));
+                                        .child(icon(kind_icon(file_kind(&path, false))));
                                 }
                                 // 目录名加粗，与文件形成强弱对比。
                                 // 名称占满剩余空间并单行截断：超长时不挤压前面的图标列，也不撑宽行。
