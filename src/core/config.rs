@@ -156,6 +156,41 @@ pub struct EditorConfig {
     pub color_scheme: ColorScheme,
     /// 快捷键映射：动作名 → 按键串（如 "cmd-b"），留空则用内置默认
     pub keymap: BTreeMap<String, String>,
+    /// JSON / YAML / TOML 等数据文件的编辑与预览
+    pub data_file: DataFileConfig,
+}
+
+/// 数据文件（JSON / YAML / TOML）配置
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DataFileConfig {
+    /// 预览格式化的缩进宽度（空格数）。
+    ///
+    /// 只对 JSON 生效：`noyalib` 与 `toml` 的序列化器不提供缩进配置。
+    pub indent: usize,
+    /// 超过该字节数就跳过格式化（预览直接显示原文），避免大文件卡顿；
+    /// 0 表示不限制
+    pub max_format_bytes: usize,
+}
+
+impl DataFileConfig {
+    /// 把越界值夹回可用区间，避免手改配置文件后行为异常
+    pub fn sanitize(&mut self) {
+        self.indent = self
+            .indent
+            .clamp(limit::DATA_INDENT.0, limit::DATA_INDENT.1);
+        // 0 表示"不限制"，是合法值，因此只设上限
+        self.max_format_bytes = self.max_format_bytes.min(limit::MAX_FORMAT_BYTES.1);
+    }
+}
+
+impl Default for DataFileConfig {
+    fn default() -> Self {
+        Self {
+            indent: crate::core::datafile::DEFAULT_INDENT,
+            max_format_bytes: crate::core::datafile::DEFAULT_MAX_FORMAT_BYTES,
+        }
+    }
 }
 
 /// 预览配置：渲染样式与排版
@@ -349,6 +384,7 @@ impl Default for EditorConfig {
             font: FontConfig::mono(),
             color_scheme: ColorScheme::default(),
             keymap: BTreeMap::new(),
+            data_file: DataFileConfig::default(),
         }
     }
 }
@@ -381,6 +417,9 @@ mod limit {
     pub const TAB_SIZE: (u32, u32) = (1, 16);
     pub const MAX_WIDTH: (u32, u32) = (0, 4_096);
     pub const IMAGE_WIDTH_PERCENT: (u32, u32) = (20, 100);
+    /// 数据文件预览格式化：缩进 1–8 空格；体积上限 0（不限制）–20MB
+    pub const DATA_INDENT: (usize, usize) = (1, 8);
+    pub const MAX_FORMAT_BYTES: (usize, usize) = (0, 20_000_000);
 }
 
 fn clamp_f32(v: f32, (min, max): (f32, f32)) -> f32 {
@@ -416,6 +455,7 @@ impl AppConfig {
             .tab_size
             .clamp(limit::TAB_SIZE.0, limit::TAB_SIZE.1);
         self.editor.font.sanitize();
+        self.editor.data_file.sanitize();
 
         self.preview.font.sanitize();
         self.preview.max_width = self
@@ -479,5 +519,7 @@ impl AppConfig {
     }
 }
 
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
+#[path = "../../tests/core/config.rs"]
 mod tests;

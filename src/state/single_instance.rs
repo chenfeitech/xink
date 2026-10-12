@@ -46,5 +46,7 @@ fn is_pid_file(path: &Path) -> bool {
     path.file_name().map(|n| n == "xink.pid").unwrap_or(false)
 }
 
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
+#[path = "../../tests/state/single_instance.rs"]
 mod tests;

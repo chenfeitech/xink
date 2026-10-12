@@ -556,6 +556,33 @@ fn all_fields() -> Vec<SettingField> {
             Some("编辑区配色跟随主题，暂未独立适配"),
             None,
         ),
+        // ── 编辑器 · 数据文件 ──
+        number_field(
+            "editor.data_file.indent",
+            "JSON 缩进宽度",
+            "预览里 JSON 的缩进空格数，范围 1–8（YAML / TOML 序列化器不提供该配置）",
+            Editor,
+            "数据文件",
+            1.0,
+            8.0,
+            1.0,
+            "空格",
+            |c| c.editor.data_file.indent as f32,
+            |c, v| c.editor.data_file.indent = v as usize,
+        ),
+        number_field(
+            "editor.data_file.max_format_bytes",
+            "格式化体积上限",
+            "超过该字节数就不再排版、直接显示原文；0 表示不限制（按 1MB 步进）",
+            Editor,
+            "数据文件",
+            0.0,
+            20_000_000.0,
+            1_000_000.0,
+            "字节",
+            |c| c.editor.data_file.max_format_bytes as f32,
+            |c, v| c.editor.data_file.max_format_bytes = v as usize,
+        ),
         // ── 预览 · 渲染 ──
         choice_field(
             "preview.code_theme",

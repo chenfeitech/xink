@@ -200,5 +200,7 @@ pub fn load_open_notes() -> OpenNotesSnapshot {
     OpenNotesSnapshot { paths, active }
 }
 
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
+#[path = "../../tests/state/workspace.rs"]
 mod tests;

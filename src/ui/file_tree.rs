@@ -727,7 +727,8 @@ const ICON_FILE_SPREADSHEET: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" w
 fn kind_icon_svg(kind: FileKind) -> &'static str {
     match kind {
         FileKind::Image => ICON_FILE_IMAGE,
-        FileKind::Code => ICON_FILE_CODE,
+        // 数据文件（json/yaml/toml）与源码一样是"带结构的代码"，共用代码图标
+        FileKind::Code | FileKind::Data => ICON_FILE_CODE,
         FileKind::Archive => ICON_FILE_ARCHIVE,
         FileKind::Spreadsheet => ICON_FILE_SPREADSHEET,
         FileKind::Markdown | FileKind::Other | FileKind::Dir => ICON_FILE_TEXT,
@@ -1439,5 +1440,7 @@ impl FilesPanel {
     }
 }
 
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
+#[path = "../../tests/ui/file_tree.rs"]
 mod tests;

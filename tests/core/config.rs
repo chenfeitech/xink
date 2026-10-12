@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::datafile::{DEFAULT_INDENT, DEFAULT_MAX_FORMAT_BYTES};
 use crate::core::highlight::default_theme;
 
 fn tmpdir() -> tempfile::TempDir {
@@ -393,4 +394,57 @@ fn density_value_roundtrip_and_fallback() {
         PreviewDensity::Normal,
         "未知取值应回落到适中"
     );
+}
+
+// ── 数据文件（json / yaml / toml）配置 ────────────────────────
+
+#[test]
+fn data_file_defaults_match_datafile_module() {
+    let c = AppConfig::default();
+    assert_eq!(c.editor.data_file.indent, DEFAULT_INDENT);
+    assert_eq!(
+        c.editor.data_file.max_format_bytes,
+        DEFAULT_MAX_FORMAT_BYTES
+    );
+}
+
+#[test]
+fn data_file_values_survive_roundtrip() {
+    let mut c = AppConfig::default();
+    c.editor.data_file.indent = 4;
+    c.editor.data_file.max_format_bytes = 2_000_000;
+
+    let text = serde_json::to_string(&c).unwrap();
+    let back: AppConfig = serde_json::from_str(&text).unwrap();
+
+    assert_eq!(back.editor.data_file.indent, 4);
+    assert_eq!(back.editor.data_file.max_format_bytes, 2_000_000);
+}
+
+#[test]
+fn data_file_missing_in_old_config_falls_back_to_defaults() {
+    // 老配置文件里没有 data_file 段，应自动取默认值
+    let json = r#"{"editor":{"auto_save":false}}"#;
+    let c: AppConfig = serde_json::from_str(json).expect("缺字段应能解析");
+    assert_eq!(c.editor.data_file, DataFileConfig::default());
+}
+
+#[test]
+fn data_file_out_of_range_values_are_clamped() {
+    let mut c = AppConfig::default();
+    c.editor.data_file.indent = 100;
+    c.editor.data_file.max_format_bytes = usize::MAX;
+
+    c.sanitize();
+
+    assert_eq!(c.editor.data_file.indent, 8);
+    assert_eq!(c.editor.data_file.max_format_bytes, 20_000_000);
+}
+
+#[test]
+fn data_file_zero_max_bytes_means_unlimited_and_is_kept() {
+    let mut c = AppConfig::default();
+    c.editor.data_file.max_format_bytes = 0;
+    c.sanitize();
+    assert_eq!(c.editor.data_file.max_format_bytes, 0);
 }

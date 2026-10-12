@@ -27,6 +27,8 @@ src/
 ├── core/         领域层（vault / note / markdown / index / watcher）—— 不含 UI
 ├── ui/           视图层（workspace / file_tree / editor / preview / command）
 └── state/        持久化（workspace.json）
+tests/            单元测试（目录结构镜像 src/，由 src 里的 #[path] 挂载；
+                  不是 Cargo 集成测试目录，详见 docs/TESTS.md）
 docs/             需求规格 + 技术设计
 .codebuddy/       rules（开发铁律） + skills（开发技能）
 ```

@@ -302,7 +302,9 @@ fn encode_path(path: &Path) -> String {
     out
 }
 
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
+#[path = "../../tests/core/markdown.rs"]
 mod tests;
 
 // ── 引用其他文件 ─────────────────────────────────────────────

@@ -6,6 +6,12 @@ rust-version = "1.98"
 description = "Local-first Markdown notes desktop app built with GPUI"
 license = "MIT"
 
+# 本项目的 `tests/` 只是**单元测试的物理存放目录**（由 src 里的 `#[path]` 挂载），
+# 不是 Cargo 的集成测试目录——xink 是 bin crate，没有 lib target，
+# 顶层 `tests/*.rs` 会被当成独立集成测试 crate 去链接 xink 而必然失败。
+# 关掉自动发现，避免将来有人在 tests/ 根目录落文件时踩坑。
+autotests = false
+
 [[bin]]
 name = "xink"
 path = "src/main.rs"
@@ -13,7 +19,18 @@ path = "src/main.rs"
 [dependencies]
 # 唯一直接依赖。gpui-kit 内部 pin gpui-pre 0.3.5 并 re-export GPUI。
 # 禁止直接依赖 crates.io 上的 gpui 0.2.2（与 gpui-pre 0.3.5 不兼容）。
-gpui-kit = "0.6"
+#
+# features：编辑区语法高亮依赖 tree-sitter，且语言是按需编译的。
+# json / yaml / toml 对应"数据文件编辑"需求（见 docs/json-yaml-editing-design.md）。
+# 代价是首次编译要编译 C 语法源码（分钟级）；这三个是数据文件必需项，
+# 未启用时 `set_highlighter` 会静默退化为纯文本，不会报错。
+# JSON 语法随 `tree-sitter` 自带（gpui-component 把它列在 tree-sitter 的默认依赖里），
+# gpui-kit 没有单独的同名 feature，YAML / TOML 才需要显式开启。
+gpui-kit = { version = "0.6", features = [
+    "tree-sitter",
+    "tree-sitter-yaml",
+    "tree-sitter-toml",
+] }
 
 # 版本与 gpui-component 内部保持一致，避免同一 crate 多版本共存
 ropey = "=2.0.0-beta.1"
@@ -43,6 +60,14 @@ syntect = { version = "5.3.0", default-features = false, features = [
     "default-themes",
     "regex-fancy",
 ] }
+# 数据文件（JSON / YAML / TOML）解析与格式化预览。
+#
+# YAML 选 `noyalib`：`serde_yaml`（0.9.34+deprecated）与 `serde_yml`
+# （0.0.13 起只是转发到 noyalib 的兼容壳）均已废弃。noyalib 是纯 Rust、
+# `#![forbid(unsafe_code)]` 的接替者，API 与 serde_yaml 同形。
+noyalib = "0.0.57"
+# 与 Cargo.lock 中已有的 0.8.23 对齐，避免解析出第二份 toml
+toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

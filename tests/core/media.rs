@@ -1,7 +1,7 @@
 use super::{FileKind, file_kind};
 use std::path::Path;
 
-use super::is_image_path;
+use super::{is_editable_text, is_image_path};
 
 #[test]
 fn detects_common_image_formats() {
@@ -57,11 +57,31 @@ fn file_kind_recognizes_code_archive_and_sheet() {
 }
 
 #[test]
+fn file_kind_recognizes_data_files() {
+    assert_eq!(file_kind(Path::new("c.json"), false), FileKind::Data);
+    assert_eq!(file_kind(Path::new("d.yaml"), false), FileKind::Data);
+    assert_eq!(file_kind(Path::new("d.yml"), false), FileKind::Data);
+    assert_eq!(file_kind(Path::new("e.toml"), false), FileKind::Data);
+    // 备份文件不算数据文件
+    assert_eq!(file_kind(Path::new("c.json.bak"), false), FileKind::Other);
+}
+
+#[test]
+fn is_editable_text_covers_markdown_and_data_files() {
+    // 注：`.markdown` 只有图标判定认（`file_kind`），打开与树显示仍只认 `.md`，
+    // 这是既有行为，本次不改。
+    for name in ["a.md", "a.json", "a.yaml", "a.yml", "a.toml"] {
+        assert!(is_editable_text(Path::new(name)), "{name} 应可编辑");
+    }
+    for name in ["a.txt", "a.rs", "a.png", "a", "a.json.bak"] {
+        assert!(!is_editable_text(Path::new(name)), "{name} 不应可编辑");
+    }
+}
+
+#[test]
 fn file_kind_falls_back_to_other() {
-    // 数据/配置、音视频、无扩展名、未知扩展名都归 Other
-    for name in [
-        "c.json", "d.yaml", "e.toml", "f.mp3", "g.mp4", "noext", "x.qqq",
-    ] {
+    // 音视频、无扩展名、未知扩展名都归 Other（json/yaml/toml 已单独成类）
+    for name in ["f.mp3", "g.mp4", "noext", "x.qqq"] {
         assert_eq!(
             file_kind(Path::new(name), false),
             FileKind::Other,

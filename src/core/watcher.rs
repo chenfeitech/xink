@@ -8,7 +8,7 @@ use flume::Receiver;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 
-use crate::core::media::is_image_path;
+use crate::core::media::{is_editable_text, is_image_path};
 
 /// 变更类型。
 ///
@@ -96,16 +96,11 @@ impl VaultWatcher {
     }
 }
 
-fn is_markdown(path: &Path) -> bool {
-    path.extension()
-        .map(|e| e.eq_ignore_ascii_case("md"))
-        .unwrap_or(false)
-}
-
-/// 目录树里会出现的文件：笔记 + 图片。
-/// 必须与 `vault::scan_dir` 的判据一致，否则会出现"新增图片树里不刷新"的问题。
+/// 目录树里会出现的文件：可编辑文本（笔记 + 数据文件）+ 图片。
+/// 必须与 `vault::scan_dir` 的判据一致（都用 `is_editable_text`），
+/// 否则会出现"新增的 json 在树里不刷新"的问题。
 fn is_visible_file(path: &Path) -> bool {
-    is_markdown(path) || is_image_path(path)
+    is_editable_text(path) || is_image_path(path)
 }
 
 /// 应用原子写盘产生的临时文件
@@ -113,5 +108,7 @@ fn is_temp(path: &Path) -> bool {
     path.to_string_lossy().ends_with(".md.tmp")
 }
 
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
+#[path = "../../tests/core/watcher.rs"]
 mod tests;

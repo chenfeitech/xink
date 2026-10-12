@@ -82,6 +82,7 @@
 | R10 | 命令面板 `Cmd+P`：模糊搜索文件名快速打开 |
 | R11 | 明暗主题切换，跟随系统 |
 | R12 | 常用 Markdown 快捷键（`Cmd+B` 加粗、`Cmd+I` 斜体等） |
+| R13 | 数据文件（JSON / YAML / TOML）编辑：目录树可见、可打开编辑、语法高亮、预览显示格式化结果、实时校验与错误提示。详见 `docs/json-yaml-editing-requirements.md` |
 
 ### P2 — 明确不在本期范围
 

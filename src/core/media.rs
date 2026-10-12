@@ -4,8 +4,23 @@
 //! 文件监听据此决定是否上报变更、Markdown 预处理据此决定是否转成 data URL、
 //! 点击回调据此决定是否打开预览。若各写一份，就会出现"树里看得到但预览打不开"
 //! 这类不一致。
+//!
+//! [`is_editable_text`] 同理：它是"哪些文件能进编辑器"的唯一判据，
+//! 目录树、文件监听、打开入口都用它，避免"树里看得到但双击打不开"。
 
 use std::path::Path;
+
+use crate::core::datafile::is_data_file;
+use crate::core::note::is_markdown;
+
+/// 能否在编辑器里打开：Markdown 笔记 + 数据文件（JSON / YAML / TOML）
+///
+/// 这是"能打开"的唯一判据。目录树（`vault::scan_dir`）、文件监听
+/// （`watcher::is_visible_file`）、打开入口（`tabs::open_note`）都用它，
+/// 否则会出现"树里能看到但双击没反应"。
+pub fn is_editable_text(path: &Path) -> bool {
+    is_markdown(path) || is_data_file(path)
+}
 
 /// 是否按图片处理
 pub fn is_image_path(path: &Path) -> bool {
@@ -38,11 +53,13 @@ pub enum FileKind {
     Image,
     /// 代码源文件
     Code,
+    /// 数据文件（json / yaml / toml）：可编辑、预览显示格式化结果
+    Data,
     /// 压缩包
     Archive,
     /// 表格
     Spreadsheet,
-    /// 其余一切（含 json/yaml 等数据文件、音视频、未知扩展名）
+    /// 其余一切（音视频、未知扩展名）
     Other,
 }
 
@@ -67,6 +84,8 @@ pub fn file_kind(path: &Path, is_dir: bool) -> FileKind {
 
     match ext.as_str() {
         "md" | "markdown" => FileKind::Markdown,
+        // 数据文件单独一类：需要自己的图标，且是可编辑的
+        "json" | "yaml" | "yml" | "toml" => FileKind::Data,
         "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "go" | "java" | "c" | "cpp" | "cc" | "h"
         | "hpp" | "rb" | "sh" | "bash" | "zsh" | "swift" | "kt" | "lua" | "php" | "sql" => {
             FileKind::Code
@@ -78,5 +97,7 @@ pub fn file_kind(path: &Path, is_dir: bool) -> FileKind {
     }
 }
 
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
+#[path = "../../tests/core/media.rs"]
 mod tests;

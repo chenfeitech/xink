@@ -134,5 +134,7 @@ pub fn is_markdown(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
+#[path = "../../tests/core/note.rs"]
 mod tests;

@@ -166,5 +166,7 @@ pub fn write_new_file(dir: &Path, stem: &str, ext: &str, bytes: &[u8]) -> Result
     Ok(path)
 }
 
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
+#[path = "../../tests/core/fs.rs"]
 mod tests;

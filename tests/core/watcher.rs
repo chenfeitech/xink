@@ -1,9 +1,11 @@
 use super::*;
 
 #[test]
-fn detects_markdown_and_temp_paths() {
-    assert!(is_markdown(Path::new("a.md")));
-    assert!(!is_markdown(Path::new("a.txt")));
+fn detects_editable_and_temp_paths() {
+    assert!(is_visible_file(Path::new("a.md")));
+    assert!(is_visible_file(Path::new("a.json")));
+    assert!(is_visible_file(Path::new("a.yaml")));
+    assert!(!is_visible_file(Path::new("a.txt")));
     assert!(is_temp(Path::new("a.md.tmp")));
     assert!(!is_temp(Path::new("a.md")));
 }

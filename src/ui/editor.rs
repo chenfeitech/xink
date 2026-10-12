@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use gpui_kit::base::TextViewState;
 use gpui_kit::base::dock::TabGroup;
+use gpui_kit::base::input::{Diagnostic, Position};
 use gpui_kit::component::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
@@ -14,7 +15,8 @@ use gpui_kit::*;
 
 use crate::actions::Save;
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
-use crate::core::config::IndentConfig;
+use crate::core::config::{DataFileConfig, IndentConfig};
+use crate::core::datafile::{DataKind, Parsed, ValidationError, data_kind};
 use crate::core::markdown::{ImageOptions, resolve_image_urls, sanitize_for_preview};
 use crate::core::{Note, tab_key};
 
@@ -28,6 +30,10 @@ pub struct EditorPanel {
     applied_line_numbers: bool,
     /// 上次生成预览源文所用的图片选项，用于检测配置变更并重算预览
     applied_image_opts: Option<ImageOptions>,
+    /// 上次生成预览源文所用的数据文件配置，用于检测配置变更并重算预览
+    applied_data_cfg: DataFileConfig,
+    /// 当前数据文件（json/yaml/toml）的校验结果；Markdown 笔记恒为 None
+    validation: Option<ValidationError>,
     /// 本篇笔记自己的预览文档。切换标签时整体替换引用，已解析过的不再重解析。
     doc: Option<Entity<TextViewState>>,
     /// 防抖保存任务。每次编辑都用新任务覆盖，旧任务被 drop 即取消。
@@ -96,6 +102,8 @@ impl EditorPanel {
             applied_indent: indent,
             applied_line_numbers: show_line_numbers,
             applied_image_opts: None,
+            applied_data_cfg: crate::app::config(cx).editor.data_file.clone(),
+            validation: None,
             doc: None,
             save_task: None,
             status: SharedString::default(),
@@ -141,6 +149,7 @@ impl EditorPanel {
     /// 而不是把整篇重新塞进同一个共享文档。
     fn refresh_doc(&mut self, cx: &mut Context<Self>) {
         let started = Instant::now();
+        let data_cfg = crate::app::config(cx).editor.data_file.clone();
         // 先用「路径 + 版本 + 图片选项」判断是否值得重算。
         // note.text() 会把整个 Rope 转成 String，再加上图片路径正则重扫，
         // 若在 render 里每帧执行，切换标签时会明显卡顿。
@@ -159,22 +168,53 @@ impl EditorPanel {
         if self.last_published_path.as_ref() == Some(&path)
             && self.last_published_version == Some(version)
             && self.applied_image_opts == Some(opts)
+            && self.applied_data_cfg == data_cfg
         {
             return;
         }
         self.last_published_path = Some(path);
         self.last_published_version = Some(version);
         self.applied_image_opts = Some(opts);
+        self.applied_data_cfg = data_cfg.clone();
 
         let Some(note) = &self.note else {
             return;
         };
-        let source = Self::preview_source(note, opts);
+        let (source, validation) = Self::preview_source(note, opts, &data_cfg);
+        self.validation = validation;
+        self.sync_diagnostics(cx);
         if let Some(doc) = &self.doc {
             doc.update(cx, |doc, cx| doc.set_text(source.as_str(), cx));
         }
 
         crate::ui::log_slow("refresh_doc", started);
+    }
+
+    /// 把校验结果下发成编辑区诊断（波浪线）。
+    ///
+    /// 只有数据文件会走到这里（Markdown 的 `validation` 恒为 None，效果是清空）。
+    ///
+    /// 关键是**先 `reset` 再 `push`**：`DiagnosticSet` 内部缓存了一份 Rope 用来
+    /// 把行列换算成字节区间，而我们是在 `set_value` / 编辑之后才下发诊断的，
+    /// 缓存可能已经过期。不 reset 的话换算会对着旧文本做，标记位置错乱。
+    fn sync_diagnostics(&mut self, cx: &mut Context<Self>) {
+        let error = self.validation.clone();
+        self.editor.update(cx, |state, cx| {
+            let text = state.text().clone();
+            let Some(set) = state.diagnostics_mut() else {
+                return;
+            };
+            set.reset(&text);
+            if let Some(err) = &error {
+                let line = err.line as u32;
+                let column = err.column as u32;
+                set.push(Diagnostic::new(
+                    Position::new(line, column)..Position::new(line, column + 1),
+                    err.message.clone(),
+                ));
+            }
+            cx.notify();
+        });
     }
 
     /// 让预览面板显示自己的文档。
@@ -193,13 +233,28 @@ impl EditorPanel {
         });
     }
 
-    /// 生成预览源文：本地图片转 data URL，并按配置决定显示方式与宽度
-    fn preview_source(note: &Note, opts: ImageOptions) -> String {
+    /// 生成预览源文，并返回数据文件的校验结果（Markdown 时为 None）。
+    ///
+    /// Markdown：本地图片转 data URL，并按配置决定显示方式与宽度；
+    /// 数据文件（json/yaml/toml）：拼成围栏代码块展示格式化结果。
+    fn preview_source(
+        note: &Note,
+        opts: ImageOptions,
+        data_cfg: &DataFileConfig,
+    ) -> (String, Option<ValidationError>) {
         let text = note.text();
+        if let Some(kind) = data_kind(note.path()) {
+            return data_preview_source(&text, kind, data_cfg);
+        }
         let dir = note.path().parent().unwrap_or(Path::new(""));
         // 先做防御性预处理，避免畸形 Markdown 让预览解析器 panic 导致应用退出
         let safe = sanitize_for_preview(&text);
-        resolve_image_urls(&safe, dir, opts)
+        (resolve_image_urls(&safe, dir, opts), None)
+    }
+
+    /// 当前打开的是数据文件时返回其种类
+    fn data_kind(&self) -> Option<DataKind> {
+        self.note.as_ref().and_then(|note| data_kind(note.path()))
     }
 
     /// 载入一篇笔记。也用于把空白占位页"填"成真正的笔记。
@@ -213,6 +268,7 @@ impl EditorPanel {
         cx: &mut Context<Self>,
         path: PathBuf,
     ) -> bool {
+        let data_cfg = crate::app::config(cx).editor.data_file.clone();
         let loaded = match Note::load(path) {
             Ok(note) => {
                 let text = note.text();
@@ -220,18 +276,34 @@ impl EditorPanel {
                 self.editor.update(cx, |state, cx| {
                     state.set_value(text, window, cx);
                 });
+                // 数据文件按语言高亮；Markdown 用 "text"（沿用现状：不高亮）。
+                //
+                // 每次载入都显式设置：面板会被复用（空白页认领机制），
+                // 不重置的话"关掉 json 再打开 md"会残留 json 的高亮配色。
+                let lang = data_kind(note.path())
+                    .map(|kind| kind.lang())
+                    .unwrap_or("text");
+                self.editor.update(cx, |state, cx| {
+                    state.set_highlighter(lang, cx);
+                });
                 self.status = format!("已打开 {}", note.path().display()).into();
                 // 每篇笔记一个预览文档，首次解析后切回来就无需再解析
-                let source = Self::preview_source(&note, image_options(cx));
+                let (source, validation) =
+                    Self::preview_source(&note, image_options(cx), &data_cfg);
+                self.applied_data_cfg = data_cfg;
+                self.validation = validation;
                 self.doc = Some(cx.new(|cx| TextViewState::markdown(source.as_str(), cx)));
                 self.note = Some(note);
                 true
             }
             Err(err) => {
+                // 载入失败不能留下上一篇的校验结果
+                self.validation = None;
                 self.status = format!("打开失败: {err}").into();
                 false
             }
         };
+        self.sync_diagnostics(cx);
         // 打开即出预览，不必等到第一次编辑
         self.activate_preview(cx);
         cx.notify();
@@ -250,12 +322,15 @@ impl EditorPanel {
         let path = self.note.as_ref().map(|n| n.path().to_path_buf());
         self.note = None;
         self.doc = None;
+        self.validation = None;
         self.last_published_path = None;
         self.last_published_version = None;
         self.status = SharedString::default();
 
         self.editor
             .update(cx, |state, cx| state.set_value("", window, cx));
+        // 清空后不留上一篇的波浪线
+        self.sync_diagnostics(cx);
 
         let self_entity = self.self_entity.clone();
         cx.update_global::<AppState, _>(|state, cx| {
@@ -458,11 +533,17 @@ impl EditorPanel {
         cx.notify();
     }
 
-    /// 渲染顶部辅助编辑工具栏：把常用 Markdown 操作集中为一组快捷按钮。
+    /// 渲染顶部辅助编辑工具栏。
     ///
-    /// 按钮是 gpui 的原生按钮（点击时不会抢走编辑区焦点，选区得以保留），
-    /// 因此“加粗/斜体/链接”等既能作用于选中文本，也能在光标处插入空标记。
-    fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// - Markdown：把常用操作集中为一组快捷按钮（按钮是 gpui 的原生按钮，
+    ///   点击时不会抢走编辑区焦点，选区得以保留，因此既能包裹选中文本，
+    ///   也能在光标处插入空标记）；
+    /// - 数据文件（json/yaml/toml）：Markdown 按钮全是误操作入口，换成
+    ///   语言徽标 + 校验状态。
+    fn render_toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(kind) = self.data_kind() {
+            return self.render_data_toolbar(kind, cx).into_any_element();
+        }
         // 先取出主题色，避免在后续构建中同时发生不可变与可变借用
         let divider = cx.theme().muted_foreground.opacity(0.25);
         let border = cx.theme().border;
@@ -558,6 +639,53 @@ impl EditorPanel {
                 Format::HorizontalRule,
                 cx,
             ))
+            .into_any_element()
+    }
+
+    /// 数据文件模式的工具栏：语言徽标 + 校验状态。
+    ///
+    /// 只有这两样，没有"格式化并写入"——格式化结果只进预览，
+    /// 程序不改写用户文件（YAML 往返会丢注释）。
+    fn render_data_toolbar(&mut self, kind: DataKind, cx: &mut Context<Self>) -> impl IntoElement {
+        let border = cx.theme().border;
+        let muted = cx.theme().muted_foreground;
+        let warning = cx.theme().warning;
+
+        let (text, color) = match &self.validation {
+            None => ("✓ 格式正确".to_string(), muted),
+            Some(err) => (
+                format!("⚠ {}：{}", err.display_position(), err.message),
+                warning,
+            ),
+        };
+
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .text_xs()
+            .border_b_1()
+            .border_color(border)
+            .child(
+                div()
+                    .flex_none()
+                    .px_1p5()
+                    .py(px(1.))
+                    .rounded(px(3.))
+                    .bg(muted.opacity(0.15))
+                    .text_color(muted)
+                    .child(kind.label()),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_color(color)
+                    .child(text),
+            )
     }
 
     /// 创建一个工具栏按钮：仅显示图标，鼠标悬停时通过 tooltip 显示功能说明。
@@ -727,6 +855,54 @@ fn close_editor_tab(weak: WeakEntity<EditorPanel>, window: &mut Window, cx: &mut
     crate::app::sync_placeholder(window, cx);
 }
 
+/// 数据文件的预览源文：顶部提示 + 格式化后的围栏代码块。
+///
+/// 返回 `(源文, 校验结果)`：调用方拿校验结果去更新状态，避免重复解析一遍。
+///
+/// - 合法 → 展示格式化结果；非法 → 展示原文并在顶部给出行列与原因；
+/// - 超过 `max_format_bytes` → 跳过格式化，只展示原文并说明原因；
+/// - 格式化结果**只用于预览**，写盘永远用用户原文（见 `core::datafile` 模块文档）。
+fn data_preview_source(
+    text: &str,
+    kind: DataKind,
+    cfg: &DataFileConfig,
+) -> (String, Option<ValidationError>) {
+    let code;
+    let mut error = None;
+    let mut extra_notice: Option<String> = None;
+
+    if cfg.max_format_bytes > 0 && text.len() > cfg.max_format_bytes {
+        // 大文件格式化会卡住预览，宁可不排版
+        code = text.to_string();
+        extra_notice = Some("文件过大，已跳过格式化".to_string());
+    } else {
+        match crate::core::datafile::parse(text, kind, cfg.indent) {
+            Parsed::Ok { formatted } => code = formatted,
+            Parsed::Err { error: err } => {
+                code = text.to_string();
+                extra_notice = Some(format!("{}：{}", err.display_position(), err.message));
+                error = Some(err);
+            }
+        }
+    }
+
+    let mut out = String::new();
+    if let Some(notice) = kind.notice() {
+        out.push_str(notice);
+        out.push_str("\n\n");
+    }
+    if let Some(notice) = extra_notice {
+        out.push_str("⚠️ ");
+        out.push_str(&notice);
+        out.push_str("\n\n");
+    }
+    // 已知限制：内容里若含 ``` 会截断代码块。JSON/YAML/TOML 极少出现，
+    // 且最坏只是预览排版错乱，不会崩。
+    out.push_str(&format!("```{}\n{code}\n```\n", kind.lang()));
+
+    (out, error)
+}
+
 impl Render for EditorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let started = Instant::now();
@@ -761,6 +937,11 @@ impl Render for EditorPanel {
         // 是否真的重算由 `refresh_doc` 内部守卫判断（那里也会记录当前选项），
         // 这里只负责在配置变化时触发一次。
         if Some(image_options(cx)) != self.applied_image_opts {
+            self.refresh_doc(cx);
+        }
+
+        // 数据文件配置（缩进 / 大小阈值）变化时同样请求重算预览
+        if crate::app::config(cx).editor.data_file != self.applied_data_cfg {
             self.refresh_doc(cx);
         }
 
@@ -1037,5 +1218,7 @@ fn image_options(cx: &App) -> ImageOptions {
     }
 }
 
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
+#[path = "../../tests/ui/editor.rs"]
 mod tests;

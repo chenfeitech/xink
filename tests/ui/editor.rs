@@ -1,7 +1,18 @@
 // 显式导入而非 `use super::*`：本文件顶部有 `use gpui_kit::*`，
 // 其中的 gpui `test` 宏会遮蔽内置 `#[test]` 属性，导致宏展开递归。
-use super::{Format, Insertion, format_icon_svg, is_line_start};
+use super::{
+    DataFileConfig, DataKind, Format, Insertion, data_preview_source, format_icon_svg,
+    is_line_start,
+};
+use crate::core::datafile::{DEFAULT_INDENT, DEFAULT_MAX_FORMAT_BYTES};
 use std::collections::HashSet;
+
+fn data_cfg() -> DataFileConfig {
+    DataFileConfig {
+        indent: DEFAULT_INDENT,
+        max_format_bytes: DEFAULT_MAX_FORMAT_BYTES,
+    }
+}
 
 /// 全部操作的清单。新增操作时需同步补充，否则下述遍历类用例会漏掉新操作。
 const ALL: [Format; 13] = [
@@ -252,4 +263,61 @@ fn every_operation_inserts_non_empty_content() {
             ),
         }
     }
+}
+// ── 数据文件预览源文 ──────────────────────────────────────
+
+#[test]
+fn data_preview_wraps_formatted_json_in_fenced_block() {
+    let (source, error) = data_preview_source(r#"{"a":1}"#, DataKind::Json, &data_cfg());
+
+    assert!(error.is_none());
+    assert!(source.starts_with("```json\n"), "{source:?}");
+    assert!(source.contains("\"a\": 1"), "应为格式化结果: {source:?}");
+    assert!(source.trim_end().ends_with("```"), "{source:?}");
+}
+
+#[test]
+fn data_preview_shows_error_position_and_keeps_original_text() {
+    let (source, error) = data_preview_source(r#"{"a": 1,}"#, DataKind::Json, &data_cfg());
+
+    let error = error.expect("非法 JSON 应给出校验错误");
+    assert_eq!(error.line, 0);
+    assert_eq!(error.column, 8);
+    // 内容非法时也要能渲染：围栏里放的是原文，并附带行列提示
+    assert!(source.contains("```json"), "{source:?}");
+    assert!(source.contains(r#"{"a": 1,}"#), "应保留原文: {source:?}");
+    assert!(
+        source.contains("第 1 行第 9 列"),
+        "应给出 1-based 位置: {source:?}"
+    );
+}
+
+#[test]
+fn data_preview_tells_yaml_comments_are_dropped() {
+    let (source, _) = data_preview_source("a: 1\n", DataKind::Yaml, &data_cfg());
+
+    // YAML 的格式化是有损的，必须常驻说明，否则用户以为注释被删了
+    assert!(source.contains("注释不保留"), "{source:?}");
+}
+
+#[test]
+fn data_preview_skips_formatting_for_huge_files() {
+    let huge = "x".repeat(10);
+    let cfg = DataFileConfig {
+        indent: DEFAULT_INDENT,
+        max_format_bytes: 4,
+    };
+    let (source, error) = data_preview_source(&huge, DataKind::Json, &cfg);
+
+    assert!(error.is_none(), "超出阈值不算校验错误");
+    assert!(source.contains("已跳过格式化"), "{source:?}");
+    assert!(source.contains(&huge), "应原样展示: {source:?}");
+}
+
+#[test]
+fn data_preview_handles_toml() {
+    let (source, error) = data_preview_source("a = 1\n", DataKind::Toml, &data_cfg());
+
+    assert!(error.is_none());
+    assert!(source.starts_with("```toml\n"), "{source:?}");
 }

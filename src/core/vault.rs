@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::core::media::is_image_path;
+use crate::core::media::{is_editable_text, is_image_path};
 
 /// 文件树节点（领域数据，不含 UI 状态）
 #[derive(Debug, Clone)]
@@ -134,9 +134,13 @@ fn scan_dir(dir: &Path, show_all: bool) -> Result<FileNode> {
         }
         if path.is_dir() {
             children.push(scan_dir(&path, show_all)?);
-        } else if show_all || is_markdown(&file_name) || is_image_path(&path) {
-            // 默认只显示笔记与图片（图片可在树中直接点开预览）；
-            // 打开"显示全部"后，其他类型的文件也进树，便于查看与引用
+        } else if show_all || is_editable_text(&path) || is_image_path(&path) {
+            // 默认只显示能编辑的文本（笔记 + json/yaml/toml）与图片
+            // （图片可在树中直接点开预览）；
+            // 打开"显示全部"后，其他类型的文件也进树，便于查看与引用。
+            //
+            // 判据必须用 `is_editable_text`：若这里放行而 `tabs::open_note`
+            // 不放行，就会出现"树里看得到、双击没反应"。
             children.push(FileNode {
                 path,
                 name: file_name,
@@ -380,5 +384,7 @@ impl VaultRegistry {
     }
 }
 
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
+#[path = "../../tests/core/vault.rs"]
 mod tests;

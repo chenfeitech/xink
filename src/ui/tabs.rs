@@ -12,7 +12,7 @@ use gpui_kit::component::dock::{DockArea, DockPlacement, panel_handle};
 use gpui_kit::*;
 
 use crate::app::{AppState, sync_placeholder};
-use crate::core::note::is_markdown;
+use crate::core::media::is_editable_text;
 use crate::core::tab_key;
 use crate::ui::EditorPanel;
 
@@ -172,14 +172,14 @@ pub fn close_notes_outside(root: &Path, window: &mut Window, cx: &mut App) {
 /// 打开一篇笔记的**唯一入口**。
 ///
 /// 流程：
-/// 1. 非 Markdown 直接忽略；
+/// 1. 不是可编辑文本（Markdown / JSON / YAML / TOML）直接忽略；
 /// 2. 已打开（`tab_key` 命中）→ 只激活已有标签，不新建、不重新读盘；
 /// 3. 未打开 → 优先认领空白占位页，没有才新建面板；
 /// 4. 载入成功才登记 + 落盘；失败则回滚（归还空白页 / 丢弃新建面板）。
 ///
 /// 返回是否成功打开（含"激活已有标签"）。
 pub fn open_note(path: PathBuf, window: &mut Window, cx: &mut App) -> bool {
-    if !is_markdown(&path) {
+    if !is_editable_text(&path) {
         return false;
     }
     let key = tab_key(&path);
