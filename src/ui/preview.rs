@@ -280,6 +280,8 @@ impl Render for PreviewPanel {
         let view = div()
             .id("preview-panel")
             .size_full()
+            .flex()
+            .flex_col()
             .overflow_hidden()
             .font_family(font.family.clone())
             .text_size(px(font.size))
