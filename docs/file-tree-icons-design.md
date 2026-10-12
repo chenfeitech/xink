@@ -134,3 +134,20 @@ echo written
 
 **待人工验收**：目录里同时有 md / 图片 / 代码 / 压缩包 / 表格时图标各不相同；
 json/yaml 与 md 同为文本文档图标；改图标大小后各类同步变化。
+
+### 8.1 图标改为内联 SVG（2026-10-12）
+
+改用类型图标后依然看不到图标。根因与刷新按钮那次**相同**：
+`Icon::new(AssetIcon::…)` 走图标集加载，在本项目里渲染不出内容。
+
+改为 `Icon::default().data(内联 SVG)`（与工具栏 13 个图标同通道，已验证可靠），
+SVG 直接取自 `gpui-kit-assets` 的 Lucide 图标文件，视觉与之前保持一致：
+
+- chevron-down / chevron-right（展开折叠）
+- folder / folder-open
+- file-text / file-image / file-code / file-archive / file-spreadsheet
+
+同时删除旧的 `kind_icon`（返回 AssetIcon）与不再使用的 AssetIcon 导入。
+
+> 结论：**本项目里显示图标请用 `Icon::default().data(svg_bytes)`，
+> 不要用 `Icon::new(IconName)`。**

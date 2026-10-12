@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 
-use gpui_kit::assets::IconName as AssetIcon;
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_kit::component::list::ListItem;
@@ -708,17 +707,29 @@ impl Render for DragPreview {
     }
 }
 
-/// 文件类型 → 目录树图标
+/// 目录树用到的图标（内联 SVG）。
 ///
-/// 图片、代码、压缩包、表格各有专属图标；Markdown 与其余文件（含 json/yaml、
-/// 音视频等）统一用文本文档图标——按设计决策，风格与 Markdown 保持一致。
-fn kind_icon(kind: FileKind) -> AssetIcon {
+/// 为什么内联：`Icon::new(AssetIcon::…)` 走图标集加载，在本项目里实测渲染不出内容
+/// （刷新按钮就踩过一次）；改用 `Icon::default().data(内联 SVG)`，与工具栏图标
+/// 同通道，稳定可靠。SVG 取自 gpui-kit-assets 的 Lucide 图标，视觉保持一致。
+const ICON_CHEVRON_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m6 9 6 6 6-6" /> </svg>"#;
+const ICON_CHEVRON_RIGHT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg>"#;
+const ICON_FOLDER: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /> </svg>"#;
+const ICON_FOLDER_OPEN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /> </svg>"#;
+const ICON_FILE_TEXT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M10 9H8" /> <path d="M16 13H8" /> <path d="M16 17H8" /> </svg>"#;
+const ICON_FILE_IMAGE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <circle cx="10" cy="12" r="2" /> <path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22" /> </svg>"#;
+const ICON_FILE_CODE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M10 12.5 8 15l2 2.5" /> <path d="m14 12.5 2 2.5-2 2.5" /> </svg>"#;
+const ICON_FILE_ARCHIVE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M13.659 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v11.5" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M8 12v-1" /> <path d="M8 18v-2" /> <path d="M8 7V6" /> <circle cx="8" cy="20" r="2" /> </svg>"#;
+const ICON_FILE_SPREADSHEET: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M8 13h2" /> <path d="M14 13h2" /> <path d="M8 17h2" /> <path d="M14 17h2" /> </svg>"#;
+
+/// 文件类型 → 图标 SVG
+fn kind_icon_svg(kind: FileKind) -> &'static str {
     match kind {
-        FileKind::Image => AssetIcon::FileImage,
-        FileKind::Code => AssetIcon::FileCode,
-        FileKind::Archive => AssetIcon::FileArchive,
-        FileKind::Spreadsheet => AssetIcon::FileSpreadsheet,
-        FileKind::Markdown | FileKind::Other | FileKind::Dir => AssetIcon::FileText,
+        FileKind::Image => ICON_FILE_IMAGE,
+        FileKind::Code => ICON_FILE_CODE,
+        FileKind::Archive => ICON_FILE_ARCHIVE,
+        FileKind::Spreadsheet => ICON_FILE_SPREADSHEET,
+        FileKind::Markdown | FileKind::Other | FileKind::Dir => ICON_FILE_TEXT,
     }
 }
 
@@ -994,10 +1005,12 @@ impl Render for FilesPanel {
                                 // 图标里没有图片相关图标
                                 // 图标包一层 `flex_none`：它是固定尺寸元素，可用宽度不足时
                                 // 绝不能被 flex 压缩，否则名称起始列会随文件名长度漂移。
-                                let icon = |name: AssetIcon| {
-                                    div()
-                                        .flex_none()
-                                        .child(Icon::new(name).with_size(Size::Size(icon_px)))
+                                let icon = |svg: &'static str| {
+                                    div().flex_none().child(
+                                        Icon::default()
+                                            .data(svg.as_bytes())
+                                            .with_size(Size::Size(icon_px)),
+                                    )
                                 };
                                 let mut row = div()
                                     .flex()
@@ -1014,19 +1027,19 @@ impl Render for FilesPanel {
                                 if is_dir {
                                     if entry.is_expanded() {
                                         row = row
-                                            .child(icon(AssetIcon::ChevronDown))
-                                            .child(icon(AssetIcon::FolderOpen));
+                                            .child(icon(ICON_CHEVRON_DOWN))
+                                            .child(icon(ICON_FOLDER_OPEN));
                                     } else {
                                         row = row
-                                            .child(icon(AssetIcon::ChevronRight))
-                                            .child(icon(AssetIcon::FolderClosed));
+                                            .child(icon(ICON_CHEVRON_RIGHT))
+                                            .child(icon(ICON_FOLDER));
                                     }
                                 } else {
                                     // 按类型取图标：图片 / 代码 / 压缩包 / 表格各有专属图标，
                                     // Markdown 与其余文件统一用文本文档图标（见 `kind_icon`）
                                     row = row
                                         .child(div().flex_none().w(icon_px))
-                                        .child(icon(kind_icon(file_kind(&path, false))));
+                                        .child(icon(kind_icon_svg(file_kind(&path, false))));
                                 }
                                 // 目录名加粗，与文件形成强弱对比。
                                 // 名称占满剩余空间并单行截断：超长时不挤压前面的图标列，也不撑宽行。
