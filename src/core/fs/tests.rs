@@ -114,3 +114,25 @@ fn copy_path_copies_directory_recursively() {
     assert!(copy_path(&src.path().join("sub"), &target).is_ok());
     assert!(target.join("inner.md").exists(), "目录应递归复制");
 }
+
+#[test]
+fn write_new_file_writes_bytes_and_avoids_conflict() {
+    let dir = TempDir::new().unwrap();
+
+    let first = write_new_file(dir.path(), "pasted", "png", b"aaa").unwrap();
+    assert_eq!(first, dir.path().join("pasted.png"));
+    assert_eq!(fs::read(&first).unwrap(), b"aaa");
+
+    // 同名再写一次应递增，而不是覆盖
+    let second = write_new_file(dir.path(), "pasted", "png", b"bbb").unwrap();
+    assert_eq!(second, dir.path().join("pasted-1.png"));
+    assert_eq!(fs::read(&second).unwrap(), b"bbb");
+    assert_eq!(fs::read(&first).unwrap(), b"aaa", "原文件不应被覆盖");
+}
+
+#[test]
+fn write_new_file_handles_empty_extension() {
+    let dir = TempDir::new().unwrap();
+    let path = write_new_file(dir.path(), "note", "", b"x").unwrap();
+    assert_eq!(path, dir.path().join("note"));
+}

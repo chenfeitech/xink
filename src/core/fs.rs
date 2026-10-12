@@ -151,5 +151,20 @@ pub fn import_paths(
         .collect()
 }
 
+/// 把一段字节写成目标目录里的新文件。
+///
+/// 用于**没有源文件**的场景（如剪贴板里的截图）：调用方给出主文件名与扩展名，
+/// 冲突时按 `unique_name` 递增。
+pub fn write_new_file(dir: &Path, stem: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    let name = if ext.is_empty() {
+        stem.to_string()
+    } else {
+        format!("{stem}.{ext}")
+    };
+    let path = unique_name(dir, &name);
+    fs::write(&path, bytes).map_err(|e| format!("写入文件失败: {e}"))?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests;

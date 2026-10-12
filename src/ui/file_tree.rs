@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 
-use gpui_kit::ExternalPaths;
 use gpui_kit::assets::IconName as AssetIcon;
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
@@ -13,6 +12,7 @@ use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::tree::{TreeItem, TreeState, tree};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Size};
+use gpui_kit::{ClipboardEntry, ExternalPaths, ImageFormat};
 
 use crate::core::media::is_image_path;
 use gpui_kit::*;
@@ -555,6 +555,76 @@ impl FilesPanel {
         .detach();
     }
 
+    /// 把剪贴板里的文件 / 图片粘贴到目标目录。
+    ///
+    /// 支持两类内容：
+    /// - 在访达里复制的**文件**（`ExternalPaths`）→ 复制过来；
+    /// - **图片数据**（截图）→ 写成 `pasted-<时间戳>.<扩展名>`。
+    ///
+    /// 纯文本**不**建文件，避免误把一段文字变成笔记。
+    fn paste_into(&mut self, target: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = cx.read_from_clipboard() else {
+            self.status = "剪贴板为空".into();
+            cx.notify();
+            return;
+        };
+
+        let mut paths: Vec<PathBuf> = Vec::new();
+        let mut image: Option<(Vec<u8>, &'static str)> = None;
+        for entry in &item.entries {
+            match entry {
+                ClipboardEntry::ExternalPaths(external) => {
+                    paths.extend(external.paths().iter().cloned());
+                }
+                ClipboardEntry::Image(img) => {
+                    image = Some((img.bytes.clone(), image_extension(img.format)));
+                }
+                // 文本不当作文件处理
+                ClipboardEntry::String(_) => {}
+            }
+        }
+
+        if paths.is_empty() && image.is_none() {
+            self.status = "剪贴板里没有文件或图片".into();
+            cx.notify();
+            return;
+        }
+
+        // 文件走既有的导入通道（后台执行）
+        if !paths.is_empty() {
+            self.import_external(paths, target.clone(), window, cx);
+        }
+
+        match image {
+            Some((bytes, ext)) => {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default();
+                match crate::core::fs::write_new_file(
+                    &target,
+                    &format!("pasted-{stamp}"),
+                    ext,
+                    &bytes,
+                ) {
+                    Ok(path) => {
+                        self.status = format!(
+                            "已粘贴 {}",
+                            path.file_name().and_then(|n| n.to_str()).unwrap_or("图片")
+                        )
+                        .into();
+                        self.refresh(window, cx);
+                    }
+                    Err(err) => {
+                        self.status = format!("粘贴失败: {err}").into();
+                    }
+                }
+                cx.notify();
+            }
+            None => cx.notify(),
+        }
+    }
+
     fn apply_tree(&mut self, node: FileNode, cx: &mut Context<Self>) {
         let notes = count_notes(&node);
         // 目录类型随树一起缓存：空文件夹没有子节点，无法靠子节点数量判断
@@ -568,6 +638,18 @@ impl FilesPanel {
         println!("[xink] 文件树已更新: {notes} 篇笔记");
         self.status = format!("{notes} 篇笔记").into();
         cx.notify();
+    }
+}
+
+/// 剪贴板图片格式 → 文件扩展名
+fn image_extension(format: ImageFormat) -> &'static str {
+    match format {
+        ImageFormat::Png => "png",
+        ImageFormat::Jpeg => "jpg",
+        ImageFormat::Webp => "webp",
+        ImageFormat::Gif => "gif",
+        ImageFormat::Svg => "svg",
+        _ => "png",
     }
 }
 
@@ -938,6 +1020,8 @@ impl Render for FilesPanel {
                                 let p_new_folder = path.clone();
                                 let w_move = weak.clone();
                                 let p_move = path.clone();
+                                let w_paste = weak.clone();
+                                let p_paste = path.clone();
 
                                 menu.item(PopupMenuItem::new("重命名").on_click(
                                     move |_, window, cx| {
@@ -979,14 +1063,27 @@ impl Render for FilesPanel {
                                         }
                                     },
                                 ))
-                                .item(
-                                    PopupMenuItem::new("移动到…").on_click(move |_, window, cx| {
+                                .item(PopupMenuItem::new("移动到…").on_click(
+                                    move |_, window, cx| {
                                         if let Some(panel) = w_move.upgrade() {
                                             panel.update(cx, |this, cx| {
                                                 this.move_node(p_move.clone(), window, cx);
                                             });
                                         }
-                                    }),
+                                    },
+                                ))
+                                .separator()
+                                .item(
+                                    PopupMenuItem::new("粘贴到此目录").on_click(
+                                        move |_, window, cx| {
+                                            if let Some(panel) = w_paste.upgrade() {
+                                                panel.update(cx, |this, cx| {
+                                                    let dir = this.target_dir_for(&p_paste);
+                                                    this.paste_into(dir, window, cx);
+                                                });
+                                            }
+                                        },
+                                    ),
                                 )
                             },
                         ),
