@@ -708,11 +708,11 @@ impl Render for FilesPanel {
                     )
                     .child(
                         Button::new("refresh-tree")
-                            // 组件库内置图标集没有刷新，用完整图标集（Lucide）。
-                            // 注意：传 `Icon` 元素时必须显式给尺寸，否则渲染为空——
-                            // 其他按钮传的是 `IconName`，尺寸由 Button 自己决定。
-                            .icon(Icon::new(AssetIcon::RefreshCw).with_size(Size::Size(px(14.))))
+                            // 顺序很关键：`.small()` 必须在 `.icon()` **之前**——
+                            // 它会重置图标尺寸，放在后面会把显式设置的尺寸覆盖成空。
+                            // 另外组件库内置图标集没有刷新，这里用完整图标集（Lucide）。
                             .small()
+                            .icon(Icon::new(AssetIcon::RefreshCw).with_size(Size::Size(px(14.))))
                             .tooltip("刷新：重新扫描当前库（监听失灵时的兜底）")
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.refresh_now(window, cx)),
