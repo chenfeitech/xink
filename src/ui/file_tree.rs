@@ -5,12 +5,13 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 
+use gpui_kit::ExternalPaths;
+use gpui_kit::assets::IconName as AssetIcon;
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::tree::{TreeItem, TreeState, tree};
-use gpui_kit::assets::IconName as AssetIcon;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Size};
 
 use crate::core::media::is_image_path;
@@ -513,6 +514,47 @@ impl FilesPanel {
         self.refresh(window, cx);
     }
 
+    /// 把从系统（访达）拖入的文件/目录导入 `target` 目录。
+    ///
+    /// 整目录递归复制可能很慢，因此放进后台任务；完成后刷新树并汇报结果。
+    /// 单个文件失败不影响其余（见 `core::fs::import_paths`）。
+    fn import_external(
+        &mut self,
+        paths: Vec<PathBuf>,
+        target: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.status = "正在导入…".into();
+        cx.notify();
+
+        let task = cx.background_executor().spawn(async move {
+            crate::core::fs::import_paths(&paths, &target, crate::core::fs::ImportMode::Copy)
+        });
+
+        cx.spawn_in(window, async move |this, window| {
+            let results = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                let ok = results.iter().filter(|r| r.is_ok()).count();
+                let failed = results.len() - ok;
+                this.status = match (ok, failed) {
+                    (0, n) => {
+                        let reason = results
+                            .iter()
+                            .find_map(|r| r.as_ref().err().cloned())
+                            .unwrap_or_default();
+                        format!("导入失败：{n} 项（{reason}）")
+                    }
+                    (n, 0) => format!("已导入 {n} 项"),
+                    (n, m) => format!("已导入 {n} 项，{m} 项失败"),
+                }
+                .into();
+                this.refresh(window, cx);
+            });
+        })
+        .detach();
+    }
+
     fn apply_tree(&mut self, node: FileNode, cx: &mut Context<Self>) {
         let notes = count_notes(&node);
         // 目录类型随树一起缓存：空文件夹没有子节点，无法靠子节点数量判断
@@ -527,7 +569,6 @@ impl FilesPanel {
         self.status = format!("{notes} 篇笔记").into();
         cx.notify();
     }
-
 }
 
 /// 刷新图标（自绘内联 SVG）。
@@ -738,169 +779,218 @@ impl Render for FilesPanel {
                     ),
             )
             .child(
-                div().flex_1().min_h_0().child(
-                    tree(&self.tree_state, move |ix, entry, _selected, _w, _cx| {
-                        let item = entry.item();
-                        let depth = entry.depth();
-                        let path = PathBuf::from(item.id.to_string());
-                        // 目录类型取自扫描时缓存的标记。不能再用「有没有子节点」推断——
-                        // 空文件夹没有子节点，会被误判成文件（图标、加粗、点击行为全错）。
-                        // 查不到时退回一次磁盘判断，兼容 id 与原始路径不完全一致的情况。
-                        let is_dir = dir_flags.get(&path).copied().unwrap_or_else(|| path.is_dir());
-                        let state = tree_state.clone();
-                        let weak_click = weak.clone();
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    // 拖到树的空白区域：落到库根目录
+                    .on_drop::<ExternalPaths>(cx.listener(
+                        |this, paths: &ExternalPaths, window, cx| {
+                            let Some(root) = this.vault.as_ref().map(|v| v.root().to_path_buf())
+                            else {
+                                return;
+                            };
+                            let paths = paths.paths().to_vec();
+                            if !paths.is_empty() {
+                                this.import_external(paths, root, window, cx);
+                            }
+                        },
+                    ))
+                    .child(
+                        tree(&self.tree_state, move |ix, entry, _selected, _w, _cx| {
+                            let item = entry.item();
+                            let depth = entry.depth();
+                            let path = PathBuf::from(item.id.to_string());
+                            // 目录类型取自扫描时缓存的标记。不能再用「有没有子节点」推断——
+                            // 空文件夹没有子节点，会被误判成文件（图标、加粗、点击行为全错）。
+                            // 查不到时退回一次磁盘判断，兼容 id 与原始路径不完全一致的情况。
+                            let is_dir = dir_flags
+                                .get(&path)
+                                .copied()
+                                .unwrap_or_else(|| path.is_dir());
+                            let state = tree_state.clone();
+                            let weak_click = weak.clone();
 
-                        // 目录：折叠用闭口文件夹 + 向右箭头，展开用开口文件夹 + 向下箭头
-                        // 文件：文件图标，左侧留白与箭头对齐，保证名称落在同一列
-                        // 目录树的字体与图标尺寸均取自配置，改完立即生效
-                        let font = &cfg.basic.tree_font;
-                        let icon_px = px(cfg.basic.icon_size as f32);
-                        // 用完整图标集（gpui_kit::assets）：组件库内置的那 101 个
-                        // 图标里没有图片相关图标
-                        // 图标包一层 `flex_none`：它是固定尺寸元素，可用宽度不足时
-                        // 绝不能被 flex 压缩，否则名称起始列会随文件名长度漂移。
-                        let icon = |name: AssetIcon| {
-                            div()
-                                .flex_none()
-                                .child(Icon::new(name).with_size(Size::Size(icon_px)))
-                        };
-                        let mut row = div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            // 行宽恒等于可用宽度：既不因长文件名撑开，也不随面板宽度抖动
-                            .w_full()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .font_family(font.family.clone())
-                            .text_size(px(font.size))
-                            .line_height(px(font.size * font.line_height))
-                            .font_weight(FontWeight(font.weight.value()));
-                        if is_dir {
-                            if entry.is_expanded() {
+                            // 目录：折叠用闭口文件夹 + 向右箭头，展开用开口文件夹 + 向下箭头
+                            // 文件：文件图标，左侧留白与箭头对齐，保证名称落在同一列
+                            // 目录树的字体与图标尺寸均取自配置，改完立即生效
+                            let font = &cfg.basic.tree_font;
+                            let icon_px = px(cfg.basic.icon_size as f32);
+                            // 用完整图标集（gpui_kit::assets）：组件库内置的那 101 个
+                            // 图标里没有图片相关图标
+                            // 图标包一层 `flex_none`：它是固定尺寸元素，可用宽度不足时
+                            // 绝不能被 flex 压缩，否则名称起始列会随文件名长度漂移。
+                            let icon = |name: AssetIcon| {
+                                div()
+                                    .flex_none()
+                                    .child(Icon::new(name).with_size(Size::Size(icon_px)))
+                            };
+                            let mut row = div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                // 行宽恒等于可用宽度：既不因长文件名撑开，也不随面板宽度抖动
+                                .w_full()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .font_family(font.family.clone())
+                                .text_size(px(font.size))
+                                .line_height(px(font.size * font.line_height))
+                                .font_weight(FontWeight(font.weight.value()));
+                            if is_dir {
+                                if entry.is_expanded() {
+                                    row = row
+                                        .child(icon(AssetIcon::ChevronDown))
+                                        .child(icon(AssetIcon::FolderOpen));
+                                } else {
+                                    row = row
+                                        .child(icon(AssetIcon::ChevronRight))
+                                        .child(icon(AssetIcon::FolderClosed));
+                                }
+                            } else if is_image_path(&path) {
+                                // 图片文件：专用图标，点击打开图片预览而不是当笔记打开
                                 row = row
-                                    .child(icon(AssetIcon::ChevronDown))
-                                    .child(icon(AssetIcon::FolderOpen));
+                                    .child(div().flex_none().w(icon_px))
+                                    .child(icon(AssetIcon::FileImage));
                             } else {
                                 row = row
-                                    .child(icon(AssetIcon::ChevronRight))
-                                    .child(icon(AssetIcon::FolderClosed));
+                                    .child(div().flex_none().w(icon_px))
+                                    .child(icon(AssetIcon::FileText));
                             }
-                        } else if is_image_path(&path) {
-                            // 图片文件：专用图标，点击打开图片预览而不是当笔记打开
-                            row = row
-                                .child(div().flex_none().w(icon_px))
-                                .child(icon(AssetIcon::FileImage));
-                        } else {
-                            row = row
-                                .child(div().flex_none().w(icon_px))
-                                .child(icon(AssetIcon::FileText));
-                        }
-                        // 目录名加粗，与文件形成强弱对比。
-                        // 名称占满剩余空间并单行截断：超长时不挤压前面的图标列，也不撑宽行。
-                        // 框架没有省略号（truncate）API，这里用 nowrap + 裁剪代替。
-                        let name = div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .child(item.label.to_string());
-                        let name = if is_dir {
-                            name.font_weight(FontWeight::BOLD)
-                        } else {
-                            name
-                        };
-                        row = row.child(name);
+                            // 目录名加粗，与文件形成强弱对比。
+                            // 名称占满剩余空间并单行截断：超长时不挤压前面的图标列，也不撑宽行。
+                            // 框架没有省略号（truncate）API，这里用 nowrap + 裁剪代替。
+                            let name = div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .child(item.label.to_string());
+                            let name = if is_dir {
+                                name.font_weight(FontWeight::BOLD)
+                            } else {
+                                name
+                            };
+                            row = row.child(name);
 
-                        ListItem::new(("file-tree-item", ix))
-                            // 按层级缩进，让父子关系一眼可辨。
-                            // 固定像素缩进：不随面板宽度变化，各层级列位置恒定。
-                            .pl(px(6. + depth as f32 * 16.))
-                            .min_w_0()
-                            .overflow_hidden()
-                            .child(row)
-                            .on_click(move |_, window, cx| {
-                                state.update(cx, |state, cx| {
-                                    state.set_selected_index(Some(ix), cx);
-                                });
-                                // 目录的展开/折叠由 Tree 自身处理，这里只负责打开文件
-                                if !is_dir {
-                                    if is_image_path(&path) {
-                                        // 图片不进编辑器，在预览面板里显示（不新开窗口）
-                                        crate::app::show_preview_image(path.clone(), cx);
-                                    } else if let Some(panel) = weak_click.upgrade() {
-                                        panel.update(cx, |p, cx| {
-                                            p.open_note(path.clone(), window, cx)
+                            // 拖入落点：目录就是它自己，文件则落到它所在的目录。
+                            // 必须在 on_click 的 move 闭包之前算好，否则 path 已被移走。
+                            let drop_target = if is_dir {
+                                Some(path.clone())
+                            } else {
+                                path.parent().map(|p| p.to_path_buf())
+                            };
+
+                            ListItem::new(("file-tree-item", ix))
+                                // 按层级缩进，让父子关系一眼可辨。
+                                // 固定像素缩进：不随面板宽度变化，各层级列位置恒定。
+                                .pl(px(6. + depth as f32 * 16.))
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(row)
+                                .on_click(move |_, window, cx| {
+                                    state.update(cx, |state, cx| {
+                                        state.set_selected_index(Some(ix), cx);
+                                    });
+                                    // 目录的展开/折叠由 Tree 自身处理，这里只负责打开文件
+                                    if !is_dir {
+                                        if is_image_path(&path) {
+                                            // 图片不进编辑器，在预览面板里显示（不新开窗口）
+                                            crate::app::show_preview_image(path.clone(), cx);
+                                        } else if let Some(panel) = weak_click.upgrade() {
+                                            panel.update(cx, |p, cx| {
+                                                p.open_note(path.clone(), window, cx)
+                                            });
+                                        }
+                                    }
+                                })
+                                // 从访达（Finder）把文件/目录拖到这个节点上 → 导入
+                                .on_drop::<ExternalPaths>({
+                                    let weak = weak.clone();
+                                    move |paths, window, cx| {
+                                        let Some(target) = drop_target.clone() else {
+                                            return;
+                                        };
+                                        let paths = paths.paths().to_vec();
+                                        if paths.is_empty() {
+                                            return;
+                                        }
+                                        if let Some(panel) = weak.upgrade() {
+                                            _ = panel.update(cx, |p, cx| {
+                                                p.import_external(paths, target, window, cx);
+                                            });
+                                        }
+                                    }
+                                })
+                        })
+                        // 右键上下文菜单：面向单节点，提供重命名 / 删除 / 新建 / 移动等操作
+                        .context_menu(
+                            move |ix, entry, menu, _window, _cx| {
+                                let path = PathBuf::from(entry.item().id.to_string());
+                                let weak = weak_menu.clone();
+
+                                let w_rename = weak.clone();
+                                let p_rename = path.clone();
+                                let w_delete = weak.clone();
+                                let p_delete = path.clone();
+                                let w_new_note = weak.clone();
+                                let p_new_note = path.clone();
+                                let w_new_folder = weak.clone();
+                                let p_new_folder = path.clone();
+                                let w_move = weak.clone();
+                                let p_move = path.clone();
+
+                                menu.item(PopupMenuItem::new("重命名").on_click(
+                                    move |_, window, cx| {
+                                        if let Some(panel) = w_rename.upgrade() {
+                                            panel.update(cx, |this, cx| {
+                                                this.tree_state.update(cx, |s, cx| {
+                                                    s.set_selected_index(Some(ix), cx);
+                                                });
+                                                this.rename_node(p_rename.clone(), window, cx);
+                                            });
+                                        }
+                                    },
+                                ))
+                                .item(PopupMenuItem::new("删除").on_click(move |_, window, cx| {
+                                    if let Some(panel) = w_delete.upgrade() {
+                                        panel.update(cx, |this, cx| {
+                                            this.delete_node(p_delete.clone(), window, cx);
                                         });
                                     }
-                                }
-                            })
-                    })
-                    // 右键上下文菜单：面向单节点，提供重命名 / 删除 / 新建 / 移动等操作
-                    .context_menu(move |ix, entry, menu, _window, _cx| {
-                        let path = PathBuf::from(entry.item().id.to_string());
-                        let weak = weak_menu.clone();
-
-                        let w_rename = weak.clone();
-                        let p_rename = path.clone();
-                        let w_delete = weak.clone();
-                        let p_delete = path.clone();
-                        let w_new_note = weak.clone();
-                        let p_new_note = path.clone();
-                        let w_new_folder = weak.clone();
-                        let p_new_folder = path.clone();
-                        let w_move = weak.clone();
-                        let p_move = path.clone();
-
-                        menu.item(PopupMenuItem::new("重命名").on_click(move |_, window, cx| {
-                            if let Some(panel) = w_rename.upgrade() {
-                                panel.update(cx, |this, cx| {
-                                    this.tree_state.update(cx, |s, cx| {
-                                        s.set_selected_index(Some(ix), cx);
-                                    });
-                                    this.rename_node(p_rename.clone(), window, cx);
-                                });
-                            }
-                        }))
-                        .item(PopupMenuItem::new("删除").on_click(move |_, window, cx| {
-                            if let Some(panel) = w_delete.upgrade() {
-                                panel.update(cx, |this, cx| {
-                                    this.delete_node(p_delete.clone(), window, cx);
-                                });
-                            }
-                        }))
-                        .separator()
-                        .item(
-                            PopupMenuItem::new("在此新建笔记").on_click(move |_, window, cx| {
-                                if let Some(panel) = w_new_note.upgrade() {
-                                    panel.update(cx, |this, cx| {
-                                        let dir = this.target_dir_for(&p_new_note);
-                                        this.new_note_in(dir, window, cx);
-                                    });
-                                }
-                            }),
-                        )
-                        .item(PopupMenuItem::new("在此新建文件夹").on_click(
-                            move |_, window, cx| {
-                                if let Some(panel) = w_new_folder.upgrade() {
-                                    panel.update(cx, |this, cx| {
-                                        let dir = this.target_dir_for(&p_new_folder);
-                                        this.new_folder_in(dir, window, cx);
-                                    });
-                                }
+                                }))
+                                .separator()
+                                .item(PopupMenuItem::new("在此新建笔记").on_click(
+                                    move |_, window, cx| {
+                                        if let Some(panel) = w_new_note.upgrade() {
+                                            panel.update(cx, |this, cx| {
+                                                let dir = this.target_dir_for(&p_new_note);
+                                                this.new_note_in(dir, window, cx);
+                                            });
+                                        }
+                                    },
+                                ))
+                                .item(PopupMenuItem::new("在此新建文件夹").on_click(
+                                    move |_, window, cx| {
+                                        if let Some(panel) = w_new_folder.upgrade() {
+                                            panel.update(cx, |this, cx| {
+                                                let dir = this.target_dir_for(&p_new_folder);
+                                                this.new_folder_in(dir, window, cx);
+                                            });
+                                        }
+                                    },
+                                ))
+                                .item(
+                                    PopupMenuItem::new("移动到…").on_click(move |_, window, cx| {
+                                        if let Some(panel) = w_move.upgrade() {
+                                            panel.update(cx, |this, cx| {
+                                                this.move_node(p_move.clone(), window, cx);
+                                            });
+                                        }
+                                    }),
+                                )
                             },
-                        ))
-                        .item(
-                            PopupMenuItem::new("移动到…").on_click(move |_, window, cx| {
-                                if let Some(panel) = w_move.upgrade() {
-                                    panel.update(cx, |this, cx| {
-                                        this.move_node(p_move.clone(), window, cx);
-                                    });
-                                }
-                            }),
-                        )
-                    }),
-                ),
+                        ),
+                    ),
             )
             .child(div().flex_none().p_2().text_xs().child(self.status.clone()))
             // 底部固定区：设置入口常驻侧边栏最底部（左下角），
@@ -956,7 +1046,12 @@ impl FilesPanel {
 
         div().flex_1().min_w_0().child(
             DropdownButton::new("vault-switcher")
-                .button(Button::new("vault-switcher-btn").small().ghost().label(current))
+                .button(
+                    Button::new("vault-switcher-btn")
+                        .small()
+                        .ghost()
+                        .label(current),
+                )
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     for (id, name) in items.iter() {
@@ -974,9 +1069,11 @@ impl FilesPanel {
                     // 分隔线以下不是"选哪个库"，而是库列表的维护入口
                     menu = menu
                         .separator()
-                        .item(PopupMenuItem::new("打开文件夹作为库…").on_click(|_, _, cx| {
-                            crate::ui::vault_manager::prompt_create_vault(cx);
-                        }))
+                        .item(
+                            PopupMenuItem::new("打开文件夹作为库…").on_click(|_, _, cx| {
+                                crate::ui::vault_manager::prompt_create_vault(cx);
+                            }),
+                        )
                         .item(PopupMenuItem::new("配置管理…").on_click(|_, _, cx| {
                             crate::ui::vault_manager::open_vault_manager(cx);
                         }));

@@ -580,8 +580,7 @@ impl EditorPanel {
             }
         });
         // 重新聚焦编辑区：让光标可见，后续输入继续落在笔记里
-        self.editor
-            .update(cx, |state, cx| state.focus(window, cx));
+        self.editor.update(cx, |state, cx| state.focus(window, cx));
         self.status = format!("已插入：{}", cmd.label()).into();
         // 与高亮同理：程序化插入不触发编辑控件的 Change 事件，
         // 必须显式同步（含立即重算预览），否则要等用户下一次输入才刷新
@@ -973,8 +972,6 @@ fn surround(
     }
 }
 
-
-
 /// 由光标前一个字符判断是否处于行首：没有前驱字符，或前驱是换行。
 fn is_line_start(prev_char: Option<char>) -> bool {
     prev_char.is_none_or(|c| c == '\n')
@@ -991,12 +988,7 @@ fn at_line_start(state: &EditorState) -> bool {
 }
 
 /// 在光标处插入一段块级文本，必要时先补一个换行使其自成一块。
-fn block(
-    state: &mut EditorState,
-    window: &mut Window,
-    cx: &mut Context<EditorState>,
-    text: &str,
-) {
+fn block(state: &mut EditorState, window: &mut Window, cx: &mut Context<EditorState>, text: &str) {
     if !at_line_start(state) {
         state.insert("\n", window, cx);
     }

@@ -6,14 +6,14 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use gpui_kit::component::Root;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::Root;
 use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::*;
 
 use crate::app::AppState;
-use crate::core::vault::{same_path, VaultEntry, VaultRegistry};
+use crate::core::vault::{VaultEntry, VaultRegistry, same_path};
 use crate::state::workspace;
 
 /// 窗口各部分的固定尺寸。
@@ -76,29 +76,26 @@ impl VaultManagerView {
     ) {
         for entry in &registry.vaults {
             let id = entry.id.clone();
-            let state = self
-                .names
-                .entry(id.clone())
-                .or_insert_with(|| {
-                    let state = cx.new(|cx| InputState::new(window, cx));
-                    // 改名即时保存：与"改完立即生效"的整体风格一致
-                    let id_for_event = id.clone();
-                    cx.subscribe_in(
-                        &state,
-                        window,
-                        move |this, _, ev: &InputEvent, _window, cx| {
-                            if !matches!(ev, InputEvent::Change) {
-                                return;
-                            }
-                            if let Some(state) = this.names.get(&id_for_event) {
-                                let value = state.read(cx).value().to_string();
-                                rename_vault(&id_for_event, value, cx);
-                            }
-                        },
-                    )
-                    .detach();
-                    state
-                });
+            let state = self.names.entry(id.clone()).or_insert_with(|| {
+                let state = cx.new(|cx| InputState::new(window, cx));
+                // 改名即时保存：与"改完立即生效"的整体风格一致
+                let id_for_event = id.clone();
+                cx.subscribe_in(
+                    &state,
+                    window,
+                    move |this, _, ev: &InputEvent, _window, cx| {
+                        if !matches!(ev, InputEvent::Change) {
+                            return;
+                        }
+                        if let Some(state) = this.names.get(&id_for_event) {
+                            let value = state.read(cx).value().to_string();
+                            rename_vault(&id_for_event, value, cx);
+                        }
+                    },
+                )
+                .detach();
+                state
+            });
             if state.read(cx).value().to_string() != entry.name {
                 let name = entry.name.clone();
                 state.update(cx, |s, cx| s.set_value(name, window, cx));

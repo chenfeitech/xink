@@ -100,8 +100,7 @@ fn mime_for(path: &Path) -> Option<&'static str> {
 
 /// 标准 base64 编码（图片转 data URL 只需要这一小段，不为此引入依赖）
 fn encode_base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len() / 3 * 4 + 4);
     for chunk in bytes.chunks(3) {
         let b = [
@@ -229,9 +228,7 @@ pub fn resolve_image_urls(md: &str, note_dir: &Path, opts: ImageOptions) -> Stri
         let src = image_data_url(&path).unwrap_or_else(|| file_url.clone());
         let width = opts.width_percent.clamp(20, 100);
         let alt = alt_of(&whole);
-        let img_tag = format!(
-            "<img src=\"{src}\" alt=\"{alt}\" style=\"width: {width}%\">"
-        );
+        let img_tag = format!("<img src=\"{src}\" alt=\"{alt}\" style=\"width: {width}%\">");
 
         // 图片包一层指向自身的链接，点击即可放大预览
         format!("[{}]({})", img_tag, file_url)

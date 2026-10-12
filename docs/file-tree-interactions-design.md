@@ -230,3 +230,29 @@ impl ExternalPaths { pub fn paths(&self) -> &[PathBuf] { &self.0 } }
 
 **下一步**：需求 2（外部拖入，约 1.5 天），直接复用上述服务；
 拖入目标为目录节点时调用 `import_paths(paths, dir, Copy)`。
+
+### 9.2 需求 2：从访达拖入（2026-10-12 已实施）
+
+`src/ui/file_tree.rs`：
+
+- **目录节点**挂 `ListItem::on_drop::<ExternalPaths>`：拖到目录 → 导入该目录；
+  拖到文件 → 导入它**所在的目录**（落点在渲染时算好，注意要在 `on_click` 的
+  move 闭包之前计算，否则 `path` 已被移走）。
+- **树的空白区域**挂 `on_drop` 兜底 → 落到库根目录（用 `cx.listener` 时需要
+  显式标注 `paths: &ExternalPaths`，否则类型推断失败）。
+- 导入走 `core::fs::import_paths(..., Copy)`，**在后台任务执行**（整目录递归
+  复制可能很慢，不能卡 UI）；完成后刷新树并在状态栏汇报
+  「已导入 N 项 / N 项失败」。
+- 拖入整个目录按你的决策支持（递归复制）。
+
+验证：`cargo build` 通过、`cargo fmt`、`cargo test` 133 passed、`cargo clippy` 0 error。
+
+**待人工验收**：
+1. 从访达拖一个图片到目录树的某个目录上 → 该目录出现图片，预览可显示
+2. 拖整个目录 → 递归导入
+3. 拖到树的空白区域 → 落到库根
+4. 重复拖同名文件 → 自动改名（`a.png` → `a-1.png`）
+5. 状态栏显示导入结果
+
+**已知未做**：拖入过程中的目标高亮反馈（`on_drag_move`）——不影响功能，
+等基础交互验证通过后再补。

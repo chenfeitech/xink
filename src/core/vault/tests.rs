@@ -33,10 +33,16 @@ fn scan_collects_image_files() {
 
     let names: Vec<String> = tree.children.iter().map(|c| c.name.clone()).collect();
     for name in ["shot.png", "photo.jpg", "anim.gif", "icon.svg", "pic.webp"] {
-        assert!(names.iter().any(|n| n == name), "图片应出现在目录树: {name}");
+        assert!(
+            names.iter().any(|n| n == name),
+            "图片应出现在目录树: {name}"
+        );
     }
     assert!(names.iter().any(|n| n == "note.md"));
-    assert!(!names.iter().any(|n| n == "readme.txt"), "非图片非笔记不进树");
+    assert!(
+        !names.iter().any(|n| n == "readme.txt"),
+        "非图片非笔记不进树"
+    );
     assert!(!names.iter().any(|n| n == "main.rs"), "非图片非笔记不进树");
 }
 
@@ -238,7 +244,11 @@ fn resolve_active_falls_back_to_first_usable_vault() {
     };
 
     let notes = reg.resolve_active();
-    assert_eq!(reg.active.as_deref(), Some(ok.id.as_str()), "应回落到可用库");
+    assert_eq!(
+        reg.active.as_deref(),
+        Some(ok.id.as_str()),
+        "应回落到可用库"
+    );
     assert!(
         notes.iter().any(|n| n.contains("失效库")),
         "应说明失效原因: {notes:?}"

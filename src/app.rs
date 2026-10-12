@@ -61,7 +61,6 @@ pub fn show_preview_image(path: PathBuf, cx: &mut App) {
     });
 }
 
-
 /// 跨面板共享的应用状态。
 /// 文件树需要往中间区域添加笔记标签页，因此持有 dock_area 的引用。
 pub struct AppState {
@@ -208,7 +207,9 @@ pub fn apply_theme(window: Option<&mut Window>, cx: &mut App) {
 
 /// 当前是否为深色主题（"跟随系统"已解析为具体结果）。
 pub fn is_dark(cx: &App) -> bool {
-    cx.try_global::<AppState>().map(|state| state.dark).unwrap_or(true)
+    cx.try_global::<AppState>()
+        .map(|state| state.dark)
+        .unwrap_or(true)
 }
 
 /// 空白页同步。

@@ -21,7 +21,8 @@ use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::*;
 
 use crate::core::config::{
-    AUTO_CODE_THEME, AppConfig, ColorScheme, FontWeight, ImageDisplay, Language, LinkOpen, ThemeMode,
+    AUTO_CODE_THEME, AppConfig, ColorScheme, FontWeight, ImageDisplay, Language, LinkOpen,
+    ThemeMode,
 };
 use crate::core::highlight::theme_names;
 

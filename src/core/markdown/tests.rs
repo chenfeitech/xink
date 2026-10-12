@@ -2,7 +2,11 @@ use super::*;
 
 #[test]
 fn rewrites_relative_image_to_file_url() {
-    let out = resolve_image_urls("![封面](assets/cover.png)", Path::new("/notes"), ImageOptions::default());
+    let out = resolve_image_urls(
+        "![封面](assets/cover.png)",
+        Path::new("/notes"),
+        ImageOptions::default(),
+    );
     assert!(
         out.contains("file:///notes/assets/cover.png"),
         "应补全为 file:// URL，实际: {out}"
@@ -22,7 +26,11 @@ fn keeps_remote_and_data_urls() {
 #[test]
 fn rewrites_absolute_path_to_file_url() {
     // 绝对路径同样要转 file://：否则框架会把它当 URI 交给 HTTP 客户端而加载不出来
-    let out = resolve_image_urls("![b](/abs/b.png)", Path::new("/notes"), ImageOptions::default());
+    let out = resolve_image_urls(
+        "![b](/abs/b.png)",
+        Path::new("/notes"),
+        ImageOptions::default(),
+    );
     assert!(
         out.contains("file:///abs/b.png"),
         "绝对路径应转为 file://: {out}"
@@ -56,7 +64,11 @@ fn local_image_becomes_data_url_and_is_clickable() {
 #[test]
 fn missing_local_image_falls_back_to_file_url() {
     // 文件不存在：转不出 data URL，退回 file://，链接仍指向正确位置
-    let out = resolve_image_urls("![图](nope.png)", Path::new("/notes"), ImageOptions::default());
+    let out = resolve_image_urls(
+        "![图](nope.png)",
+        Path::new("/notes"),
+        ImageOptions::default(),
+    );
     assert!(out.contains("file:///notes/nope.png"), "实际: {out}");
     assert!(!out.contains("data:"), "不应编造 data URL: {out}");
 }
@@ -145,14 +157,21 @@ fn alt_text_containing_the_url_is_not_rewritten() {
 
 #[test]
 fn encodes_spaces_and_non_ascii() {
-    let out = resolve_image_urls("![a](my image.png)", Path::new("/n"), ImageOptions::default());
+    let out = resolve_image_urls(
+        "![a](my image.png)",
+        Path::new("/n"),
+        ImageOptions::default(),
+    );
     assert!(out.contains("my%20image.png"), "空格应被编码: {out}");
 }
 
 #[test]
 fn leaves_plain_text_untouched() {
     let md = "没有图片的段落";
-    assert_eq!(resolve_image_urls(md, Path::new("/n"), ImageOptions::default()), md);
+    assert_eq!(
+        resolve_image_urls(md, Path::new("/n"), ImageOptions::default()),
+        md
+    );
 }
 
 // ── 预览前的防御性预处理 ──────────────────────────────────────
@@ -166,7 +185,10 @@ fn sanitize_separates_consecutive_thematic_breaks() {
 
 #[test]
 fn sanitize_handles_three_consecutive_breaks() {
-    assert_eq!(sanitize_for_preview("---\n---\n---\n"), "---\n\n---\n\n---\n");
+    assert_eq!(
+        sanitize_for_preview("---\n---\n---\n"),
+        "---\n\n---\n\n---\n"
+    );
 }
 
 #[test]

@@ -256,7 +256,10 @@ fn code_theme_auto_follows_appearance() {
 fn code_theme_explicit_value_is_not_overridden() {
     // 指定具体主题名时不随明暗变化
     assert_eq!(resolve_code_theme("InspiredGitHub", true), "InspiredGitHub");
-    assert_eq!(resolve_code_theme("InspiredGitHub", false), "InspiredGitHub");
+    assert_eq!(
+        resolve_code_theme("InspiredGitHub", false),
+        "InspiredGitHub"
+    );
 
     // 未知主题名原样传出：由高亮层负责回落，配置层不吞掉用户的值
     assert_eq!(resolve_code_theme("no-such-theme", true), "no-such-theme");

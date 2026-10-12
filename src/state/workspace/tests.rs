@@ -43,7 +43,10 @@ fn registry_roundtrip() {
 #[test]
 fn missing_file_yields_empty_registry() {
     let dir = tmp();
-    let loaded = load_vaults_at(&dir.path().join("vaults.json"), &dir.path().join("vault.json"));
+    let loaded = load_vaults_at(
+        &dir.path().join("vaults.json"),
+        &dir.path().join("vault.json"),
+    );
     assert_eq!(loaded, VaultRegistry::default(), "文件缺失应得到空注册表");
     assert!(loaded.active_entry().is_none());
 }

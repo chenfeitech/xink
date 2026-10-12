@@ -4,8 +4,8 @@ pub mod editor;
 pub mod file_tree;
 pub mod preview;
 pub mod settings;
-pub mod vault_manager;
 pub mod tabs;
+pub mod vault_manager;
 
 pub use editor::EditorPanel;
 pub use file_tree::FilesPanel;

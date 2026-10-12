@@ -72,7 +72,10 @@ fn nested_nodes_are_all_collected() {
     let flags = flags_of(&root);
 
     assert_eq!(flags.len(), 4, "根 + 三层节点都应登记，实际: {flags:?}");
-    assert_eq!(flags.get(&PathBuf::from("/vault/deeper/empty")), Some(&true));
+    assert_eq!(
+        flags.get(&PathBuf::from("/vault/deeper/empty")),
+        Some(&true)
+    );
     assert_eq!(flags.get(&PathBuf::from("/vault/note.md")), Some(&false));
 }
 
