@@ -267,7 +267,12 @@ impl FilesPanel {
         .detach();
     }
 
-    /// 执行重命名，并校验重名冲突（文件自动补 .md 后缀，目录直接改名）
+    /// 执行重命名。
+    ///
+    /// 文件名规则统一走 [`crate::core::fs::rename_name`]：只有 Markdown 才自动补
+    /// `.md`，非 Markdown 文件保留自己的扩展名（不会变成 `x.json.md`）。
+    /// 重名时也不再报错了事，而是与拖入 / 导入一致：保留扩展名并递增 `-N`
+    /// （见 [`crate::core::fs::unique_name`]）。
     fn rename_to(
         &mut self,
         from: &Path,
@@ -283,9 +288,9 @@ impl FilesPanel {
         };
         let is_file = from.is_file();
         let final_name = if is_file {
-            with_md_suffix(new_name)
+            crate::core::fs::rename_name(from, new_name)
         } else {
-            new_name.to_string()
+            new_name.trim().to_string()
         };
         let old_name = from
             .file_name()
@@ -297,8 +302,9 @@ impl FilesPanel {
             return;
         }
 
-        let to = parent.join(&final_name);
-        if to.exists() {
+        // 重名：先按 `-N` 递增出一个不冲突的名字，而不是直接失败
+        let target = crate::core::fs::unique_name(parent, &final_name);
+        if target.exists() {
             self.status = format!("重命名失败：已存在 “{final_name}”").into();
             cx.notify();
             return;
@@ -307,8 +313,8 @@ impl FilesPanel {
         let result = if is_file {
             vault.rename(from, new_name)
         } else {
-            std::fs::rename(from, &to)
-                .map(|_| to.clone())
+            std::fs::rename(from, &target)
+                .map(|_| target.clone())
                 .map_err(|e| anyhow!(e))
         };
 
@@ -905,15 +911,6 @@ fn count_notes(node: &FileNode) -> usize {
         node.children.iter().map(count_notes).sum()
     } else {
         1
-    }
-}
-
-/// 为文件名补齐 .md 后缀（与 Vault::rename 的行为保持一致）
-fn with_md_suffix(name: &str) -> String {
-    if name.to_lowercase().ends_with(".md") {
-        name.to_string()
-    } else {
-        format!("{name}.md")
     }
 }
 

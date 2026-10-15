@@ -70,10 +70,20 @@ impl Vault {
         Ok(())
     }
 
+    /// 重命名文件，返回新路径。
+    ///
+    /// 文件名规则见 [`crate::core::fs::rename_name`]：只有 Markdown 才自动补 `.md`，
+    /// 非 Markdown 文件保留自己的扩展名（不会变成 `x.json.md`）。
+    ///
+    /// 重名时不再直接失败，而是与拖入 / 导入一致：保留扩展名并递增 `-N`
+    /// （见 [`crate::core::fs::unique_name`]）。此前"目标已存在"是靠 `.md` 拼接绕过去的，
+    /// 这正是非 Markdown 文件被写上 `.md` 后缀的原因。
     pub fn rename(&self, from: &Path, new_name: &str) -> Result<PathBuf> {
         ensure!(from.is_file(), "只能重命名文件: {}", from.display());
-        let name = ensure_md_suffix(new_name);
-        let to = from.parent().unwrap_or(&self.root).join(name);
+        let name = crate::core::fs::rename_name(from, new_name);
+        let parent = from.parent().unwrap_or(&self.root);
+        let to = crate::core::fs::unique_name(parent, &name);
+        // `unique_name` 用尽序号时会退回冲突路径，此时只能按失败处理
         ensure!(!to.exists(), "已存在同名文件: {}", to.display());
         fs::rename(from, &to).with_context(|| format!("重命名失败: {}", from.display()))?;
         Ok(to)

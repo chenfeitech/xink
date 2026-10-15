@@ -103,11 +103,6 @@ fn lookup_matches_the_render_fallback_semantics() {
 // 设计见 docs/file-tree-incremental-refresh-design.md §7.1。
 // 展开状态存在 `TreeItem` 自己的 `Rc<RefCell<_>>` 里，合并必须复用旧项。
 
-/// 把节点展开，模拟用户点开过
-fn expanded(item: TreeItem) -> TreeItem {
-    item.expanded(true)
-}
-
 /// 把 `path` 处的节点展开（模拟用户点开过），返回展开后的新树。
 ///
 /// 注意：`TreeItem::clone()` 共享 `state` 的 `Rc`，因此展开副本等价于展开原件——

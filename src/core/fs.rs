@@ -48,6 +48,32 @@ pub fn unique_name(dir: &Path, name: &str) -> PathBuf {
     direct
 }
 
+/// 计算重命名后的文件名：**只有 Markdown 才会自动补 `.md`**。
+///
+/// 规则（`from` 是被改名的路径，`new_name` 是用户输入）：
+///
+/// - 用户显式写了扩展名 → 一律尊重（改名换类型应是有意为之）；
+/// - 没写扩展名时补回**源文件自己的扩展名**：`.md` 源文件补 `.md`，
+///   `.json` 源文件补 `.json`；
+/// - 源文件本身没有扩展名 → 不加后缀（不凭空创造类型）。
+///
+/// 关键在于**绝不拼 `.md`**：否则把 `conf.json` 改名为 `conf` 会变成
+/// `conf.json.md`，再遇到重名时又会被当作"不冲突"而静默改名，
+/// 文件类型与内容从此对不上。目录调用此函数也安全。
+pub fn rename_name(from: &Path, new_name: &str) -> String {
+    let trimmed = new_name.trim();
+    if trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    if split_name(trimmed).1.is_some() {
+        return trimmed.to_string();
+    }
+    match from.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => format!("{trimmed}.{ext}"),
+        None => trimmed.to_string(),
+    }
+}
+
 /// 拆分为 (主文件名, 扩展名)；无扩展名或点号在开头时扩展名为 `None`
 fn split_name(name: &str) -> (&str, Option<&str>) {
     match name.rsplit_once('.') {

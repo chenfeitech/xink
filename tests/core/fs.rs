@@ -136,3 +136,83 @@ fn write_new_file_handles_empty_extension() {
     let path = write_new_file(dir.path(), "note", "", b"x").unwrap();
     assert_eq!(path, dir.path().join("note"));
 }
+
+// ── 重命名时的文件名 ──────────────────────────────────────────
+//
+// 回归点：非 Markdown 文件改名 / 重名时曾被拼上 `.md`（`conf.json` →
+// `conf.json.md`），文件类型与内容从此对不上。
+
+fn name(from: &str, new_name: &str) -> String {
+    rename_name(Path::new(from), new_name)
+}
+
+#[test]
+fn markdown_rename_appends_md_when_extension_is_missing() {
+    assert_eq!(name("/vault/note.md", "new"), "new.md");
+    assert_eq!(name("/vault/note.md", "new.md"), "new.md");
+    assert_eq!(name("/vault/NOTE.MD", "new"), "new.MD", "沿用源文件大小写");
+}
+
+#[test]
+fn non_markdown_rename_never_appends_md() {
+    // 核心回归：这些都不该出现 `.md`
+    assert_eq!(name("/vault/conf.json", "conf"), "conf.json");
+    assert_eq!(name("/vault/conf.json", "conf.json"), "conf.json");
+    assert_eq!(name("/vault/app.yaml", "app"), "app.yaml");
+    assert_eq!(name("/vault/app.yml", "app"), "app.yml");
+    assert_eq!(name("/vault/cfg.toml", "cfg"), "cfg.toml");
+    assert_eq!(name("/vault/logo.png", "logo"), "logo.png");
+    for result in [
+        name("/vault/conf.json", "conf"),
+        name("/vault/app.yaml", "app"),
+    ] {
+        assert!(!result.ends_with(".md"), "{result} 不应带 .md");
+    }
+}
+
+#[test]
+fn explicit_extension_is_respected() {
+    // 用户显式改类型是刻意为之：尊重，不追加、不改写
+    assert_eq!(name("/vault/conf.json", "conf.yml"), "conf.yml");
+    assert_eq!(name("/vault/note.md", "note.txt"), "note.txt");
+}
+
+#[test]
+fn extensionless_source_stays_extensionless() {
+    assert_eq!(name("/vault/README", "README2"), "README2");
+    assert_eq!(name("/vault/dir", "assets"), "assets", "目录改名不加后缀");
+}
+
+#[test]
+fn blank_input_is_passed_through() {
+    assert_eq!(name("/vault/a.md", "  "), "", "空输入由调用方拦截");
+}
+
+// ── 重名：保留扩展名 + 递增后缀 ───────────────────────────────
+
+#[test]
+fn duplicate_rename_keeps_extension_and_adds_index() {
+    let dir = TempDir::new().unwrap();
+    let from = touch(dir.path(), "a.json");
+    touch(dir.path(), "conf.json");
+
+    let target = unique_name(dir.path(), &rename_name(&from, "conf"));
+    assert_eq!(target.file_name().unwrap(), "conf-1.json");
+    assert!(!target.exists());
+    assert!(!target.to_string_lossy().ends_with(".md"));
+}
+
+#[test]
+fn duplicate_markdown_rename_adds_index_before_extension() {
+    let dir = TempDir::new().unwrap();
+    let from = touch(dir.path(), "a.md");
+    touch(dir.path(), "note.md");
+    touch(dir.path(), "note-1.md");
+
+    let target = unique_name(dir.path(), &rename_name(&from, "note"));
+    assert_eq!(
+        target.file_name().unwrap(),
+        "note-2.md",
+        "不叠加成 note-1-1.md"
+    );
+}

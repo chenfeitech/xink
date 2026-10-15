@@ -333,3 +333,63 @@ fn scan_can_include_hidden_entries() {
     // .git 始终不出现
     assert!(!names(&shown).contains(&".git".to_string()));
 }
+
+// ── 重命名：后缀与重名策略 ────────────────────────────────────
+
+#[test]
+fn rename_non_markdown_keeps_its_extension() {
+    let dir = tmp();
+    let root = dir.path();
+    let vault = Vault::open(root.to_path_buf()).unwrap();
+
+    let path = root.join("conf.json");
+    fs::write(&path, "{}").unwrap();
+    let renamed = vault.rename(&path, "conf2").unwrap();
+    assert_eq!(renamed.file_name().unwrap(), "conf2.json");
+    assert!(!renamed.to_string_lossy().ends_with(".md"));
+}
+
+#[test]
+fn rename_non_markdown_on_conflict_adds_index_not_md() {
+    let dir = tmp();
+    let root = dir.path();
+    let vault = Vault::open(root.to_path_buf()).unwrap();
+
+    let source = root.join("a.json");
+    fs::write(&source, "{}").unwrap();
+    fs::write(root.join("conf.json"), "{}").unwrap();
+
+    let renamed = vault.rename(&source, "conf").unwrap();
+    assert_eq!(
+        renamed.file_name().unwrap(),
+        "conf-1.json",
+        "重名应保留扩展名并递增，而不是拼 .md 绕过冲突"
+    );
+    assert!(renamed.exists());
+    assert!(!root.join("conf.json.md").exists(), "绝不能产生 .json.md");
+}
+
+#[test]
+fn rename_markdown_on_conflict_adds_index() {
+    let dir = tmp();
+    let root = dir.path();
+    let vault = Vault::open(root.to_path_buf()).unwrap();
+
+    let note = vault.create_note(root, "a").unwrap();
+    vault.create_note(root, "note").unwrap();
+
+    let renamed = vault.rename(&note, "note").unwrap();
+    assert_eq!(renamed.file_name().unwrap(), "note-1.md");
+}
+
+#[test]
+fn rename_of_a_file_without_extension_adds_nothing() {
+    let dir = tmp();
+    let root = dir.path();
+    let vault = Vault::open(root.to_path_buf()).unwrap();
+
+    let path = root.join("README");
+    fs::write(&path, "x").unwrap();
+    let renamed = vault.rename(&path, "README2").unwrap();
+    assert_eq!(renamed.file_name().unwrap(), "README2");
+}
