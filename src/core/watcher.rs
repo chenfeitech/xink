@@ -5,6 +5,7 @@
 
 use anyhow::{Context as _, Result};
 use flume::Receiver;
+use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 
@@ -19,6 +20,29 @@ pub enum WatchKind {
     Created,
     Removed,
     Modified,
+    /// 重命名 / 移动。
+    ///
+    /// `notify` 把改名折叠为 `Modify(Name(..))`（macOS FSEvents 后端对
+    /// `RenameMode::Both` 给出 `[旧路径, 新路径]`）。若与"内容被改"混为一谈，
+    /// 在访达里改名后目录树不会更新——必须单独认出来。
+    Renamed,
+}
+
+/// 把 `notify` 的事件种类映射为 [`WatchKind`]；与可见内容无关的事件返回 `None`。
+///
+/// 抽成纯函数是为了可测：这个映射决定了"哪些改动会触发重扫"，
+/// 写死在闭包里就只能靠肉眼看目录树有没有刷新。
+pub fn classify_kind(kind: &EventKind) -> Option<WatchKind> {
+    match kind {
+        EventKind::Create(_) => Some(WatchKind::Created),
+        EventKind::Remove(_) => Some(WatchKind::Removed),
+        EventKind::Modify(ModifyKind::Name(_)) => Some(WatchKind::Renamed),
+        // 其余 Modify（Data / Metadata / Any）视为内容改动：
+        // 自动保存走这条，据此重扫会让编辑时持续卡顿
+        EventKind::Modify(_) => Some(WatchKind::Modified),
+        // 访问、其它平台事件与可见内容无关
+        _ => None,
+    }
 }
 
 pub struct WatchEvent {
@@ -45,12 +69,8 @@ impl VaultWatcher {
                 return;
             };
 
-            let kind = match event.kind {
-                EventKind::Create(_) => WatchKind::Created,
-                EventKind::Remove(_) => WatchKind::Removed,
-                EventKind::Modify(_) => WatchKind::Modified,
-                // 其余（访问、其它平台事件）与可见内容无关
-                _ => return,
+            let Some(kind) = classify_kind(&event.kind) else {
+                return;
             };
 
             let paths: Vec<PathBuf> = event

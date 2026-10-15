@@ -43,6 +43,14 @@ pub struct FilesPanel {
     /// 只在落点**变化**时写入，避免每帧重复 notify 造成闪烁。
     drag_hover: Option<PathBuf>,
 
+    /// 上一次交给 `TreeState::set_items` 的树根。
+    ///
+    /// 存在的理由：展开状态只存在于 `TreeItem` 自己的 `Rc<RefCell<TreeItemState>>`
+    /// 里，`TreeState` 并没有"已展开 id 集合"。刷新时若从零重建 `TreeItem`，
+    /// 除根以外全部回到折叠——也就是"目录树整体收缩"。
+    /// 保住这一份旧树，刷新就能做**保状态合并**（见 `build_tree`）。
+    tree_items: Vec<TreeItem>,
+
     /// 路径 → 是否为目录。
     ///
     /// UI 的 `TreeItem` 只保留 id/名称/子节点，不携带"是不是目录"，
@@ -65,6 +73,7 @@ impl FilesPanel {
             watcher_task: None,
             last_manual_refresh: None,
             drag_hover: None,
+            tree_items: Vec::new(),
 
             dir_flags: Rc::new(HashMap::new()),
         }
@@ -361,7 +370,7 @@ impl FilesPanel {
                 println!("[xink] 恢复上次库: {}", root.display());
                 self.applied_vault_root = Some(root);
                 self.vault = Some(vault);
-                self.refresh(window, cx);
+                self.refresh_full(window, cx);
                 self.start_watcher(window, cx);
             }
             Err(err) => {
@@ -421,7 +430,12 @@ impl FilesPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let structure_changed = matches!(event.kind, WatchKind::Created | WatchKind::Removed);
+        // 结构变化才重扫：新增 / 删除 / 重命名。
+        // 内容写入（自动保存属于这一类）不重扫，否则编辑时会持续卡顿。
+        let structure_changed = matches!(
+            event.kind,
+            WatchKind::Created | WatchKind::Removed | WatchKind::Renamed
+        );
         println!(
             "[xink] 检测到 {} 个路径变更（结构变化: {structure_changed}）",
             event.paths.len()
@@ -479,8 +493,22 @@ impl FilesPanel {
         cx.notify();
     }
 
-    /// 后台扫描并刷新树，避免阻塞 UI
+    /// 后台扫描并刷新树，避免阻塞 UI。
+    ///
+    /// 默认走**保状态合并**：只有变动的路径被重建，其余节点的展开状态、
+    /// 选中项与滚动位置都保持（见 [`FilesPanel::tree_items`]）。
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.scan_and_apply(false, window, cx);
+    }
+
+    /// 整树重建（首次加载 / 切换库 / 手动刷新按钮）。
+    ///
+    /// 这些场景用户预期看到一棵"全新"的树，因此不保留旧的展开状态。
+    fn refresh_full(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.scan_and_apply(true, window, cx);
+    }
+
+    fn scan_and_apply(&mut self, full: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(vault) = &self.vault else { return };
         let root = vault.root().to_path_buf();
         let show_all = crate::app::config(cx).basic.show_all_files;
@@ -491,7 +519,7 @@ impl FilesPanel {
 
         cx.spawn_in(window, async move |this, window| match scan.await {
             Ok(node) => {
-                _ = this.update_in(window, |this, _window, cx| this.apply_tree(node, cx));
+                _ = this.update_in(window, |this, _window, cx| this.apply_tree(node, full, cx));
             }
             Err(err) => {
                 _ = this.update_in(window, |this, _window, cx| {
@@ -516,7 +544,7 @@ impl FilesPanel {
         }
         self.last_manual_refresh = Some(Instant::now());
         self.status = "正在扫描…".into();
-        self.refresh(window, cx);
+        self.refresh_full(window, cx);
     }
 
     /// 把从系统（访达）拖入的文件/目录导入 `target` 目录。
@@ -674,16 +702,57 @@ impl FilesPanel {
         .detach();
     }
 
-    fn apply_tree(&mut self, node: FileNode, cx: &mut Context<Self>) {
+    /// 把扫描结果落到树上。
+    ///
+    /// `full = true` 走"整树重建、根展开"（首次加载 / 切换库 / 手动刷新）；
+    /// 否则走 [`build_tree`] 的保状态合并：只有受影响的路径被重建，
+    /// 其余节点的展开 / 折叠状态保持不变。
+    ///
+    /// 设计见 `docs/file-tree-incremental-refresh-design.md`。
+    fn apply_tree(&mut self, node: FileNode, full: bool, cx: &mut Context<Self>) {
         let notes = count_notes(&node);
         // 目录类型随树一起缓存：空文件夹没有子节点，无法靠子节点数量判断
         let mut flags = HashMap::new();
         collect_dir_flags(&node, &mut flags);
         self.dir_flags = Rc::new(flags);
-        // 库根默认展开
-        let items = vec![to_tree_item(&node).expanded(true)];
-        self.tree_state
-            .update(cx, |state, cx| state.set_items(items, cx));
+
+        // 刷新前先记住选中项与滚动偏移：`set_items` 会清空选中，
+        // 而 uniform_list 在条目数骤减时会把偏移夹回 0（表现为"跳回顶部"）
+        let selected_id: Option<SharedString> = self
+            .selected_path(cx)
+            .map(|path| path.to_string_lossy().to_string().into());
+        let offset = self
+            .tree_state
+            .read(cx)
+            .scroll_handle()
+            .0
+            .borrow()
+            .base_handle
+            .offset();
+
+        let items = if full {
+            vec![to_tree_item(&node).expanded(true)]
+        } else {
+            build_tree(&self.tree_items, &node)
+        };
+        self.tree_items = items.clone();
+
+        self.tree_state.update(cx, |state, cx| {
+            state.set_items(items, cx);
+            // 选中复位：路径还在就恢复，已被删除则清空（与现状一致）
+            if let Some(id) = &selected_id {
+                let ix = state.index_of(id);
+                state.set_selected_index(ix, cx);
+            }
+            // 合并后条目数不再塌缩，这里是兜底
+            state
+                .scroll_handle()
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(offset);
+        });
+
         println!("[xink] 文件树已更新: {notes} 篇笔记");
         self.status = format!("{notes} 篇笔记").into();
         cx.notify();
@@ -784,6 +853,45 @@ fn to_tree_item(node: &FileNode) -> TreeItem {
     item
 }
 
+/// 旧 UI 树 + 新扫描结果 → 新 UI 树（**保状态合并**）。
+///
+/// 路径即 id：路径没变 ⇒ 复用旧 `TreeItem`（`clone()` 会共享 `state` 的 `Rc`，
+/// 展开状态天然继承）；路径变了 ⇒ 新建。因此只有"受影响的那条路径"被重建，
+/// 兄弟与祖先的视觉状态不受影响，目录树不再整体收缩。
+///
+/// 依据（`gpui-base-0.6.4/src/tree.rs`）：`TreeItem` 是 `#[derive(Clone)]`、
+/// `children` 是 `pub` 字段、`new()` 总是 `expanded: false`。
+/// 设计见 `docs/file-tree-incremental-refresh-design.md` §3.1。
+fn merge_tree_item(old: &TreeItem, new: &FileNode) -> TreeItem {
+    let mut item = old.clone();
+    // 名称以磁盘为准：仅大小写不同的重命名也能就地更新
+    item.label = new.name.as_str().into();
+    item.children = new
+        .children
+        .iter()
+        .map(|child| {
+            let id: SharedString = child.path.to_string_lossy().to_string().into();
+            match old.children.iter().find(|o| o.id == id) {
+                Some(old_child) => merge_tree_item(old_child, child),
+                None => to_tree_item(child),
+            }
+        })
+        .collect();
+    item
+}
+
+/// 合并整棵树：根 id 一致才合并，否则整树重建并展开根。
+///
+/// 根 id 变化意味着首次加载 / 切换库 / 库本身被改名，此时保留旧状态没有意义。
+fn build_tree(old: &[TreeItem], new: &FileNode) -> Vec<TreeItem> {
+    let id: SharedString = new.path.to_string_lossy().to_string().into();
+    match old.first() {
+        // 不再强制 `.expanded(true)`：用户手动折叠了根也应当保留（Q4）
+        Some(old_root) if old_root.id == id => vec![merge_tree_item(old_root, new)],
+        _ => vec![to_tree_item(new).expanded(true)],
+    }
+}
+
 /// 递归收集「路径 → 是否目录」，供渲染时判断节点类型
 fn collect_dir_flags(node: &FileNode, out: &mut HashMap<PathBuf, bool>) {
     out.insert(node.path.clone(), node.is_dir);
@@ -856,6 +964,7 @@ impl Render for FilesPanel {
                         crate::ui::tabs::close_notes_outside(&root, window, cx);
                         println!("[xink] 切换库: {}", root.display());
                         self.vault = Some(vault);
+                        // 换库是一棵新树：不保留旧库的展开状态
                         // 退出图片预览：否则上一个库的图片会留在预览面板里
                         cx.update_global::<AppState, _>(|state, cx| {
                             state.preview.update(cx, |preview, cx| {
@@ -863,7 +972,7 @@ impl Render for FilesPanel {
                                 cx.emit(crate::app::PreviewImageChanged(None));
                             });
                         });
-                        self.refresh(window, cx);
+                        self.refresh_full(window, cx);
                         self.start_watcher(window, cx);
                     }
                     Err(err) => {
