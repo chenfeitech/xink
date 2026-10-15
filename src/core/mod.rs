@@ -11,6 +11,7 @@ pub mod index;
 pub mod markdown;
 pub mod media;
 pub mod note;
+pub mod search;
 pub mod session;
 pub mod vault;
 pub mod watcher;

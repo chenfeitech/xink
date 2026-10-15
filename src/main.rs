@@ -8,13 +8,13 @@ mod ui;
 
 use actions::{
     FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, NewNote,
-    OpenCommandPalette, OpenFolder, OpenSettings, RenameItem, Save, ToggleTheme,
+    OpenCommandPalette, OpenFolder, OpenSearch, OpenSettings, RenameItem, Save, ToggleTheme,
 };
 use app::Workspace;
 use gpui_kit::component::Root;
 use gpui_kit::component::dock::{ClosePanel, panel_handle, register_panel};
 use gpui_kit::*;
-use ui::{BacklinkPanel, EditorPanel, FilesPanel, OutlinePanel, PreviewPanel};
+use ui::{BacklinkPanel, EditorPanel, FilesPanel, OutlinePanel, PreviewPanel, TagsPanel};
 
 /// 注册各类 Panel 的重建工厂。
 ///
@@ -26,6 +26,9 @@ fn register_panels(cx: &mut App) {
     });
     register_panel(cx, "EditorPanel", |_, window, cx| {
         panel_handle(cx.new(|cx| EditorPanel::new(window, cx)))
+    });
+    register_panel(cx, "TagsPanel", |_, _, cx| {
+        panel_handle(cx.new(TagsPanel::new))
     });
     register_panel(cx, "BacklinkPanel", |_, _, cx| {
         panel_handle(cx.new(BacklinkPanel::new))
@@ -73,6 +76,8 @@ fn main() {
                 KeyBinding::new("cmd-shift-l", ToggleTheme, None),
                 // 命令面板（与 Obsidian 一致）
                 KeyBinding::new("cmd-p", OpenCommandPalette, None),
+                // 全文搜索
+                KeyBinding::new("cmd-shift-f", OpenSearch, None),
             ]);
 
             cx.spawn(async move |cx| {

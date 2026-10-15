@@ -32,6 +32,8 @@ actions!(
         /// 在浅色 / 深色之间切换主题
         ToggleTheme,
         /// 打开命令面板：按文件名搜索并打开笔记
-        OpenCommandPalette
+        OpenCommandPalette,
+        /// 打开全文搜索：按内容检索
+        OpenSearch
     ]
 );

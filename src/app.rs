@@ -10,7 +10,7 @@ use gpui_kit::component::dock::{
 use gpui_kit::component::theme::{Theme, ThemeColor};
 use gpui_kit::*;
 
-use crate::actions::{OpenCommandPalette, OpenSettings, ToggleTheme};
+use crate::actions::{OpenCommandPalette, OpenSearch, OpenSettings, ToggleTheme};
 use std::path::Path;
 
 use crate::core::config::{AppConfig, ThemeMode};
@@ -20,7 +20,7 @@ use crate::core::{resolve_active, tab_key};
 use crate::state::workspace;
 use crate::ui::outline::OutlineState;
 use crate::ui::{
-    BacklinkPanel, EditorPanel, FilesPanel, OpenTabs, OutlinePanel, PreviewPanel, tabs,
+    BacklinkPanel, EditorPanel, FilesPanel, OpenTabs, OutlinePanel, PreviewPanel, TagsPanel, tabs,
 };
 
 /// 预览调度中心。
@@ -385,8 +385,8 @@ pub fn prune_empty_panels(window: &mut Window, cx: &mut App) {
 
 const MAIN_DOCK_ID: &str = "main-dock";
 /// 布局 schema 版本。默认布局结构变更时递增，旧布局将无法恢复并回落默认值。
-/// 递增到 4：默认布局在右侧新增了「大纲」「反链」tab，旧布局不再适用。
-const MAIN_DOCK_VERSION: usize = 4;
+/// 递增到 5：默认布局在右侧新增了「大纲」「反链」「标签」tab，旧布局不再适用。
+const MAIN_DOCK_VERSION: usize = 5;
 
 pub struct Workspace {
     dock_area: Entity<DockArea>,
@@ -603,12 +603,18 @@ impl Workspace {
         crate::ui::open_command_palette(window, cx);
     }
 
+    /// 打开全文搜索（Cmd-Shift-F），同样注册在根元素上。
+    fn open_search(&mut self, _: &OpenSearch, window: &mut Window, cx: &mut Context<Self>) {
+        crate::ui::open_search(window, cx);
+    }
+
     fn reset_default_layout(dock_area: &Entity<DockArea>, window: &mut Window, cx: &mut App) {
         let files = cx.new(|cx| FilesPanel::new(cx));
         let editor = cx.new(|cx| EditorPanel::new(window, cx));
         let preview = cx.new(|cx| PreviewPanel::new(window, cx));
         let outline = cx.new(OutlinePanel::new);
         let backlink = cx.new(BacklinkPanel::new);
+        let tags = cx.new(TagsPanel::new);
 
         // 编辑区独占 center：所有笔记标签都开在这里，不会跑到预览去
         let center = DockLayout::tabs().panel_view(panel_handle(editor), cx);
@@ -616,7 +622,8 @@ impl Workspace {
         let right = DockLayout::tabs()
             .panel_view(panel_handle(preview), cx)
             .panel_view(panel_handle(outline), cx)
-            .panel_view(panel_handle(backlink), cx);
+            .panel_view(panel_handle(backlink), cx)
+            .panel_view(panel_handle(tags), cx);
 
         let left = DockLayout::v_split()
             .child(DockLayout::tabs().panel_view(panel_handle(files), cx), None);
@@ -653,5 +660,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_theme))
             // 命令面板（Cmd-P）：同理必须注册在根元素，否则焦点在编辑区时收不到
             .on_action(cx.listener(Self::open_command_palette))
+            // 全文搜索（Cmd-Shift-F）
+            .on_action(cx.listener(Self::open_search))
     }
 }

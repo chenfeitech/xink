@@ -7,8 +7,10 @@ pub mod editor;
 pub mod file_tree;
 pub mod outline;
 pub mod preview;
+pub mod search;
 pub mod settings;
 pub mod tabs;
+pub mod tags;
 pub mod vault_manager;
 
 pub use backlink::BacklinkPanel;
@@ -17,8 +19,10 @@ pub use editor::EditorPanel;
 pub use file_tree::FilesPanel;
 pub use outline::OutlinePanel;
 pub use preview::PreviewPanel;
+pub use search::open_search;
 pub use settings::open_settings;
 pub use tabs::OpenTabs;
+pub use tags::TagsPanel;
 
 use std::time::{Duration, Instant};
 
