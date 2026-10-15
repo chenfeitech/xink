@@ -428,7 +428,7 @@ fn tags_require_a_leading_separator_and_non_digit() {
         tags_of("见 [文档](a.md#小节)").is_empty(),
         "URL 锚点不是标签"
     );
-    assert!(tags_of("（#中文标签）").is_empty() == false);
+    assert!(!tags_of("（#中文标签）").is_empty(), "括号后也算标签");
 }
 
 #[test]

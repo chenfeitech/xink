@@ -72,17 +72,20 @@
 
 ### P1 — 体验补齐（P0 完成后）
 
-| # | 需求 |
-|---|---|
-| R5 | 双链 `[[笔记名]]`：可点击跳转，支持自动补全 |
-| R6 | 反向链接面板：显示"哪些笔记引用了当前笔记" |
-| R7 | 标签 `#tag`：解析、侧栏聚合、点击筛选 |
-| R8 | 全文搜索 `Cmd+Shift+F`：跨库检索，结果可跳转 |
-| R9 | 大纲（TOC）面板：按标题层级展示，点击跳转 |
-| R10 | 命令面板 `Cmd+P`：模糊搜索文件名快速打开 |
-| R11 | 明暗主题切换，跟随系统 |
-| R12 | 常用 Markdown 快捷键（`Cmd+B` 加粗、`Cmd+I` 斜体等） |
-| R13 | 数据文件（JSON / YAML / TOML）编辑：目录树可见、可打开编辑、语法高亮、预览显示格式化结果、实时校验与错误提示。详见 `docs/json-yaml-editing-requirements.md` |
+> **状态（2026-10-15）：R5–R13 全部已实现**，待人工验收（清单见各设计文档 §8）。
+> 实现顺序与拆解见 `docs/P1-PLAN.md`。
+
+| # | 需求 | 状态 | 实现要点 |
+|---|---|---|---|
+| R5 | 双链 `[[笔记名]]`：可点击跳转，支持自动补全 | ✅ | `docs/wikilink-design.md` |
+| R6 | 反向链接面板：显示"哪些笔记引用了当前笔记" | ✅ | `docs/index-panels-design.md` |
+| R7 | 标签 `#tag`：解析、侧栏聚合、点击筛选 | ✅ | 同上 |
+| R8 | 全文搜索 `Cmd+Shift+F`：跨库检索，结果可跳转 | ✅ | 当前库内全文检索；**跨库检索待多库方案确定**（`docs/multi-vault-design.md:43`） |
+| R9 | 大纲（TOC）面板：按标题层级展示，点击跳转 | ✅ | `docs/outline-design.md` |
+| R10 | 命令面板 `Cmd+P`：模糊搜索文件名快速打开 | ✅ | `docs/command-palette-design.md` |
+| R11 | 明暗主题切换，跟随系统 | ✅ | `Cmd+Shift+L`，纯逻辑 `ThemeMode::toggled` |
+| R12 | 常用 Markdown 快捷键（`Cmd+B` 加粗、`Cmd+I` 斜体等） | ✅ | `Cmd+B/I/Shift+X/E/K` |
+| R13 | 数据文件（JSON / YAML / TOML）编辑 | ✅ | `docs/json-yaml-editing-requirements.md`（R13.8 波浪线待人工确认） |
 
 ### P2 — 明确不在本期范围
 

@@ -323,6 +323,14 @@ rustgpui/
 | **M3** | 编辑与保存 | `Textarea` 编辑、防抖自动保存、原子写、多标签（R2） |
 | **M4** | 预览 | `TextView` 实时渲染、滚动同步、主题适配（R3） |
 | **M5** | 持久化 | 布局 + 标签 + 最近库，重启可恢复（R4） |
+| **M6** | P1 公共底座 | `core/fuzzy` 模糊匹配、`core/markdown` 事实解析、`core/index` 全库索引 |
+| **M7** | P1 导航与结构 | 命令面板（R10）、大纲（R9）、双链（R5）、反链（R6）、标签（R7）、全文搜索（R8） |
+| **M8** | P1 收尾 | 明暗主题入口（R11）、Markdown 快捷键（R12）、数据文件（R13）、目录树增量刷新 |
+
+M6–M8 的拆解与进度见 `docs/P1-PLAN.md`；各功能的取舍记录在设计文档
+（`wikilink-design.md` / `outline-design.md` / `index-panels-design.md` /
+`command-palette-design.md` / `note-index-design.md` /
+`file-tree-incremental-refresh-design.md`）。
 
 ## 6. 风险登记表
 
