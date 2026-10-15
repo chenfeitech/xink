@@ -5,6 +5,7 @@
 pub mod config;
 pub mod datafile;
 pub mod fs;
+pub mod fuzzy;
 pub mod highlight;
 pub mod markdown;
 pub mod media;
