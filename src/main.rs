@@ -14,7 +14,7 @@ use app::Workspace;
 use gpui_kit::component::Root;
 use gpui_kit::component::dock::{ClosePanel, panel_handle, register_panel};
 use gpui_kit::*;
-use ui::{EditorPanel, FilesPanel, OutlinePanel, PreviewPanel};
+use ui::{BacklinkPanel, EditorPanel, FilesPanel, OutlinePanel, PreviewPanel};
 
 /// 注册各类 Panel 的重建工厂。
 ///
@@ -26,6 +26,9 @@ fn register_panels(cx: &mut App) {
     });
     register_panel(cx, "EditorPanel", |_, window, cx| {
         panel_handle(cx.new(|cx| EditorPanel::new(window, cx)))
+    });
+    register_panel(cx, "BacklinkPanel", |_, _, cx| {
+        panel_handle(cx.new(BacklinkPanel::new))
     });
     register_panel(cx, "OutlinePanel", |_, _, cx| {
         panel_handle(cx.new(OutlinePanel::new))

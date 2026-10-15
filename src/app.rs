@@ -14,12 +14,14 @@ use crate::actions::{OpenCommandPalette, OpenSettings, ToggleTheme};
 use std::path::Path;
 
 use crate::core::config::{AppConfig, ThemeMode};
-use crate::core::index::NoteIndex;
+use crate::core::index::{IndexChanged, NoteIndex};
 use crate::core::vault::VaultRegistry;
 use crate::core::{resolve_active, tab_key};
 use crate::state::workspace;
 use crate::ui::outline::OutlineState;
-use crate::ui::{EditorPanel, FilesPanel, OpenTabs, OutlinePanel, PreviewPanel, tabs};
+use crate::ui::{
+    BacklinkPanel, EditorPanel, FilesPanel, OpenTabs, OutlinePanel, PreviewPanel, tabs,
+};
 
 /// 预览调度中心。
 ///
@@ -179,6 +181,7 @@ pub fn rebuild_index(cx: &mut App) {
                     Ok(built) => {
                         println!("[xink] 索引已构建: {} 篇笔记", built.len());
                         *index = built;
+                        cx.emit(IndexChanged);
                     }
                     Err(err) => eprintln!("[xink] 构建索引失败: {err}"),
                 }
@@ -199,6 +202,7 @@ pub fn index_note_saved(path: &Path, cx: &mut App) {
     };
     notes.update(cx, |index, cx| {
         index.reindex_file(path);
+        cx.emit(IndexChanged);
         cx.notify();
     });
 }
@@ -210,6 +214,7 @@ pub fn index_note_removed(path: &Path, cx: &mut App) {
     };
     notes.update(cx, |index, cx| {
         index.remove_file(path);
+        cx.emit(IndexChanged);
         cx.notify();
     });
 }
@@ -380,8 +385,8 @@ pub fn prune_empty_panels(window: &mut Window, cx: &mut App) {
 
 const MAIN_DOCK_ID: &str = "main-dock";
 /// 布局 schema 版本。默认布局结构变更时递增，旧布局将无法恢复并回落默认值。
-/// 递增到 3：默认布局在右侧新增了「大纲」tab，旧布局不再适用。
-const MAIN_DOCK_VERSION: usize = 3;
+/// 递增到 4：默认布局在右侧新增了「大纲」「反链」tab，旧布局不再适用。
+const MAIN_DOCK_VERSION: usize = 4;
 
 pub struct Workspace {
     dock_area: Entity<DockArea>,
@@ -603,13 +608,15 @@ impl Workspace {
         let editor = cx.new(|cx| EditorPanel::new(window, cx));
         let preview = cx.new(|cx| PreviewPanel::new(window, cx));
         let outline = cx.new(OutlinePanel::new);
+        let backlink = cx.new(BacklinkPanel::new);
 
         // 编辑区独占 center：所有笔记标签都开在这里，不会跑到预览去
         let center = DockLayout::tabs().panel_view(panel_handle(editor), cx);
         // 预览与大纲同属右侧 dock：与编辑区职责分离，两者之间用 tab 切换
         let right = DockLayout::tabs()
             .panel_view(panel_handle(preview), cx)
-            .panel_view(panel_handle(outline), cx);
+            .panel_view(panel_handle(outline), cx)
+            .panel_view(panel_handle(backlink), cx);
 
         let left = DockLayout::v_split()
             .child(DockLayout::tabs().panel_view(panel_handle(files), cx), None);

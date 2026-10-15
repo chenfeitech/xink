@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use gpui_kit::EventEmitter;
+
 use crate::core::markdown::{DocFacts, parse_facts};
 use crate::core::vault::{FileNode, Vault};
 
@@ -26,6 +28,12 @@ pub struct IndexedNote {
     /// 解析出来的事实（含原始行号，供跳转）
     pub facts: DocFacts,
 }
+
+/// 索引内容发生变化（构建完成 / 单篇重解析 / 删除）。
+///
+/// 面板订阅它来决定"什么时候重绘"，自己不去轮询。
+#[derive(Debug, Clone, Copy)]
+pub struct IndexChanged;
 
 /// 一条引用（构成反向链接）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -348,6 +356,8 @@ fn collect_markdown(root: &Path, node: &FileNode, out: &mut Vec<PathBuf>) {
         collect_markdown(root, child, out);
     }
 }
+
+impl EventEmitter<IndexChanged> for NoteIndex {}
 
 // 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
