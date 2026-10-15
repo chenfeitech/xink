@@ -3,6 +3,7 @@
 pub mod command;
 pub mod editor;
 pub mod file_tree;
+pub mod outline;
 pub mod preview;
 pub mod settings;
 pub mod tabs;
@@ -11,6 +12,7 @@ pub mod vault_manager;
 pub use command::open_command_palette;
 pub use editor::EditorPanel;
 pub use file_tree::FilesPanel;
+pub use outline::OutlinePanel;
 pub use preview::PreviewPanel;
 pub use settings::open_settings;
 pub use tabs::OpenTabs;

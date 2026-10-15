@@ -18,7 +18,8 @@ use crate::core::index::NoteIndex;
 use crate::core::vault::VaultRegistry;
 use crate::core::{resolve_active, tab_key};
 use crate::state::workspace;
-use crate::ui::{EditorPanel, FilesPanel, OpenTabs, PreviewPanel, tabs};
+use crate::ui::outline::OutlineState;
+use crate::ui::{EditorPanel, FilesPanel, OpenTabs, OutlinePanel, PreviewPanel, tabs};
 
 /// 预览调度中心。
 ///
@@ -91,6 +92,8 @@ pub struct AppState {
     ///
     /// 库的当前路径统一由 `vaults.active_root()` 派生，避免两处状态不一致。
     pub vaults: VaultRegistry,
+    /// 当前笔记的大纲（编辑器的派生状态，见 `docs/outline-design.md`）。
+    pub outline: Entity<OutlineState>,
     /// 全库索引（双链 / 反链 / 标签 / 搜索的共用底座）。
     ///
     /// 是磁盘的派生数据，不落盘：启动与切库时后台重建，
@@ -377,7 +380,8 @@ pub fn prune_empty_panels(window: &mut Window, cx: &mut App) {
 
 const MAIN_DOCK_ID: &str = "main-dock";
 /// 布局 schema 版本。默认布局结构变更时递增，旧布局将无法恢复并回落默认值。
-const MAIN_DOCK_VERSION: usize = 2;
+/// 递增到 3：默认布局在右侧新增了「大纲」tab，旧布局不再适用。
+const MAIN_DOCK_VERSION: usize = 3;
 
 pub struct Workspace {
     dock_area: Entity<DockArea>,
@@ -394,6 +398,7 @@ impl Workspace {
             image: None,
         });
         let notes = cx.new(|_| NoteIndex::new());
+        let outline = cx.new(|_| OutlineState::new());
 
         // 库注册表：必须先确定当前库，再恢复标签（标签要按当前库过滤）。
         //
@@ -416,6 +421,7 @@ impl Workspace {
             // 初值，随后由 apply_theme 按主题模式与系统外观校正
             dark: true,
             vaults,
+            outline,
             notes,
         });
 
@@ -596,11 +602,14 @@ impl Workspace {
         let files = cx.new(|cx| FilesPanel::new(cx));
         let editor = cx.new(|cx| EditorPanel::new(window, cx));
         let preview = cx.new(|cx| PreviewPanel::new(window, cx));
+        let outline = cx.new(OutlinePanel::new);
 
         // 编辑区独占 center：所有笔记标签都开在这里，不会跑到预览去
         let center = DockLayout::tabs().panel_view(panel_handle(editor), cx);
-        // 预览是独立的右侧 dock，与编辑区职责分离
-        let right = DockLayout::tabs().panel_view(panel_handle(preview), cx);
+        // 预览与大纲同属右侧 dock：与编辑区职责分离，两者之间用 tab 切换
+        let right = DockLayout::tabs()
+            .panel_view(panel_handle(preview), cx)
+            .panel_view(panel_handle(outline), cx);
 
         let left = DockLayout::v_split()
             .child(DockLayout::tabs().panel_view(panel_handle(files), cx), None);

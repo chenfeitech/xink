@@ -179,6 +179,14 @@ pub fn close_notes_outside(root: &Path, window: &mut Window, cx: &mut App) {
 ///
 /// 返回是否成功打开（含"激活已有标签"）。
 pub fn open_note(path: PathBuf, window: &mut Window, cx: &mut App) -> bool {
+    open_note_at(path, None, window, cx)
+}
+
+/// 打开笔记并（可选）跳到指定行（0-based），是大纲、搜索等功能的跳转入口。
+///
+/// 与 [`open_note`] 完全同一条路径——包括"命中已打开标签只激活"这条硬规则，
+/// 只是多了一步定位：绝不为了跳转而新建标签或重新读盘。
+pub fn open_note_at(path: PathBuf, line: Option<usize>, window: &mut Window, cx: &mut App) -> bool {
     if !is_editable_text(&path) {
         return false;
     }
@@ -200,6 +208,10 @@ pub fn open_note(path: PathBuf, window: &mut Window, cx: &mut App) -> bool {
     {
         reveal_panel(&dock_area, &panel, window, cx);
         cx.update_global::<AppState, _>(|state, _| state.tabs.activate(&key));
+        // 已打开的标签：只定位，不重建、不重新读盘
+        if let Some(line) = line {
+            goto_line_of(&panel, line, window, cx);
+        }
         persist_open_notes(cx);
         return true;
     }
@@ -240,9 +252,20 @@ pub fn open_note(path: PathBuf, window: &mut Window, cx: &mut App) -> bool {
 
     cx.update_global::<AppState, _>(|state, _| state.tabs.insert(key, &panel));
     reveal_panel(&dock_area, &panel, window, cx);
+    if let Some(line) = line {
+        goto_line_of(&panel, line, window, cx);
+    }
     persist_open_notes(cx);
     sync_placeholder(window, cx);
     true
+}
+
+/// 让刚打开的编辑器跳到指定行。
+///
+/// 新面板是在本次调用里才加到 dock 上的，跳转必须放在
+/// `sync_placeholder` 之前：那时面板已经挂载，光标与滚动才能生效。
+fn goto_line_of(panel: &Entity<EditorPanel>, line: usize, window: &mut Window, cx: &mut App) {
+    panel.update(cx, |editor, cx| editor.goto_line(line, window, cx));
 }
 
 /// 把当前仍打开的标签（顺序 + 活动标签）写入 `open_notes.json`。

@@ -189,6 +189,12 @@ impl EditorPanel {
             doc.update(cx, |doc, cx| doc.set_text(source.as_str(), cx));
         }
 
+        // 大纲跟手：标题一改就重新解析（纯内存操作，成本可忽略）。
+        // 不走索引——索引是"保存之后"的语义，等它更新大纲会慢半拍。
+        if let Some(note) = &self.note {
+            crate::ui::outline::update_outline(note.path(), note.text().as_str(), cx);
+        }
+
         crate::ui::log_slow("refresh_doc", started);
     }
 
@@ -217,6 +223,35 @@ impl EditorPanel {
             }
             cx.notify();
         });
+    }
+
+    /// 跳到指定行（0-based）：光标落行首，并把该行滚进视口。
+    ///
+    /// 大纲点击、搜索结果跳转都走这里。滚动偏移要夹到
+    /// `[-(内容高 - 视口高), 0]`：越界会被框架回弹，表现是"跳过去又弹回来"。
+    pub fn goto_line(&mut self, line: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(note) = &self.note else {
+            return;
+        };
+        let total = note.line_count() as f32;
+        let (line_h, viewport) = {
+            let state = self.editor.read(cx);
+            (state.line_height(), state.input_bounds().size.height)
+        };
+        let Some(line_h) = line_h else {
+            return;
+        };
+
+        let content = line_h * total;
+        let max = (content - viewport).max(px(1.));
+        let row = (line as f32).min((total - 1.).max(0.));
+        let target_y = -(line_h * row).clamp(-max, px(0.));
+
+        self.editor.update(cx, |state, cx| {
+            state.set_cursor_position(Position::new(line as u32, 0), window, cx);
+            state.set_scroll_offset(point(px(0.), target_y), cx);
+        });
+        cx.notify();
     }
 
     /// 让预览面板显示自己的文档。
@@ -339,6 +374,11 @@ impl EditorPanel {
             if let Some(path) = &path {
                 state.tabs.remove(&tab_key(path));
             }
+            // 大纲与预览同源：笔记没了，两个面板都要回到空态
+            state.outline.update(cx, |outline, cx| {
+                outline.clear();
+                cx.notify();
+            });
             // 预览不再有内容
             state.preview.update(cx, |preview, cx| {
                 preview.active_doc = None;
@@ -786,8 +826,13 @@ impl BasePanel for EditorPanel {
         }
         self.activate_preview(cx);
         let Some(path) = self.note.as_ref().map(|note| note.path().to_path_buf()) else {
+            crate::ui::outline::clear_outline(cx);
             return;
         };
+        // 切标签：大纲要跟着换成这一篇
+        if let Some(note) = &self.note {
+            crate::ui::outline::update_outline(&path, note.text().as_str(), cx);
+        }
         let key = tab_key(&path);
         cx.update_global::<AppState, _>(|state, _| state.tabs.activate(&key));
         crate::ui::tabs::persist_open_notes(cx);
