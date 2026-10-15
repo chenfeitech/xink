@@ -495,8 +495,14 @@ impl EditorPanel {
         if !note.is_dirty() {
             return;
         }
+        // 先取路径：save() 需要 &mut note，之后还要用它更新索引
+        let path = note.path().to_path_buf();
         match note.save() {
-            Ok(()) => self.status = "已保存".into(),
+            Ok(()) => {
+                self.status = "已保存".into();
+                // 内容变更不会被监听当作结构变化，必须在这里把索引刷新
+                crate::app::index_note_saved(&path, cx);
+            }
             Err(err) => self.status = format!("保存失败: {err}").into(),
         }
         cx.notify();

@@ -458,9 +458,19 @@ impl FilesPanel {
             panel.update(cx, |editor, cx| editor.handle_external_change(window, cx));
         }
 
-        // 只有新建/删除才重扫整棵树。
+        // 只有新建/删除/重命名才重扫整棵树。
         // 自动保存产生的是内容写入，若也重扫，编辑时会持续卡顿。
         if structure_changed {
+            // 索引的增量更新：新增/改名重解析，删除则剔除
+            // （非笔记文件在 `reindex_file` 内部被跳过）
+            let removed = matches!(event.kind, WatchKind::Removed);
+            for path in &event.paths {
+                if removed {
+                    crate::app::index_note_removed(path, cx);
+                } else {
+                    crate::app::index_note_saved(path, cx);
+                }
+            }
             self.refresh(window, cx);
         }
     }
@@ -960,6 +970,8 @@ impl Render for FilesPanel {
                         // 旧库的标签不再属于当前库，先关掉（这里才有 window 可以移除面板）
                         crate::ui::tabs::close_notes_outside(&root, window, cx);
                         println!("[xink] 切换库: {}", root.display());
+                        // 换库后索引整体作废，后台重建
+                        crate::app::rebuild_index(cx);
                         self.vault = Some(vault);
                         // 换库是一棵新树：不保留旧库的展开状态
                         // 退出图片预览：否则上一个库的图片会留在预览面板里

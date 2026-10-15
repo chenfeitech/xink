@@ -11,7 +11,10 @@ use gpui_kit::component::theme::{Theme, ThemeColor};
 use gpui_kit::*;
 
 use crate::actions::{OpenCommandPalette, OpenSettings, ToggleTheme};
+use std::path::Path;
+
 use crate::core::config::{AppConfig, ThemeMode};
+use crate::core::index::NoteIndex;
 use crate::core::vault::VaultRegistry;
 use crate::core::{resolve_active, tab_key};
 use crate::state::workspace;
@@ -88,6 +91,11 @@ pub struct AppState {
     ///
     /// 库的当前路径统一由 `vaults.active_root()` 派生，避免两处状态不一致。
     pub vaults: VaultRegistry,
+    /// 全库索引（双链 / 反链 / 标签 / 搜索的共用底座）。
+    ///
+    /// 是磁盘的派生数据，不落盘：启动与切库时后台重建，
+    /// 单文件保存与监听事件做增量更新。详见 `docs/note-index-design.md`。
+    pub notes: Entity<NoteIndex>,
 }
 
 impl Global for AppState {}
@@ -143,6 +151,64 @@ pub fn config(cx: &App) -> AppConfig {
     cx.try_global::<AppState>()
         .map(|state| state.config.clone())
         .unwrap_or_default()
+}
+
+/// 后台重建全库索引（启动、切换库时调用）。
+///
+/// 构建是同步 IO（读全库笔记），必须在后台线程做；完成前旧索引继续服务，
+/// 因此大库启动不会被索引拖慢。设计见 `docs/note-index-design.md` §3。
+pub fn rebuild_index(cx: &mut App) {
+    let Some((root, notes)) = cx.try_global::<AppState>().and_then(|state| {
+        state
+            .vaults
+            .active_root()
+            .map(|root| (root, state.notes.clone()))
+    }) else {
+        return;
+    };
+
+    let task = cx.background_spawn(async move { NoteIndex::build(&root) });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        cx.update(|cx| {
+            notes.update(cx, |index, cx| {
+                match result {
+                    Ok(built) => {
+                        println!("[xink] 索引已构建: {} 篇笔记", built.len());
+                        *index = built;
+                    }
+                    Err(err) => eprintln!("[xink] 构建索引失败: {err}"),
+                }
+                cx.notify();
+            });
+        });
+    })
+    .detach();
+}
+
+/// 笔记保存后重解析。
+///
+/// 内容变更只产生 `Modified` 事件、不会触发结构重扫，因此必须由保存处显式挂钩，
+/// 否则改完 `[[双链]]` 与 `#标签` 后索引还是旧的。
+pub fn index_note_saved(path: &Path, cx: &mut App) {
+    let Some(notes) = cx.try_global::<AppState>().map(|s| s.notes.clone()) else {
+        return;
+    };
+    notes.update(cx, |index, cx| {
+        index.reindex_file(path);
+        cx.notify();
+    });
+}
+
+/// 笔记被删除后从索引里剔除
+pub fn index_note_removed(path: &Path, cx: &mut App) {
+    let Some(notes) = cx.try_global::<AppState>().map(|s| s.notes.clone()) else {
+        return;
+    };
+    notes.update(cx, |index, cx| {
+        index.remove_file(path);
+        cx.notify();
+    });
 }
 
 /// 修改配置的**唯一入口**。
@@ -327,6 +393,7 @@ impl Workspace {
             active_doc: None,
             image: None,
         });
+        let notes = cx.new(|_| NoteIndex::new());
 
         // 库注册表：必须先确定当前库，再恢复标签（标签要按当前库过滤）。
         //
@@ -349,10 +416,14 @@ impl Workspace {
             // 初值，随后由 apply_theme 按主题模式与系统外观校正
             dark: true,
             vaults,
+            notes,
         });
 
         // 主题等外观类配置在启动时先应用一次
         apply_theme(Some(window), cx);
+
+        // 索引在后台构建：启动不被大库拖慢（设计 §3）
+        rebuild_index(cx);
 
         match workspace::load_layout() {
             // 布局结构变更过（版本不同）：旧布局不再适用，重建默认布局，
