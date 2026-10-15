@@ -8,7 +8,7 @@ mod ui;
 
 use actions::{
     FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, NewNote,
-    OpenFolder, OpenSettings, RenameItem, Save,
+    OpenFolder, OpenSettings, RenameItem, Save, ToggleTheme,
 };
 use app::Workspace;
 use gpui_kit::component::Root;
@@ -63,6 +63,8 @@ fn main() {
                 KeyBinding::new("cmd-shift-x", FormatStrikethrough, None),
                 KeyBinding::new("cmd-e", FormatInlineCode, None),
                 KeyBinding::new("cmd-k", FormatLink, None),
+                // 切换明暗主题
+                KeyBinding::new("cmd-shift-l", ToggleTheme, None),
             ]);
 
             cx.spawn(async move |cx| {

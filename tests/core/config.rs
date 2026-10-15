@@ -244,6 +244,32 @@ fn font_weight_values_are_valid_css_weights() {
 // 也没被错误地改写成别的值。UI 层（需要 App 上下文）无法单测，故只覆盖到这里。
 
 #[test]
+fn toggling_theme_always_flips_the_appearance() {
+    // 跟随系统时按下切换：切到与当前外观相反的模式，用户一定能看到变化
+    assert_eq!(ThemeMode::System.toggled(true), ThemeMode::Light);
+    assert_eq!(ThemeMode::System.toggled(false), ThemeMode::Dark);
+    // 已明确指定时在两者之间来回
+    assert_eq!(ThemeMode::Light.toggled(false), ThemeMode::Dark);
+    assert_eq!(ThemeMode::Dark.toggled(true), ThemeMode::Light);
+    // 明确模式下 `is_dark` 不参与决定，避免系统外观变化后切换方向反直觉
+    assert_eq!(ThemeMode::Light.toggled(true), ThemeMode::Dark);
+    assert_eq!(ThemeMode::Dark.toggled(false), ThemeMode::Light);
+}
+
+#[test]
+fn toggled_theme_never_falls_back_to_system() {
+    for mode in [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark] {
+        for is_dark in [true, false] {
+            assert_ne!(
+                mode.toggled(is_dark),
+                ThemeMode::System,
+                "切换后应停留在明确模式，否则用户脱离不了「跟随系统」"
+            );
+        }
+    }
+}
+
+#[test]
 fn code_theme_auto_follows_appearance() {
     let dark = resolve_code_theme(AUTO_CODE_THEME, true);
     let light = resolve_code_theme(AUTO_CODE_THEME, false);

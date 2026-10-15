@@ -43,6 +43,22 @@ pub enum ThemeMode {
     Dark,
 }
 
+impl ThemeMode {
+    /// 切换明暗后应进入的模式。
+    ///
+    /// `is_dark` 是"跟随系统"解析后的当前结果：从 System 起手时，
+    /// 第一下切到与当前外观相反的明确模式，之后在 Light / Dark 之间来回，
+    /// 这样用户按一次就能脱离"跟随系统"，且不会出现"按了没变化"。
+    pub fn toggled(self, is_dark: bool) -> ThemeMode {
+        match self {
+            ThemeMode::System if is_dark => ThemeMode::Light,
+            ThemeMode::System => ThemeMode::Dark,
+            ThemeMode::Light => ThemeMode::Dark,
+            ThemeMode::Dark => ThemeMode::Light,
+        }
+    }
+}
+
 /// 界面语言
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

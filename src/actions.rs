@@ -28,6 +28,8 @@ actions!(
         /// 行内代码：包裹选中文本或插入 ` 标记
         FormatInlineCode,
         /// 链接：包裹选中文本或插入 [](url) 占位
-        FormatLink
+        FormatLink,
+        /// 在浅色 / 深色之间切换主题
+        ToggleTheme
     ]
 );
