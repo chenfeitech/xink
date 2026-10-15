@@ -457,3 +457,78 @@ fn empty_document_yields_no_facts() {
     assert!(facts.wiki_links.is_empty());
     assert!(facts.tags.is_empty());
 }
+
+// ── 双链改写（预览可点）──────────────────────────────────────
+//
+// 设计见 docs/wikilink-design.md §4：解析不到就原样保留，
+// 代码块与行内代码内一律不动。
+
+use std::path::PathBuf;
+
+/// 只有这两篇能解析到
+fn resolver(target: &str) -> Option<PathBuf> {
+    match target {
+        "笔记" | "sub/目标" => Some(PathBuf::from(format!("/vault/{target}.md"))),
+        _ => None,
+    }
+}
+
+#[test]
+fn wikilink_becomes_a_markdown_link() {
+    assert_eq!(
+        rewrite_wikilinks("见 [[笔记]] 结束", resolver),
+        "见 [笔记](file:///vault/%E7%AC%94%E8%AE%B0.md) 结束"
+    );
+}
+
+#[test]
+fn alias_is_used_as_the_label() {
+    assert_eq!(
+        rewrite_wikilinks("[[笔记|看这里]]", resolver),
+        "[看这里](file:///vault/%E7%AC%94%E8%AE%B0.md)"
+    );
+}
+
+#[test]
+fn anchor_keeps_the_whole_note_as_target() {
+    // 目标部分仍是 `sub/目标`，锚点只影响展示
+    assert_eq!(
+        rewrite_wikilinks("[[sub/目标#小节]]", resolver),
+        "[sub/目标](file:///vault/sub/%E7%9B%AE%E6%A0%87.md)"
+    );
+}
+
+#[test]
+fn unresolvable_wikilink_is_left_untouched() {
+    let md = "[[不存在]] 与 [[ ]] 与 [[]]";
+    assert_eq!(rewrite_wikilinks(md, resolver), md, "解析不到必须原样返回");
+}
+
+#[test]
+fn code_blocks_and_inline_code_are_not_rewritten() {
+    let fenced = "```\n[[笔记]]\n```\n[[笔记]]\n";
+    assert_eq!(
+        rewrite_wikilinks(fenced, resolver),
+        "```\n[[笔记]]\n```\n[笔记](file:///vault/%E7%AC%94%E8%AE%B0.md)\n"
+    );
+    let inline = "例：`[[笔记]]` 与 [[笔记]]";
+    assert_eq!(
+        rewrite_wikilinks(inline, resolver),
+        "例：`[[笔记]]` 与 [笔记](file:///vault/%E7%AC%94%E8%AE%B0.md)"
+    );
+}
+
+#[test]
+fn multiple_wikilinks_in_one_line() {
+    assert_eq!(
+        rewrite_wikilinks("[[笔记]] 与 [[sub/目标]]", resolver),
+        "[笔记](file:///vault/%E7%AC%94%E8%AE%B0.md) 与 \
+         [sub/目标](file:///vault/sub/%E7%9B%AE%E6%A0%87.md)"
+    );
+}
+
+#[test]
+fn text_without_wikilinks_is_unchanged() {
+    let md = "# 标题\n普通 [链接](a.md) 与 ![图](a.png)\n";
+    assert_eq!(rewrite_wikilinks(md, resolver), md);
+}

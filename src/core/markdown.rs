@@ -677,6 +677,102 @@ fn collect_frontmatter_tags(line: &str, line_no: usize, out: &mut Vec<Tag>) {
     }
 }
 
+/// 把 `[[目标]]` 改写成预览可点的 Markdown 链接。
+///
+/// `resolve` 负责把目标文本解析成笔记路径（由索引提供）；解析不到就**原样保留**，
+/// 免得点开一个并不存在的文件。
+///
+/// 显示文本：`[[目标|别名]]` 用别名，否则用目标本身。
+/// 与 [`parse_facts`] 同一口径：围栏代码块内与行内代码内一律不动。
+pub fn rewrite_wikilinks(md: &str, resolve: impl Fn(&str) -> Option<PathBuf>) -> String {
+    let mut out = String::with_capacity(md.len());
+    let mut fence: Option<String> = None;
+
+    for raw in md.split_inclusive('\n') {
+        let (line, newline) = match raw.strip_suffix('\n') {
+            Some(line) => (line, true),
+            None => (raw, false),
+        };
+
+        if let Some(marker) = fence_marker(line) {
+            match &fence {
+                Some(open) if open == &marker => fence = None,
+                Some(_) => {}
+                None => fence = Some(marker),
+            }
+            out.push_str(raw);
+            continue;
+        }
+        if fence.is_some() {
+            out.push_str(raw);
+            continue;
+        }
+
+        out.push_str(&rewrite_line(line, &resolve));
+        if newline {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// 改写单行里的双链。
+///
+/// 在"抹掉行内代码"的副本上定位，再按同样的字符下标取原文替换：
+/// 代码里的 `[[..]]` 既不会被匹配，也不会破坏原文长度。
+fn rewrite_line(line: &str, resolve: &impl Fn(&str) -> Option<PathBuf>) -> String {
+    // 全程按**字符**下标工作：路径含中文时字节下标会错位
+    let masked: Vec<char> = mask_inline_code(line).chars().collect();
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+
+    while i < chars.len() {
+        // 判定也在 masked 上做：位于行内代码里的 `[[` 已被抹成空格，
+        // 否则会拿它去匹配后面（代码外）的 `]]`，把整段吞掉
+        let is_open = masked[i] == '[' && masked.get(i + 1) == Some(&'[');
+        let end = is_open
+            .then(|| find_wiki_close(&masked, i + 2))
+            .flatten()
+            .map(|close| close + 2);
+
+        let Some(end) = end else {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        };
+
+        let inner: String = chars[i + 2..end - 2].iter().collect();
+        let replacement = parse_wiki_inner(&inner, 0)
+            .and_then(|link| resolve(&link.target))
+            .map(|path| {
+                let label = parse_wiki_inner(&inner, 0)
+                    .and_then(|link| link.alias)
+                    .unwrap_or_else(|| default_wiki_label(&inner));
+                format!("[{}](file://{})", label, encode_path(&path))
+            });
+
+        match replacement {
+            Some(text) => out.push_str(&text),
+            // 解析不到：原样保留，不做任何"看起来能点"的暗示
+            None => out.extend(chars[i..end].iter()),
+        }
+        i = end;
+    }
+    out
+}
+
+/// 从 `from` 起找双链的闭合 `]]`，返回第一个 `]` 的字符下标
+fn find_wiki_close(chars: &[char], from: usize) -> Option<usize> {
+    (from..chars.len().saturating_sub(1)).find(|&ix| chars[ix] == ']' && chars[ix + 1] == ']')
+}
+
+/// 双链的显示文本：没有别名时用目标部分（去掉 `#锚点`）
+fn default_wiki_label(inner: &str) -> String {
+    let head = inner.split('|').next().unwrap_or(inner);
+    head.split('#').next().unwrap_or(head).trim().to_string()
+}
+
 fn find_byte(bytes: &[u8], from: usize, target: u8) -> Option<usize> {
     (from..bytes.len()).find(|&ix| bytes[ix] == target)
 }

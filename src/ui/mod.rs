@@ -1,6 +1,7 @@
 //! 视图层：只负责渲染与交互，业务规则在 core/
 
 pub mod command;
+pub mod completion;
 pub mod editor;
 pub mod file_tree;
 pub mod outline;

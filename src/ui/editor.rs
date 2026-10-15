@@ -19,7 +19,9 @@ use crate::actions::{
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
 use crate::core::config::{DataFileConfig, IndentConfig};
 use crate::core::datafile::{DataKind, Parsed, ValidationError, data_kind};
-use crate::core::markdown::{ImageOptions, resolve_image_urls, sanitize_for_preview};
+use crate::core::markdown::{
+    ImageOptions, resolve_image_urls, rewrite_wikilinks, sanitize_for_preview,
+};
 use crate::core::{Note, tab_key};
 
 pub struct EditorPanel {
@@ -50,9 +52,63 @@ pub struct EditorPanel {
     last_published_version: Option<u64>,
     /// 自己的弱引用，供关闭按钮精确移除本面板
     self_entity: WeakEntity<EditorPanel>,
+    /// 双链补全浮层是否打开：避免每敲一个字符都重复弹一次
+    completion_open: bool,
 }
 
 impl EditorPanel {
+    /// 双链补全浮层是否打开（供 `ui::completion` 回写状态）
+    pub fn set_completion_open(&mut self, open: bool) {
+        self.completion_open = open;
+    }
+
+    /// 把光标前的 `[[…` 替换成 `[[目标]]`，并把焦点收回到编辑区。
+    ///
+    /// 由 `ui::completion` 在用户选定候选后调用。
+    pub fn apply_wikilink(
+        &mut self,
+        start: usize,
+        target: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = format!("[[{target}]]");
+        self.editor.update(cx, |state, cx| {
+            let end = state.cursor();
+            // 起点可能落在文本之外（例如期间删了字），夹一下避免 panic
+            let start = start.min(end).min(state.value().len());
+            state.set_selected_range(start..end, cx);
+            state.replace(&text, window, cx);
+            state.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    /// 光标前刚输入了 `[[`（未闭合、未换行）时弹出补全浮层。
+    fn maybe_complete_wikilink(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.completion_open || self.note.is_none() {
+            return;
+        }
+        let (value, cursor) = {
+            let state = self.editor.read(cx);
+            (state.value().to_string(), state.cursor())
+        };
+        let cursor = cursor.min(value.len());
+        let before = &value[..cursor];
+        // 只认"光标紧贴 `[[`"：中间已有其它字符说明用户在自己写，不打扰
+        let Some(start) = before.rfind("[[") else {
+            return;
+        };
+        if before[start..].len() != 2 {
+            return;
+        }
+        let Some(panel) = self.self_entity.upgrade() else {
+            return;
+        };
+        self.completion_open = true;
+        crate::ui::completion::open_wikilink_completion(panel, start, window, cx);
+    }
+
     /// 空面板，供布局恢复的重建工厂使用。
     ///
     /// 想打开笔记请用 `crate::ui::tabs::open_note`——它是唯一入口，
@@ -114,6 +170,7 @@ impl EditorPanel {
             last_published_path: None,
             last_published_version: None,
             self_entity: self_entity.clone(),
+            completion_open: false,
         };
 
         // 空白页：登记到集中列表，等待被笔记认领或统一清理。
@@ -182,7 +239,7 @@ impl EditorPanel {
         let Some(note) = &self.note else {
             return;
         };
-        let (source, validation) = Self::preview_source(note, opts, &data_cfg);
+        let (source, validation) = Self::preview_source(note, opts, &data_cfg, cx);
         self.validation = validation;
         self.sync_diagnostics(cx);
         if let Some(doc) = &self.doc {
@@ -278,6 +335,7 @@ impl EditorPanel {
         note: &Note,
         opts: ImageOptions,
         data_cfg: &DataFileConfig,
+        cx: &App,
     ) -> (String, Option<ValidationError>) {
         let text = note.text();
         if let Some(kind) = data_kind(note.path()) {
@@ -286,7 +344,11 @@ impl EditorPanel {
         let dir = note.path().parent().unwrap_or(Path::new(""));
         // 先做防御性预处理，避免畸形 Markdown 让预览解析器 panic 导致应用退出
         let safe = sanitize_for_preview(&text);
-        (resolve_image_urls(&safe, dir, opts), None)
+        // `[[双链]]` 在这里变成指向目标笔记的链接：改的只是预览源文副本，
+        // 磁盘上的原文一个字节都不动。点击侧复用既有的 handle_link_click
+        // （库内 .md → open_note），因此仍然只有一个"打开笔记"的出口。
+        let linked = rewrite_wikilinks(&safe, |target| resolve_wikilink(cx, target));
+        (resolve_image_urls(&linked, dir, opts), None)
     }
 
     /// 当前打开的是数据文件时返回其种类
@@ -326,7 +388,7 @@ impl EditorPanel {
                 self.status = format!("已打开 {}", note.path().display()).into();
                 // 每篇笔记一个预览文档，首次解析后切回来就无需再解析
                 let (source, validation) =
-                    Self::preview_source(&note, image_options(cx), &data_cfg);
+                    Self::preview_source(&note, image_options(cx), &data_cfg, cx);
                 self.applied_data_cfg = data_cfg;
                 self.validation = validation;
                 self.doc = Some(cx.new(|cx| TextViewState::markdown(source.as_str(), cx)));
@@ -491,6 +553,8 @@ impl EditorPanel {
             note.set_text(&text);
         }
         self.schedule_save(window, cx);
+        // 光标前刚出现 `[[` 时给候选（只在这一刻弹，后续输入由浮层自己处理）
+        self.maybe_complete_wikilink(window, cx);
         cx.notify();
     }
 
@@ -932,6 +996,14 @@ fn close_editor_tab(weak: WeakEntity<EditorPanel>, window: &mut Window, cx: &mut
 /// - 合法 → 展示格式化结果；非法 → 展示原文并在顶部给出行列与原因；
 /// - 超过 `max_format_bytes` → 跳过格式化，只展示原文并说明原因；
 /// - 格式化结果**只用于预览**，写盘永远用用户原文（见 `core::datafile` 模块文档）。
+/// 用当前索引解析双链目标（预览改写用）。
+///
+/// 索引只读：解析不到时返回 `None`，`rewrite_wikilinks` 会把原文原样留着。
+fn resolve_wikilink(cx: &App, target: &str) -> Option<PathBuf> {
+    let index = cx.try_global::<AppState>()?.notes.clone();
+    index.read(cx).resolve_path(target)
+}
+
 fn data_preview_source(
     text: &str,
     kind: DataKind,

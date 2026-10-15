@@ -255,6 +255,17 @@ impl NoteIndex {
         }
     }
 
+    /// 解析双链目标，只取"唯一命中"；歧义与缺失都当作解析不到。
+    ///
+    /// 预览改写双链时用这个版本：宁可显示成普通文本，
+    /// 也不要让点击落到"猜一个"的笔记上。
+    pub fn resolve_path(&self, target: &str) -> Option<PathBuf> {
+        match self.resolve_wikilink(target) {
+            Resolution::Hit(path) => Some(path),
+            Resolution::Ambiguous(_) | Resolution::Missing => None,
+        }
+    }
+
     /// 所有笔记（全文搜索等按需遍历）
     pub fn notes(&self) -> impl Iterator<Item = &IndexedNote> {
         self.notes.values()
