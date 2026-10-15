@@ -123,6 +123,44 @@ fn offset_to_position_counts_lines_and_columns() {
 }
 
 #[test]
+fn error_position_always_falls_inside_the_text() {
+    // 位置会被换算成编辑区的诊断区间（`sync_diagnostics`）。
+    // 越界的行/列虽然不会 panic（框架侧有 clamp），但波浪线会画到错地方，
+    // 因此这里把"报错位置必须落在文本内"固化下来。
+    let cases = [
+        (DataKind::Json, "{"),
+        (DataKind::Json, "{\"a\": 1,}"),
+        (DataKind::Json, "{\"a\":\n  {\"b\": }]"),
+        (DataKind::Yaml, "a: 1\n b: 2\n"),
+        (DataKind::Yaml, "a: [1, 2\n"),
+        (DataKind::Yaml, "a: 1\n---\nb: 2\n"),
+        (DataKind::Toml, "a = \n[b\n"),
+        (DataKind::Toml, "a = 1\n["),
+    ];
+    for (kind, text) in cases {
+        let parsed = parse(text, kind, 2);
+        let Some(error) = parsed.error() else {
+            panic!("{kind:?} 用例应解析失败: {text:?}");
+        };
+        // 以 `\n` 分行；结尾换行不算额外一行（与 Rope 的行号口径一致）
+        let lines: Vec<&str> = text.split('\n').collect();
+        assert!(
+            error.line < lines.len(),
+            "{kind:?} 报错行 {line} 超出文本行数 {n}: {text:?}",
+            line = error.line,
+            n = lines.len()
+        );
+        let chars = lines[error.line].chars().count();
+        assert!(
+            error.column <= chars,
+            "{kind:?} 报错列 {col} 超出第 {line} 行长度 {chars}: {text:?}",
+            col = error.column,
+            line = error.line
+        );
+    }
+}
+
+#[test]
 fn long_messages_are_truncated() {
     let long: String = "x".repeat(500);
     let short = shorten(&long);
