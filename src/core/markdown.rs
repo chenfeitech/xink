@@ -302,6 +302,385 @@ fn encode_path(path: &Path) -> String {
     out
 }
 
+// ── 文档事实解析 ─────────────────────────────────────────────
+//
+// 设计见 `docs/markdown-facts-design.md`。要点：只提取"文档里有什么"
+// （标题 / 链接 / wikilink / 标签）并带上行号，供大纲、双链、标签与索引共用；
+// 不做渲染，因此不引入 Markdown 解析 crate；代码块与行内代码内的内容一律不算。
+
+/// 一篇笔记里解析出的事实
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+// T6 索引 / T8 大纲 / T9 双链 / T11 标签会用到这批结构与 `parse_facts`。
+// 现阶段只有测试在用，故显式豁免死代码告警——不是"没用上"，是"还没接上"。
+#[allow(dead_code)]
+pub struct DocFacts {
+    /// ATX 标题
+    pub headings: Vec<Heading>,
+    /// 行内链接（含图片链接）
+    pub links: Vec<Link>,
+    /// 双链 `[[...]]`
+    pub wiki_links: Vec<WikiLink>,
+    /// 标签（正文 `#tag` 与 frontmatter 的 `tags:`）
+    pub tags: Vec<Tag>,
+}
+
+/// 标题
+#[derive(Debug, Clone, PartialEq, Eq)]
+// T6 索引 / T8 大纲 / T9 双链 / T11 标签会用到这批结构与 `parse_facts`。
+// 现阶段只有测试在用，故显式豁免死代码告警——不是"没用上"，是"还没接上"。
+#[allow(dead_code)]
+pub struct Heading {
+    /// 1–6
+    pub level: u8,
+    /// 去掉 `#` 与闭合 `#` 后的文本
+    pub text: String,
+    /// 0-based 行号
+    pub line: usize,
+}
+
+/// 行内链接
+#[derive(Debug, Clone, PartialEq, Eq)]
+// T6 索引 / T8 大纲 / T9 双链 / T11 标签会用到这批结构与 `parse_facts`。
+// 现阶段只有测试在用，故显式豁免死代码告警——不是"没用上"，是"还没接上"。
+#[allow(dead_code)]
+pub struct Link {
+    pub target: String,
+    pub text: String,
+    pub line: usize,
+}
+
+/// 双链
+#[derive(Debug, Clone, PartialEq, Eq)]
+// T6 索引 / T8 大纲 / T9 双链 / T11 标签会用到这批结构与 `parse_facts`。
+// 现阶段只有测试在用，故显式豁免死代码告警——不是"没用上"，是"还没接上"。
+#[allow(dead_code)]
+pub struct WikiLink {
+    /// 目标笔记名 / 路径
+    pub target: String,
+    /// `[[目标|别名]]` 里的别名
+    pub alias: Option<String>,
+    /// `[[目标#锚点]]` 里的锚点
+    pub anchor: Option<String>,
+    pub line: usize,
+}
+
+/// 标签（不含前导 `#`）
+#[derive(Debug, Clone, PartialEq, Eq)]
+// T6 索引 / T8 大纲 / T9 双链 / T11 标签会用到这批结构与 `parse_facts`。
+// 现阶段只有测试在用，故显式豁免死代码告警——不是"没用上"，是"还没接上"。
+#[allow(dead_code)]
+pub struct Tag {
+    pub name: String,
+    pub line: usize,
+}
+
+/// 解析一篇笔记的事实。
+///
+/// 逐行扫描，维护两个状态：围栏代码块（``` / ~~~）与 frontmatter。
+/// 行内先抹掉反引号包裹的代码片段，再提取链接、双链与标签。
+// T6 索引 / T8 大纲 / T9 双链 / T11 标签会用到这批结构与 `parse_facts`。
+// 现阶段只有测试在用，故显式豁免死代码告警——不是"没用上"，是"还没接上"。
+#[allow(dead_code)]
+pub fn parse_facts(text: &str) -> DocFacts {
+    let mut facts = DocFacts::default();
+    let mut fence: Option<String> = None;
+    let mut in_frontmatter = false;
+
+    for (line, raw) in text.lines().enumerate() {
+        // frontmatter：只在文件开头，由 `---` 包围
+        if line == 0 {
+            if raw.trim() == "---" {
+                in_frontmatter = true;
+                continue;
+            }
+        } else if in_frontmatter {
+            if raw.trim() == "---" {
+                in_frontmatter = false;
+            } else {
+                collect_frontmatter_tags(raw, line, &mut facts.tags);
+            }
+            continue;
+        }
+
+        // 围栏代码块：块内一律不算事实
+        if let Some(marker) = fence_marker(raw) {
+            match &fence {
+                Some(open) if open == &marker => fence = None,
+                Some(_) => {}
+                None => fence = Some(marker),
+            }
+            continue;
+        }
+        if fence.is_some() {
+            continue;
+        }
+
+        // 标题用原文（标题不可能在行内代码里），其余用抹掉行内代码的副本
+        if let Some(heading) = parse_heading(raw, line) {
+            facts.headings.push(heading);
+        }
+        let masked = mask_inline_code(raw);
+        collect_links(&masked, line, &mut facts.links);
+        collect_wiki_links(&masked, line, &mut facts.wiki_links);
+        collect_tags(&masked, line, &mut facts.tags);
+    }
+
+    facts
+}
+
+/// 行是否开启 / 闭合围栏代码块，返回三字符标记（``` 或 ~~~）
+fn fence_marker(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let head: String = trimmed.chars().take(3).collect();
+    match head.as_str() {
+        "```" | "~~~" => Some(head),
+        _ => None,
+    }
+}
+
+/// 解析 ATX 标题：`#` 后必须有空格，尾部闭合的 `#` 会被去掉
+fn parse_heading(line: &str, line_no: usize) -> Option<Heading> {
+    let trimmed = line.trim_start();
+    let level = trimmed.chars().take_while(|c| *c == '#').count();
+    if level == 0 || level > 6 {
+        return None;
+    }
+    // `#` 是单字节，按字节切分安全
+    let rest = &trimmed[level..];
+    if !rest.is_empty() && !rest.starts_with(' ') {
+        // `#tag` 之类：不是标题（可能是标签）
+        return None;
+    }
+    let text = rest.trim().trim_end_matches('#').trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(Heading {
+        level: level as u8,
+        text: text.to_string(),
+        line: line_no,
+    })
+}
+
+/// 把行内代码（反引号包裹）替换成等长空格，后续扫描就不会误判其中的内容
+fn mask_inline_code(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = chars.clone();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] != '`' {
+            i += 1;
+            continue;
+        }
+        let run = run_length(&chars, i, '`');
+        // 找同样长度的闭合片段
+        let mut j = i + run;
+        let mut closed = false;
+        while j < chars.len() {
+            if chars[j] == '`' {
+                let run2 = run_length(&chars, j, '`');
+                if run2 == run {
+                    for c in out.iter_mut().take(j + run2).skip(i) {
+                        *c = ' ';
+                    }
+                    i = j + run2;
+                    closed = true;
+                    break;
+                }
+                j += run2;
+            } else {
+                j += 1;
+            }
+        }
+        if !closed {
+            // 未闭合：本行剩余部分都当作代码
+            for c in out.iter_mut().skip(i) {
+                *c = ' ';
+            }
+            break;
+        }
+    }
+
+    out.into_iter().collect()
+}
+
+/// 从 `from` 起连续相同字符的个数
+fn run_length(chars: &[char], from: usize, c: char) -> usize {
+    let mut n = 0;
+    while from + n < chars.len() && chars[from + n] == c {
+        n += 1;
+    }
+    n
+}
+
+/// 提取 `[文本](目标)` 与 `![文本](目标)`
+fn collect_links(line: &str, line_no: usize, out: &mut Vec<Link>) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let lb = if bytes[i] == b'[' {
+            Some(i)
+        } else if bytes[i] == b'!' && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            Some(i + 1)
+        } else {
+            None
+        };
+
+        let Some(lb) = lb else {
+            i += 1;
+            continue;
+        };
+        let Some(rb) = find_byte(bytes, lb + 1, b']') else {
+            i += 1;
+            continue;
+        };
+        if rb + 1 >= bytes.len() || bytes[rb + 1] != b'(' {
+            i += 1;
+            continue;
+        }
+        let Some(rp) = find_byte(bytes, rb + 2, b')') else {
+            i += 1;
+            continue;
+        };
+
+        let text = line[lb + 1..rb].trim().to_string();
+        // 目标后面可能带标题：`[a](url "title")` → 取第一段
+        let target = line[rb + 2..rp]
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .trim_matches(|c| c == '<' || c == '>')
+            .to_string();
+        if !target.is_empty() {
+            out.push(Link {
+                target,
+                text,
+                line: line_no,
+            });
+        }
+        i = rp + 1;
+    }
+}
+
+/// 提取 `[[目标]]` / `[[目标|别名]]` / `[[目标#锚点]]`
+fn collect_wiki_links(line: &str, line_no: usize, out: &mut Vec<WikiLink>) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] != b'[' || bytes[i + 1] != b'[' {
+            i += 1;
+            continue;
+        }
+        let Some(end) = line.get(i + 2..).and_then(|rest| rest.find("]]")) else {
+            break;
+        };
+        let end = end + i + 2;
+        if let Some(link) = parse_wiki_inner(&line[i + 2..end], line_no) {
+            out.push(link);
+        }
+        i = end + 2;
+    }
+}
+
+/// 解析双链内部：`目标` / `目标|别名` / `目标#锚点` / `目标#锚点|别名`
+fn parse_wiki_inner(inner: &str, line_no: usize) -> Option<WikiLink> {
+    let (left, alias) = match inner.split_once('|') {
+        Some((left, alias)) => (left, Some(alias.trim().to_string())),
+        None => (inner, None),
+    };
+    let alias = alias.filter(|text| !text.is_empty());
+
+    let (target, anchor) = match left.split_once('#') {
+        Some((target, anchor)) => (target, Some(anchor.trim().to_string())),
+        None => (left, None),
+    };
+    let anchor = anchor.filter(|text| !text.is_empty());
+
+    let target = target.trim().to_string();
+    if target.is_empty() {
+        return None;
+    }
+    Some(WikiLink {
+        target,
+        alias,
+        anchor,
+        line: line_no,
+    })
+}
+
+/// 提取正文里的 `#tag`
+fn collect_tags(line: &str, line_no: usize, out: &mut Vec<Tag>) {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '#' || !tag_can_start_at(&chars, i) {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let mut end = start;
+        while end < chars.len() && is_tag_char(chars[end]) {
+            end += 1;
+        }
+        // 纯数字不是标签（避免把序号、编号当标签）；含中文/字母的照常收
+        let all_digits = chars[start..end].iter().all(|c| c.is_ascii_digit());
+        if end > start && !all_digits {
+            out.push(Tag {
+                name: chars[start..end].iter().collect(),
+                line: line_no,
+            });
+        }
+        i = end;
+    }
+}
+
+/// `#` 前必须是行首或"分隔性"字符：否则 `a.md#top`、`#fff` 这类会被误判
+fn tag_can_start_at(chars: &[char], i: usize) -> bool {
+    let Some(prev) = i.checked_sub(1).map(|ix| chars[ix]) else {
+        return true;
+    };
+    if prev.is_whitespace() {
+        return true;
+    }
+    matches!(
+        prev,
+        '(' | '[' | '{' | '"' | '\'' | '（' | '“' | '，' | '：' | '、'
+    )
+}
+
+/// 标签可用字符：字母数字、下划线、连字符、斜杠（嵌套标签）与非 ASCII（中文）
+fn is_tag_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '/') || !c.is_ascii()
+}
+
+/// 提取 frontmatter 里的 `tags: [a, b]` / `tags: a, b`
+fn collect_frontmatter_tags(line: &str, line_no: usize, out: &mut Vec<Tag>) {
+    let Some(rest) = line
+        .trim_start()
+        .strip_prefix("tags:")
+        .or_else(|| line.trim_start().strip_prefix("tag:"))
+    else {
+        return;
+    };
+    let rest = rest.trim().trim_matches(|c| c == '[' || c == ']');
+    for part in rest.split(',') {
+        let name = part
+            .trim()
+            .trim_matches(|c| c == '"' || c == '\'' || c == '#');
+        if !name.is_empty() {
+            out.push(Tag {
+                name: name.to_string(),
+                line: line_no,
+            });
+        }
+    }
+}
+
+fn find_byte(bytes: &[u8], from: usize, target: u8) -> Option<usize> {
+    (from..bytes.len()).find(|&ix| bytes[ix] == target)
+}
+
 // 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
 #[path = "../../tests/core/markdown.rs"]

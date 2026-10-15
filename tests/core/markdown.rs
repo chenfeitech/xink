@@ -337,3 +337,123 @@ fn markdown_link_wraps_paths_with_spaces() {
         "![a b](<assets/a b.png>)"
     );
 }
+
+// ── 文档事实解析 ──────────────────────────────────────────────
+//
+// 设计见 docs/markdown-facts-design.md。行号一律 0-based。
+
+fn tags_of(text: &str) -> Vec<String> {
+    parse_facts(text)
+        .tags
+        .into_iter()
+        .map(|tag| tag.name)
+        .collect()
+}
+
+#[test]
+fn parses_atx_headings_with_levels_and_lines() {
+    let facts = parse_facts("# 一级\n正文\n### 三级\n");
+    assert_eq!(facts.headings.len(), 2);
+    assert_eq!(facts.headings[0].level, 1);
+    assert_eq!(facts.headings[0].text, "一级");
+    assert_eq!(facts.headings[0].line, 0);
+    assert_eq!(facts.headings[1].level, 3);
+    assert_eq!(facts.headings[1].line, 2);
+}
+
+#[test]
+fn heading_ignores_closing_hashes_and_hash_without_space() {
+    let facts = parse_facts("## 标题 ##\n#标签\n");
+    assert_eq!(facts.headings.len(), 1, "`#标签` 是标签不是标题");
+    assert_eq!(facts.headings[0].text, "标题");
+    assert_eq!(tags_of("#标签"), vec!["标签"]);
+}
+
+#[test]
+fn code_fence_content_is_not_a_fact() {
+    let md = "```\n# 不是标题\n[[不是双链]]\n#不是标签\n```\n# 是标题\n";
+    let facts = parse_facts(md);
+    assert_eq!(facts.headings.len(), 1);
+    assert_eq!(facts.headings[0].text, "是标题");
+    assert!(facts.wiki_links.is_empty(), "围栏内的双链不算");
+    assert!(facts.tags.is_empty(), "围栏内的标签不算");
+}
+
+#[test]
+fn unclosed_code_fence_swallows_the_rest() {
+    let facts = parse_facts("正文\n```\n# 标题\n");
+    assert!(facts.headings.is_empty(), "未闭合围栏之后都不算正文");
+}
+
+#[test]
+fn inline_code_is_not_a_tag_or_link() {
+    let facts = parse_facts("用 `#标签` 与 `[不是链接](x)` 举例\n");
+    assert!(facts.tags.is_empty());
+    assert!(facts.links.is_empty());
+}
+
+#[test]
+fn collects_links_including_images_and_titles() {
+    let facts = parse_facts("[文档](notes/a.md) ![图](img/a.png) [带标题](b.md \"标题\")\n");
+    let targets: Vec<&str> = facts.links.iter().map(|l| l.target.as_str()).collect();
+    assert_eq!(targets, vec!["notes/a.md", "img/a.png", "b.md"]);
+    assert_eq!(facts.links[0].text, "文档");
+    assert_eq!(facts.links[2].text, "带标题");
+}
+
+#[test]
+fn wikilink_supports_alias_and_anchor() {
+    let facts = parse_facts("[[目标]] 与 [[目标2|别名]] 与 [[目标3#小节|显示]]\n");
+    assert_eq!(facts.wiki_links.len(), 3);
+    assert_eq!(facts.wiki_links[0].target, "目标");
+    assert_eq!(facts.wiki_links[0].alias, None);
+    assert_eq!(facts.wiki_links[1].alias.as_deref(), Some("别名"));
+    assert_eq!(facts.wiki_links[2].target, "目标3");
+    assert_eq!(facts.wiki_links[2].anchor.as_deref(), Some("小节"));
+    assert_eq!(facts.wiki_links[2].alias.as_deref(), Some("显示"));
+}
+
+#[test]
+fn empty_wikilink_is_dropped() {
+    let facts = parse_facts("[[]] 与 [[ ]] 与 [[有效]]\n");
+    assert_eq!(facts.wiki_links.len(), 1);
+    assert_eq!(facts.wiki_links[0].target, "有效");
+}
+
+#[test]
+fn tags_require_a_leading_separator_and_non_digit() {
+    assert_eq!(tags_of("#想法 正文 #todo"), vec!["想法", "todo"]);
+    assert!(tags_of("#123").is_empty(), "纯数字不是标签");
+    assert!(
+        tags_of("见 [文档](a.md#小节)").is_empty(),
+        "URL 锚点不是标签"
+    );
+    assert!(tags_of("（#中文标签）").is_empty() == false);
+}
+
+#[test]
+fn tags_support_chinese_nesting_and_hyphen() {
+    assert_eq!(
+        tags_of("#笔记/想法 #rust-lang #2026计划"),
+        vec!["笔记/想法", "rust-lang", "2026计划"]
+    );
+}
+
+#[test]
+fn frontmatter_tags_are_collected() {
+    let md = "---\ntitle: x\ntags: [想法, todo]\n---\n正文 #补充\n";
+    let facts = parse_facts(md);
+    let names: Vec<String> = facts.tags.iter().map(|t| t.name.clone()).collect();
+    assert_eq!(names, vec!["想法", "todo", "补充"]);
+    // frontmatter 内的 `title` 不是标签，正文标题才从第 4 行起算
+    assert_eq!(facts.tags[2].line, 4);
+}
+
+#[test]
+fn empty_document_yields_no_facts() {
+    let facts = parse_facts("");
+    assert!(facts.headings.is_empty());
+    assert!(facts.links.is_empty());
+    assert!(facts.wiki_links.is_empty());
+    assert!(facts.tags.is_empty());
+}
