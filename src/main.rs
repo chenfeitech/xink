@@ -8,7 +8,7 @@ mod ui;
 
 use actions::{
     FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, NewNote,
-    OpenFolder, OpenSettings, RenameItem, Save, ToggleTheme,
+    OpenCommandPalette, OpenFolder, OpenSettings, RenameItem, Save, ToggleTheme,
 };
 use app::Workspace;
 use gpui_kit::component::Root;
@@ -65,6 +65,8 @@ fn main() {
                 KeyBinding::new("cmd-k", FormatLink, None),
                 // 切换明暗主题
                 KeyBinding::new("cmd-shift-l", ToggleTheme, None),
+                // 命令面板（与 Obsidian 一致）
+                KeyBinding::new("cmd-p", OpenCommandPalette, None),
             ]);
 
             cx.spawn(async move |cx| {

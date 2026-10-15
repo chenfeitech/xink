@@ -1,5 +1,6 @@
 //! 视图层：只负责渲染与交互，业务规则在 core/
 
+pub mod command;
 pub mod editor;
 pub mod file_tree;
 pub mod preview;
@@ -7,6 +8,7 @@ pub mod settings;
 pub mod tabs;
 pub mod vault_manager;
 
+pub use command::open_command_palette;
 pub use editor::EditorPanel;
 pub use file_tree::FilesPanel;
 pub use preview::PreviewPanel;

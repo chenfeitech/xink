@@ -10,7 +10,7 @@ use gpui_kit::component::dock::{
 use gpui_kit::component::theme::{Theme, ThemeColor};
 use gpui_kit::*;
 
-use crate::actions::{OpenSettings, ToggleTheme};
+use crate::actions::{OpenCommandPalette, OpenSettings, ToggleTheme};
 use crate::core::config::{AppConfig, ThemeMode};
 use crate::core::vault::VaultRegistry;
 use crate::core::{resolve_active, tab_key};
@@ -511,6 +511,16 @@ impl Workspace {
         update_config(cx, |cfg| cfg.basic.theme = next);
     }
 
+    /// 打开命令面板（Cmd+P），由根元素上的 `.on_action` 触发。
+    fn open_command_palette(
+        &mut self,
+        _: &OpenCommandPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::ui::open_command_palette(window, cx);
+    }
+
     fn reset_default_layout(dock_area: &Entity<DockArea>, window: &mut Window, cx: &mut App) {
         let files = cx.new(|cx| FilesPanel::new(cx));
         let editor = cx.new(|cx| EditorPanel::new(window, cx));
@@ -554,5 +564,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open_settings))
             // 切换主题（Cmd-Shift-L）：同上，注册在根元素上以覆盖任意焦点位置
             .on_action(cx.listener(Self::toggle_theme))
+            // 命令面板（Cmd-P）：同理必须注册在根元素，否则焦点在编辑区时收不到
+            .on_action(cx.listener(Self::open_command_palette))
     }
 }

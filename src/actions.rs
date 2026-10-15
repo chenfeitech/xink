@@ -30,6 +30,8 @@ actions!(
         /// 链接：包裹选中文本或插入 [](url) 占位
         FormatLink,
         /// 在浅色 / 深色之间切换主题
-        ToggleTheme
+        ToggleTheme,
+        /// 打开命令面板：按文件名搜索并打开笔记
+        OpenCommandPalette
     ]
 );
