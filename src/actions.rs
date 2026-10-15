@@ -18,6 +18,16 @@ actions!(
         /// 保存当前笔记
         Save,
         /// 打开设置
-        OpenSettings
+        OpenSettings,
+        /// 加粗：包裹选中文本或插入 ** 标记
+        FormatBold,
+        /// 斜体：包裹选中文本或插入 * 标记
+        FormatItalic,
+        /// 删除线：包裹选中文本或插入 ~~ 标记
+        FormatStrikethrough,
+        /// 行内代码：包裹选中文本或插入 ` 标记
+        FormatInlineCode,
+        /// 链接：包裹选中文本或插入 [](url) 占位
+        FormatLink
     ]
 );

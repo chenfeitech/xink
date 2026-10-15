@@ -15,10 +15,11 @@ fn data_cfg() -> DataFileConfig {
 }
 
 /// 全部操作的清单。新增操作时需同步补充，否则下述遍历类用例会漏掉新操作。
-const ALL: [Format; 13] = [
+const ALL: [Format; 14] = [
     Format::Bold,
     Format::Italic,
     Format::Strikethrough,
+    Format::InlineCode,
     Format::Heading,
     Format::BulletList,
     Format::NumberedList,
@@ -38,6 +39,7 @@ fn format_label_names_every_operation() {
     assert_eq!(Format::Bold.label(), "加粗");
     assert_eq!(Format::Italic.label(), "斜体");
     assert_eq!(Format::Strikethrough.label(), "删除线");
+    assert_eq!(Format::InlineCode.label(), "行内代码");
     assert_eq!(Format::Heading.label(), "标题");
     assert_eq!(Format::BulletList.label(), "无序列表");
     assert_eq!(Format::NumberedList.label(), "有序列表");
@@ -145,6 +147,13 @@ fn inline_operations_wrap_selection_with_matching_markers() {
         }
     );
     assert_eq!(
+        Format::InlineCode.insertion(),
+        Insertion::Surround {
+            before: "`",
+            after: "`"
+        }
+    );
+    assert_eq!(
         Format::Link.insertion(),
         Insertion::Surround {
             before: "[",
@@ -179,6 +188,7 @@ fn wrapping_selected_text_produces_expected_markdown() {
         (Format::Bold, "重点", "**重点**"),
         (Format::Italic, "强调", "*强调*"),
         (Format::Strikethrough, "作废", "~~作废~~"),
+        (Format::InlineCode, "cargo build", "`cargo build`"),
         (Format::Link, "官网", "[官网](url)"),
         (Format::Image, "截图", "![截图](url)"),
     ];
@@ -244,6 +254,37 @@ fn table_template_has_header_separator_and_data_row() {
         lines[2]
     );
     assert_eq!(lines[0].matches('|').count(), 3, "模板应为两列（3 个竖线）");
+}
+
+// ── 快捷键：Action 映射（工具栏提示与键位绑定的唯一来源） ─────
+
+#[test]
+fn inline_operations_map_to_a_distinct_shortcut_action() {
+    let with_shortcut = [
+        Format::Bold,
+        Format::Italic,
+        Format::Strikethrough,
+        Format::InlineCode,
+        Format::Link,
+    ];
+    let mut names = HashSet::new();
+    for cmd in with_shortcut {
+        let Some(action) = cmd.action() else {
+            panic!("{cmd:?} 应有对应的快捷键 Action");
+        };
+        assert!(
+            names.insert(action.name()),
+            "{cmd:?} 与其它操作共用了同一个 Action，工具栏提示会串"
+        );
+    }
+    for cmd in ALL {
+        if !with_shortcut.contains(&cmd) {
+            assert!(
+                cmd.action().is_none(),
+                "{cmd:?} 没有绑定快捷键，不应声明 Action"
+            );
+        }
+    }
 }
 
 // ── 防御：任何操作都必须有可插入的内容 ──────────────────────

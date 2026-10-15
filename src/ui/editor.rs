@@ -13,7 +13,9 @@ use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size};
 use gpui_kit::*;
 
-use crate::actions::Save;
+use crate::actions::{
+    FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, Save,
+};
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
 use crate::core::config::{DataFileConfig, IndentConfig};
 use crate::core::datafile::{DataKind, Parsed, ValidationError, data_kind};
@@ -578,6 +580,12 @@ impl EditorPanel {
                 cx,
             ))
             .child(Self::toolbar_button(
+                "fmt-inline-code",
+                "行内代码：包裹选中文本，或插入 ` 标记",
+                Format::InlineCode,
+                cx,
+            ))
+            .child(Self::toolbar_button(
                 "fmt-heading",
                 "标题：插入 # 标题行",
                 Format::Heading,
@@ -692,6 +700,7 @@ impl EditorPanel {
     ///
     /// 图标使用内联 SVG（见 `format_icon`）；按钮不显示文字标签，
     /// 功能说明完全由悬停提示（tooltip）承担，从而保持工具栏紧凑。
+    /// 有快捷键的操作用 `tooltip_with_action`，让提示里直接带上键位。
     fn toolbar_button(
         id: &'static str,
         tooltip: &'static str,
@@ -699,14 +708,19 @@ impl EditorPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let icon_size = crate::app::config(cx).basic.icon_size;
-        Button::new(id)
+        let button = Button::new(id)
             .small()
             .ghost()
-            .icon(format_icon(cmd).with_size(Size::Size(px(icon_size as f32))))
-            .tooltip(tooltip)
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.apply_format(cmd, window, cx);
-            }))
+            .icon(format_icon(cmd).with_size(Size::Size(px(icon_size as f32))));
+
+        let button = match cmd.action() {
+            Some(action) => button.tooltip_with_action(tooltip, action, None),
+            None => button.tooltip(tooltip),
+        };
+
+        button.on_click(cx.listener(move |this, _, window, cx| {
+            this.apply_format(cmd, window, cx);
+        }))
     }
 
     /// 把常用的 Markdown 片段插入到编辑区光标处（或包裹选中文本）。
@@ -714,6 +728,11 @@ impl EditorPanel {
         let Some(_) = &self.note else {
             return;
         };
+        // 数据文件不提供 Markdown 工具栏，快捷键同理要挡住：
+        // 往 JSON/YAML 里插 `**` 只会把文件写坏，且校验会立刻报错
+        if self.data_kind().is_some() {
+            return;
+        }
         self.editor.update(cx, |state, cx| match cmd.insertion() {
             Insertion::Surround { before, after } => surround(state, window, cx, before, after),
             Insertion::Block(text) => block(state, window, cx, text),
@@ -974,7 +993,24 @@ impl Render for EditorPanel {
             .size_full()
             .flex()
             .flex_col()
-            .on_action(cx.listener(Self::save));
+            .on_action(cx.listener(Self::save))
+            // Markdown 行内格式快捷键：与工具栏按钮共用 `apply_format`，
+            // 不再写第二套插入逻辑（Action → 操作的映射见 `Format::action`）
+            .on_action(cx.listener(|this, _: &FormatBold, window, cx| {
+                this.apply_format(Format::Bold, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FormatItalic, window, cx| {
+                this.apply_format(Format::Italic, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FormatStrikethrough, window, cx| {
+                this.apply_format(Format::Strikethrough, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FormatInlineCode, window, cx| {
+                this.apply_format(Format::InlineCode, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FormatLink, window, cx| {
+                this.apply_format(Format::Link, window, cx)
+            }));
 
         // 仅在打开笔记时显示辅助编辑工具栏
         if self.note.is_some() {
@@ -1001,6 +1037,7 @@ enum Format {
     Bold,
     Italic,
     Strikethrough,
+    InlineCode,
     Heading,
     BulletList,
     NumberedList,
@@ -1020,6 +1057,7 @@ impl Format {
             Format::Bold => "加粗",
             Format::Italic => "斜体",
             Format::Strikethrough => "删除线",
+            Format::InlineCode => "行内代码",
             Format::Heading => "标题",
             Format::BulletList => "无序列表",
             Format::NumberedList => "有序列表",
@@ -1051,6 +1089,10 @@ impl Format {
                 before: "~~",
                 after: "~~",
             },
+            Format::InlineCode => Insertion::Surround {
+                before: "`",
+                after: "`",
+            },
             Format::Link => Insertion::Surround {
                 before: "[",
                 after: "](url)",
@@ -1073,6 +1115,21 @@ impl Format {
                 before: "| 列1 | 列2 |\n| --- | --- |\n| ",
                 after: " |     |\n",
             },
+        }
+    }
+
+    /// 该操作对应的应用级 Action，没有快捷键的操作返回 `None`。
+    ///
+    /// 工具栏按钮拿它去渲染快捷键提示（框架直接从键位表反查，
+    /// 因此提示永远不会与实际绑定脱节）；键位本身在 `main.rs` 注册。
+    fn action(&self) -> Option<&'static dyn Action> {
+        match self {
+            Format::Bold => Some(&FormatBold),
+            Format::Italic => Some(&FormatItalic),
+            Format::Strikethrough => Some(&FormatStrikethrough),
+            Format::InlineCode => Some(&FormatInlineCode),
+            Format::Link => Some(&FormatLink),
+            _ => None,
         }
     }
 }
@@ -1108,6 +1165,9 @@ fn format_icon_svg(cmd: Format) -> &'static str {
         }
         Format::Strikethrough => {
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4H9a3 3 0 0 0-2.83 4"/><path d="M14 12a4 4 0 0 1 0 8H6"/><line x1="4" y1="12" x2="20" y2="12"/></svg>"#
+        }
+        Format::InlineCode => {
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9-2 3 2 3"/><path d="m14 9 2 3-2 3"/></svg>"#
         }
         Format::Heading => {
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v16"/><path d="M18 4v16"/><path d="M6 12h12"/></svg>"#

@@ -6,7 +6,10 @@ mod core;
 mod state;
 mod ui;
 
-use actions::{NewNote, OpenFolder, OpenSettings, RenameItem, Save};
+use actions::{
+    FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, NewNote,
+    OpenFolder, OpenSettings, RenameItem, Save,
+};
 use app::Workspace;
 use gpui_kit::component::Root;
 use gpui_kit::component::dock::{ClosePanel, panel_handle, register_panel};
@@ -53,6 +56,13 @@ fn main() {
                 KeyBinding::new("f2", RenameItem, Some("FilesPanel")),
                 // 打开设置（与 Obsidian 一致）
                 KeyBinding::new("cmd-,", OpenSettings, None),
+                // Markdown 行内格式（与 Obsidian 一致）；键位来源见
+                // `ui::editor::Format::action`（工具栏提示复用同一批 Action）
+                KeyBinding::new("cmd-b", FormatBold, None),
+                KeyBinding::new("cmd-i", FormatItalic, None),
+                KeyBinding::new("cmd-shift-x", FormatStrikethrough, None),
+                KeyBinding::new("cmd-e", FormatInlineCode, None),
+                KeyBinding::new("cmd-k", FormatLink, None),
             ]);
 
             cx.spawn(async move |cx| {
