@@ -39,6 +39,14 @@ impl WikilinkCompletion {
         cx: &mut Context<Self>,
     ) -> Self {
         let state = cx.new(|cx| CommandState::new(window, cx));
+        // 兜底复位：点遮罩关闭不会走 `on_cancel`，编辑区的 `completion_open`
+        // 会永远卡在 true，之后就再也弹不出来。实体一释放就复位。
+        cx.on_release(|this: &mut Self, cx| {
+            this.editor
+                .update(cx, |editor, _| editor.set_completion_open(false));
+        })
+        .detach();
+
         let mut this = Self {
             state,
             editor,
@@ -151,12 +159,17 @@ pub fn open_wikilink_completion(
     window: &mut Window,
     cx: &mut App,
 ) {
+    // 浮层实体只建一次：dialog 的 build 闭包每次重绘都会重放，
+    // 在里面 `cx.new` 会让候选列表与查询在每次重绘后被重置，既选不中也打不了字。
+    let view = cx.new(|cx| WikilinkCompletion::new(editor, start, window, cx));
+
     Root::update(window, cx, |root, window, cx| {
         root.open_dialog(
             move |dialog, window, cx| {
-                let editor = editor.clone();
-                let view = cx.new(|cx| WikilinkCompletion::new(editor, start, window, cx));
+                // 与命令面板同理：焦点在每帧的 build 里给，不能放到 open_dialog
+                // 之后（同帧两个"已聚焦"节点 → 框架 a11y 断言崩溃）。
                 view.update(cx, |palette, cx| palette.focus(window, cx));
+                let view = view.clone();
                 dialog
                     .w(px(480.))
                     .margin_top(px(80.))

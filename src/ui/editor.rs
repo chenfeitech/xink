@@ -290,22 +290,34 @@ impl EditorPanel {
         let Some(note) = &self.note else {
             return;
         };
-        let total = note.line_count() as f32;
+        let total = note.line_count();
         let (line_h, viewport) = {
             let state = self.editor.read(cx);
             (state.line_height(), state.input_bounds().size.height)
         };
-        let Some(line_h) = line_h else {
-            return;
-        };
 
-        let content = line_h * total;
-        let max = (content - viewport).max(px(1.));
-        let row = (line as f32).min((total - 1.).max(0.));
-        let target_y = -(line_h * row).clamp(-max, px(0.));
-
+        // 光标位置不依赖布局，先落下去。
+        //
+        // 以前这行排在行高检查之后，而 `line_height()` 是
+        // `last_layout.map(...)`——首次布局前恒为 None，于是函数直接 return，
+        // 光标和滚动一个都没动，表现就是"点了大纲没反应"。
         self.editor.update(cx, |state, cx| {
             state.set_cursor_position(Position::new(line as u32, 0), window, cx);
+        });
+
+        // 滚动量要按行高算，布局没就绪就算不出来。调用方
+        // （`tabs::goto_line_of`）会等本帧绘制完成后再补一次。
+        let Some(line_h) = line_h else {
+            cx.notify();
+            return;
+        };
+        if viewport <= px(0.) {
+            cx.notify();
+            return;
+        }
+
+        let target_y = scroll_offset_for_line(line, total, line_h, viewport);
+        self.editor.update(cx, |state, cx| {
             state.set_scroll_offset(point(px(0.), target_y), cx);
         });
         cx.notify();
@@ -1399,6 +1411,30 @@ fn image_options(cx: &App) -> ImageOptions {
         display: cfg.preview.image_display,
         width_percent: cfg.preview.image_width_percent,
     }
+}
+
+/// 计算"让第 `line` 行（0-based）滚到视口顶部"所需的纵向滚动量。
+///
+/// 返回值恒为**非正数**（内容向上滚），且不小于 `-(content - viewport)`：
+/// 结尾几行滚不到顶部，也不能让视口越过文档底部。
+///
+/// **坑**：`-(line_h * row).clamp(-max, px(0.))` 是错的。`line_h * row`
+/// 是正数，会被 `clamp` 的上界 0 压成 0，再取负得 `-0`，滚动量永远归零
+/// （表现就是"点了大纲，编辑区纹丝不动"）。必须**先取负再 clamp**。
+fn scroll_offset_for_line(
+    line: usize,
+    total_lines: usize,
+    line_height: Pixels,
+    viewport: Pixels,
+) -> Pixels {
+    let content = line_height * total_lines as f32;
+    if content <= viewport {
+        // 内容不足一屏：没有可滚动的空间
+        return px(0.);
+    }
+    let max = content - viewport;
+    let row = (line as f32).min((total_lines as f32 - 1.).max(0.));
+    (-(line_height * row)).clamp(-max, px(0.))
 }
 
 // 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`

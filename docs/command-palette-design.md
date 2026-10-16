@@ -34,6 +34,8 @@
 | 用 `Root::open_dialog(build)` 打开，`Dialog` 作为容器 | `gpui-component-0.6.4/src/root.rs:297`；`Workspace::render` 已渲染 `render_dialog_layer`（`src/app.rs:528`），不渲染这一层则浮层永远不出现 |
 | `Command` 自带键盘导航与 `escape/enter/up/down` 绑定 | `command/state.rs:62-70` 注册绑定、`state.rs:822` 设置 `.key_context("Command")`；`gpui_kit::init(cx)` 会调到 `gpui_component::init`（`gpui-kit-0.6.4/src/lib.rs:156-161`），本应用在 `main.rs:43` 已调用 |
 | 关闭走 `Root::update(window, cx, |root, …| root.close_dialog(...))` | `root.rs:333`；`Root::update` 的取窗口根视图方式见 `root.rs:156` |
+| 视图实体必须在 `open_dialog` **外面**创建一次 | `root.rs:262`：build 闭包**每次重绘都会重放**；而子视图重绘会把祖先 `Workspace` 一起标脏（`window.rs:2137` 的 `mark_view_dirty`），在闭包里 `cx.new` 等于"每敲一个键换一个面板实例"，输入内容与选中项被清空 |
+| 聚焦要在 `open_dialog` **之后**调用 | `root.rs:310` 打开时先把焦点收进 dialog 自己的句柄，之前聚焦会被覆盖 |
 
 **否决方案**
 

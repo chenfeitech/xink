@@ -260,12 +260,21 @@ pub fn open_note_at(path: PathBuf, line: Option<usize>, window: &mut Window, cx:
     true
 }
 
-/// 让刚打开的编辑器跳到指定行。
+/// 让编辑器跳到指定行。
 ///
-/// 新面板是在本次调用里才加到 dock 上的，跳转必须放在
-/// `sync_placeholder` 之前：那时面板已经挂载，光标与滚动才能生效。
+/// 跳转必须放在 `sync_placeholder` 之前：那时面板已经挂载。
+///
+/// 但要跳两次：新面板（或刚被切到前台的面板）在本次调用里还没完成布局，
+/// 而 `EditorState::line_height()` 的语义是"首次布局前返回 None"
+/// （`input/base/state.rs:2820`）——拿不到行高就算不出滚动量，只能先落光标。
+/// 因此等本帧绘制完成（布局就绪）后再补一次，把滚动位置真正滚到位。
+/// 第二次是幂等的：同样的光标与滚动量，不会跳偏。
 fn goto_line_of(panel: &Entity<EditorPanel>, line: usize, window: &mut Window, cx: &mut App) {
+    let panel = panel.clone();
     panel.update(cx, |editor, cx| editor.goto_line(line, window, cx));
+    window.defer(cx, move |window, cx| {
+        panel.update(cx, |editor, cx| editor.goto_line(line, window, cx));
+    });
 }
 
 /// 把当前仍打开的标签（顺序 + 活动标签）写入 `open_notes.json`。

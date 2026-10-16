@@ -7,7 +7,7 @@ use gpui_kit::base::TextViewState;
 use gpui_kit::component::dock::{
     DockArea, DockEvent, DockLayout, DockPlacement, DockSkin, panel_handle,
 };
-use gpui_kit::component::theme::{Theme, ThemeColor};
+use gpui_kit::component::theme::{Theme, ThemeMode as KitThemeMode};
 use gpui_kit::*;
 
 use crate::actions::{OpenCommandPalette, OpenSearch, OpenSettings, ToggleTheme};
@@ -19,9 +19,7 @@ use crate::core::vault::VaultRegistry;
 use crate::core::{resolve_active, tab_key};
 use crate::state::workspace;
 use crate::ui::outline::OutlineState;
-use crate::ui::{
-    BacklinkPanel, EditorPanel, FilesPanel, OpenTabs, OutlinePanel, PreviewPanel, TagsPanel, tabs,
-};
+use crate::ui::{EditorPanel, FilesPanel, OpenTabs, PreviewPanel, RailState, tabs};
 
 /// 预览调度中心。
 ///
@@ -101,6 +99,11 @@ pub struct AppState {
     /// 是磁盘的派生数据，不落盘：启动与切库时后台重建，
     /// 单文件保存与监听事件做增量更新。详见 `docs/note-index-design.md`。
     pub notes: Entity<NoteIndex>,
+    /// 最右侧按钮条的状态：当前展开哪个抽屉（大纲 / 反链 / 标签）。
+    ///
+    /// 抽屉本身是瞬时 UI、不落盘，这里只记"按钮高亮"，
+    /// 由 `ui::drawer` 在关闭时清回 None。见 `docs/right-rail-drawer-design.md`。
+    pub rail: Entity<RailState>,
 }
 
 impl Global for AppState {}
@@ -227,19 +230,39 @@ pub fn update_config(cx: &mut App, f: impl FnOnce(&mut AppConfig)) {
     if cx.try_global::<AppState>().is_none() {
         return;
     }
-    cx.update_global::<AppState, _>(|state, cx| {
+    cx.update_global::<AppState, _>(|state, _cx| {
         f(&mut state.config);
         state.config.sanitize();
         if let Err(err) = state.config.save() {
             eprintln!("[xink] 保存配置失败: {err:?}");
         }
-        apply_theme(None, cx);
-        // 让所有窗口重绘，新配置立刻可见
-        cx.refresh_windows();
     });
+
+    // `apply_theme` 必须等上面的租借结束再调。
+    //
+    // `update_global` 是"租借"语义：`App::lease_global` 会先把 AppState 从
+    // globals 表里 **remove**（gpui app.rs:2147），闭包跑完才 insert 回去。
+    // 因此在闭包里 `cx.try_global::<AppState>()` 恒为 None，`apply_theme` 会
+    // 退化成 `ThemeMode::System`——用户选的浅色/深色被系统外观顶掉，表现就是
+    // "切换了没反应"；连带 `AppState.dark` 也写不进去（同样判空失败），
+    // 于是 `toggle_theme` 拿着过期的 dark 继续算，越切越乱。
+    apply_theme(None, cx);
+    // 让所有窗口重绘，新配置立刻可见
+    cx.refresh_windows();
 }
 
 /// 应用主题配置：System 跟随系统外观，Light / Dark 强制切换。
+///
+/// **必须走 [`Theme::change`]**，不能只改 `Theme::global_mut(cx).colors`：
+/// 后者只覆盖 component 层的色表，`theme.mode` 仍是旧值（`is_dark()` 分叉出的
+/// 背景/输入背景就还是另一套明暗），Base 层 `gpui_base::Theme` 也不会同步
+/// （框架在 `Theme::global_mut` 的文档里明确要求改完跑 `sync_base`），
+/// 字体与 TextView 默认样式同样不刷新。实测结果是"浅底 + 深色主题的浅色前景"：
+/// 文字看不见、图标像消失了一样。
+///
+/// 另一个坑：**不要在 `cx.update_global::<AppState, _>(…)` 的闭包里调用本函数。**
+/// `update_global` 是租借语义（global 会被移出表），闭包内 `try_global` 恒为 None，
+/// 主题模式会静默退化成 System。见 [`update_config`] 里的说明。
 pub fn apply_theme(window: Option<&mut Window>, cx: &mut App) {
     let mode = cx
         .try_global::<AppState>()
@@ -253,6 +276,7 @@ pub fn apply_theme(window: Option<&mut Window>, cx: &mut App) {
                 .as_ref()
                 .map(|w| w.appearance())
                 .unwrap_or_else(|| cx.window_appearance());
+            // 内部就是 `Theme::change(appearance, …)`
             Theme::sync_system_appearance(window, cx);
             matches!(
                 appearance,
@@ -260,14 +284,19 @@ pub fn apply_theme(window: Option<&mut Window>, cx: &mut App) {
             )
         }
         ThemeMode::Light => {
-            Theme::global_mut(cx).colors = *ThemeColor::light();
+            Theme::change(KitThemeMode::Light, window, cx);
             false
         }
         ThemeMode::Dark => {
-            Theme::global_mut(cx).colors = *ThemeColor::dark();
+            Theme::change(KitThemeMode::Dark, window, cx);
             true
         }
     };
+
+    // 抽屉要上下撑满整个界面：`Placement::Right` 的顶边取自
+    // `theme.sheet.margin_top`，默认是标题栏高度（`sheet.rs:144`）。
+    // 每次 `Theme::change` 之后都要重新压成 0，否则会被主题配置覆盖回去。
+    Theme::global_mut(cx).sheet.margin_top = px(0.);
 
     // 记录解析结果：代码块高亮主题等需要"当前是否深色"。
     //
@@ -385,8 +414,9 @@ pub fn prune_empty_panels(window: &mut Window, cx: &mut App) {
 
 const MAIN_DOCK_ID: &str = "main-dock";
 /// 布局 schema 版本。默认布局结构变更时递增，旧布局将无法恢复并回落默认值。
-/// 递增到 5：默认布局在右侧新增了「大纲」「反链」「标签」tab，旧布局不再适用。
-const MAIN_DOCK_VERSION: usize = 5;
+/// 递增到 6：右侧 dock 只保留「预览」，大纲 / 反链 / 标签改为最右侧按钮条 +
+/// 抽屉，旧布局不再适用。详见 `docs/right-rail-drawer-design.md`。
+const MAIN_DOCK_VERSION: usize = 6;
 
 pub struct Workspace {
     dock_area: Entity<DockArea>,
@@ -404,6 +434,7 @@ impl Workspace {
         });
         let notes = cx.new(|_| NoteIndex::new());
         let outline = cx.new(|_| OutlineState::new());
+        let rail = cx.new(|_| RailState::new());
 
         // 库注册表：必须先确定当前库，再恢复标签（标签要按当前库过滤）。
         //
@@ -428,6 +459,7 @@ impl Workspace {
             vaults,
             outline,
             notes,
+            rail,
         });
 
         // 主题等外观类配置在启动时先应用一次
@@ -612,18 +644,12 @@ impl Workspace {
         let files = cx.new(|cx| FilesPanel::new(cx));
         let editor = cx.new(|cx| EditorPanel::new(window, cx));
         let preview = cx.new(|cx| PreviewPanel::new(window, cx));
-        let outline = cx.new(OutlinePanel::new);
-        let backlink = cx.new(BacklinkPanel::new);
-        let tags = cx.new(TagsPanel::new);
 
         // 编辑区独占 center：所有笔记标签都开在这里，不会跑到预览去
         let center = DockLayout::tabs().panel_view(panel_handle(editor), cx);
-        // 预览与大纲同属右侧 dock：与编辑区职责分离，两者之间用 tab 切换
-        let right = DockLayout::tabs()
-            .panel_view(panel_handle(preview), cx)
-            .panel_view(panel_handle(outline), cx)
-            .panel_view(panel_handle(backlink), cx)
-            .panel_view(panel_handle(tags), cx);
+        // 右侧 dock 只放预览：大纲 / 反链 / 标签已改为最右侧按钮条 + 抽屉
+        // （`docs/right-rail-drawer-design.md`）
+        let right = DockLayout::tabs().panel_view(panel_handle(preview), cx);
 
         let left = DockLayout::v_split()
             .child(DockLayout::tabs().panel_view(panel_handle(files), cx), None);
@@ -643,6 +669,10 @@ impl Render for Workspace {
         let sheet_layer = gpui_kit::component::Root::render_sheet_layer(window, cx);
         let dialog_layer = gpui_kit::component::Root::render_dialog_layer(window, cx);
         let notification_layer = gpui_kit::component::Root::render_notification_layer(window, cx);
+        // 最右侧按钮条（大纲 / 反链 / 标签）
+        let rail = cx
+            .try_global::<AppState>()
+            .map(|state| state.rail.clone().into_any_element());
 
         div()
             .id("workspace")
@@ -652,6 +682,10 @@ impl Render for Workspace {
             .flex_col()
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
             .children(sheet_layer)
+            // 按钮条放在 sheet 之后、dialog 之前：抽屉打开时它仍可点（切换/收起），
+            // 而命令面板等模态打开时会被盖住——正是模态该有的语义。
+            // 它是绝对定位的浮层，不占布局宽度。
+            .children(rail)
             .children(dialog_layer)
             .children(notification_layer)
             // 打开设置（Cmd-,）：必须在渲染阶段注册，动作由子面板冒泡至此

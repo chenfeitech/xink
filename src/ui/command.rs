@@ -278,11 +278,24 @@ fn highlighted_label(label: &str, hits: &[usize], cx: &App) -> Div {
 /// 通过 `Root::open_dialog` 挂到窗口的 dialog 层——`Workspace::render`
 /// 已经渲染了 `render_dialog_layer`，不渲染这一层浮层就不会出现。
 pub fn open_command_palette(window: &mut Window, cx: &mut App) {
+    // 视图必须在 `open_dialog` **之外** 创建一次。
+    //
+    // `Root::render_dialog_layer`（gpui-component root.rs:262）每次重绘都会重放
+    // build 闭包，而子视图的重绘会把祖先 `Workspace` 一起标脏——在闭包里
+    // `cx.new` 等于"每敲一个键就换一个面板实例"，输入内容与选中项被清空，
+    // 表现就是"能弹出来但打不了字"。
+    let view = cx.new(|cx| CommandPalette::new(window, cx));
+
     Root::update(window, cx, |root, window, cx| {
         root.open_dialog(
             move |dialog, window, cx| {
-                let view = cx.new(|cx| CommandPalette::new(window, cx));
+                // 焦点必须在这里（每帧）给：`Root::open_dialog` 打开时先把焦点收进
+                // dialog 自己的句柄，若在打开之后再调一次 focus，同一帧里就会出现
+                // 两个"已聚焦"的焦点节点，命中框架的 a11y 断言
+                // （`div.rs:2329` → `a11y.rs:529`：set_focus called more than once）。
+                // 已聚焦时 `Window::focus` 直接返回，不会打断输入。
                 view.update(cx, |palette, cx| palette.focus(window, cx));
+                let view = view.clone();
                 dialog
                     .w(px(PALETTE_WIDTH))
                     .margin_top(px(MARGIN_TOP))

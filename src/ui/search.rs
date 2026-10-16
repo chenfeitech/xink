@@ -33,6 +33,20 @@ pub struct SearchView {
 impl SearchView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索笔记内容…"));
+        // 订阅只能挂一次：写在 `render` 里会每帧多挂一个，
+        // 于是同一次输入被处理 N 次（N 随重绘次数增长）。
+        cx.subscribe_in(
+            &input,
+            window,
+            move |this: &mut Self, _, ev: &InputEvent, window, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    let query = this.input.read(cx).value().to_string();
+                    this.run_search(query, window, cx);
+                }
+            },
+        )
+        .detach();
+
         Self {
             input,
             hits: Vec::new(),
@@ -82,20 +96,7 @@ impl SearchView {
 }
 
 impl Render for SearchView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let input = self.input.clone();
-        cx.subscribe_in(
-            &input,
-            window,
-            move |this: &mut Self, _, ev: &InputEvent, window, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    let query = this.input.read(cx).value().to_string();
-                    this.run_search(query, window, cx);
-                }
-            },
-        )
-        .detach();
-
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
         let hits: Vec<(PathBuf, usize, String)> = self
             .hits
@@ -167,11 +168,17 @@ impl Render for SearchView {
 
 /// 打开全文搜索面板（Cmd+Shift+F）
 pub fn open_search(window: &mut Window, cx: &mut App) {
+    // 同命令面板：视图只能创建一次（`Root::render_dialog_layer` 每次重绘都会
+    // 重放 build 闭包），否则输入框会被不断重建，打进去的字留不下来。
+    let view = cx.new(|cx| SearchView::new(window, cx));
+
     Root::update(window, cx, |root, window, cx| {
         root.open_dialog(
             move |dialog, window, cx| {
-                let view = cx.new(|cx| SearchView::new(window, cx));
+                // 与命令面板同理：焦点在每帧的 build 里给；放到 open_dialog 之后
+                // 会同帧出现两个"已聚焦"节点，触发框架的 a11y 断言。
                 view.update(cx, |view, cx| view.focus(window, cx));
+                let view = view.clone();
                 dialog
                     .w(px(560.))
                     .h(px(480.))

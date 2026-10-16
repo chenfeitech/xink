@@ -2,9 +2,10 @@
 // 其中的 gpui `test` 宏会遮蔽内置 `#[test]` 属性，导致宏展开递归。
 use super::{
     DataFileConfig, DataKind, Format, Insertion, data_preview_source, format_icon_svg,
-    is_line_start,
+    is_line_start, scroll_offset_for_line,
 };
 use crate::core::datafile::{DEFAULT_INDENT, DEFAULT_MAX_FORMAT_BYTES};
+use gpui_kit::px;
 use std::collections::HashSet;
 
 fn data_cfg() -> DataFileConfig {
@@ -361,4 +362,43 @@ fn data_preview_handles_toml() {
 
     assert!(error.is_none());
     assert!(source.starts_with("```toml\n"), "{source:?}");
+}
+
+// ── 跳转滚动量 ─────────────────────────────────────────────
+//
+// 真实场景回归：一篇 394 行、行高 22px、视口 935.5px 的笔记，
+// 点大纲第 319 行。曾经算出 `-0px`（clamp 方向写反），编辑区纹丝不动。
+
+#[test]
+fn scroll_offset_scrolls_the_target_line_to_top() {
+    // content = 22 × 394 = 8668，可滚范围 8668 − 935.5 = 7732.5
+    let offset = scroll_offset_for_line(319, 394, px(22.), px(935.5));
+
+    assert_eq!(
+        offset,
+        px(-7018.),
+        "22 × 319 = 7018，向上滚 7018px: {offset:?}"
+    );
+}
+
+#[test]
+fn scroll_offset_is_zero_for_the_first_line() {
+    let offset = scroll_offset_for_line(0, 394, px(22.), px(935.5));
+
+    assert_eq!(offset, px(0.), "首行本来就在顶部: {offset:?}");
+}
+
+#[test]
+fn scroll_offset_never_scrolls_past_the_document_end() {
+    // 最后一行也滚不到顶部：最多只能滚到 content − viewport
+    let offset = scroll_offset_for_line(393, 394, px(22.), px(935.5));
+
+    assert_eq!(offset, px(-7732.5), "结尾处被可滚范围夹住: {offset:?}");
+}
+
+#[test]
+fn scroll_offset_is_zero_when_content_fits_the_viewport() {
+    let offset = scroll_offset_for_line(9, 10, px(22.), px(1000.));
+
+    assert_eq!(offset, px(0.), "不足一屏没有可滚空间: {offset:?}");
 }
