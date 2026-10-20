@@ -21,10 +21,9 @@ use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::*;
 
 use crate::core::config::{
-    AUTO_CODE_THEME, AppConfig, ColorScheme, FontWeight, ImageDisplay, Language, LinkOpen,
-    PreviewDensity, ThemeMode,
+    AppConfig, ColorScheme, FontWeight, ImageDisplay, Language, LinkOpen, PreviewDensity, ThemeMode,
 };
-use crate::core::highlight::theme_names;
+use crate::core::theme::PRESET_THEMES;
 
 // ── 分类 ──────────────────────────────────────────────────────
 
@@ -298,6 +297,23 @@ fn all_fields() -> Vec<SettingField> {
             ),
             Some("界面文案尚未本地化"),
             None,
+        ),
+        choice_field(
+            "highlight.theme",
+            "高亮主题",
+            "编辑区与预览区共用的语法配色，切换后两端同时生效",
+            Basic,
+            "外观",
+            None,
+            FieldKind::Choice,
+            || {
+                PRESET_THEMES
+                    .iter()
+                    .map(|name| ((*name).to_string(), (*name).to_string()))
+                    .collect()
+            },
+            |c| c.highlight.theme.clone(),
+            |c, v| c.highlight.theme = v,
         ),
         // ── 基本 · 目录树 ──
         number_field(
@@ -588,22 +604,9 @@ fn all_fields() -> Vec<SettingField> {
             |c, v| c.editor.data_file.max_format_bytes = v as usize,
         ),
         // ── 预览 · 渲染 ──
-        choice_field(
-            "preview.code_theme",
-            "代码块主题",
-            "预览区代码高亮配色；「跟随主题」会随明暗自动切换（syntect 主题）",
-            Preview,
-            "渲染",
-            None,
-            FieldKind::Choice,
-            || {
-                let mut options = vec![(AUTO_CODE_THEME.to_string(), "跟随主题".to_string())];
-                options.extend(theme_names().into_iter().map(|n| (n.clone(), n)));
-                options
-            },
-            |c| c.preview.code_theme.clone(),
-            |c, v| c.preview.code_theme = v,
-        ),
+        // 旧设置项 `preview.code_theme` 已从界面移除：语法配色统一由
+        // `highlight.theme`（基本 · 外观）控制。配置里的旧值在启动时被
+        // `sanitize_highlight` 迁移一次（见 `core::theme::migrate_code_theme`）。
         with_meta(
             choice_field(
                 "preview.image_display",

@@ -132,7 +132,7 @@
 | `font.size` | `f32` / `14` | 排版 → 字号 | `preview.rs:183` | ✅ |
 | `font.line_height` | `f32` / `1.5` | 排版 → 行高 | `preview.rs:184` | ✅ |
 | `font.weight` | `FontWeight` / `Regular` | 预览区字体 → 字重 | `preview.rs`（预览根容器） | ✅ 已接线（2026-10-09 P1）：渲染加 `.font_weight`，设置界面补"预览字重"入口 |
-| `code_theme` | `String` / `auto` | 渲染 → 代码主题 | `preview.rs`（渲染时解析） | ✅ 已接线且**跟随明暗**：`auto` 按 `app::is_dark()` 解析为浅/深色主题，设置界面新增"跟随主题"选项 |
+| ~~`code_theme`~~ | ~~`String` / `auto`~~ | ~~渲染 → 代码主题~~ | — | ⛔ **已下线**（2026-10-20）：语法配色统一到 `highlight.theme`（见 `editor/unified-highlight-config-design.md`）；旧值经 `preview.legacy_code_theme` 迁移一次后丢弃 |
 | `image_display` | `ImageDisplay` / `FitWidth` | 渲染 → 图片显示 | `markdown.rs`（预处理改写） | ✅ 已接线（选项为"适应宽度 / 不显示"；原"原始尺寸"因框架限制移除） |
 | `image_width_percent` | `u32` 20–100 / `100` | 渲染 → 图片宽度 | `markdown.rs`（写入 `<img style>`） | ✅ 已接线 |
 | `link_open` | `LinkOpen` / `InApp` | 渲染 → 链接打开 | `preview.rs`（`on_link_click`） | ✅ 已接线（含点击图片打开预览） |

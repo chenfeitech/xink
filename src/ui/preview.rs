@@ -14,8 +14,8 @@ use gpui_kit::*;
 use crate::app::{
     ActiveDocChanged, AppState, EditorScrolled, PreviewImageChanged, PreviewScrolled,
 };
-use crate::core::config::{LinkOpen, PreviewDensity, resolve_code_theme};
-use crate::core::highlight::highlight_with_theme;
+use crate::core::config::{LinkOpen, PreviewDensity};
+use crate::core::highlight::{SpanStyle, highlight};
 use crate::core::markdown::path_from_file_url;
 use crate::core::media::is_image_path;
 
@@ -251,9 +251,9 @@ impl Render for PreviewPanel {
                 .child("没有打开的笔记");
         };
 
-        // 代码块主题：`auto` 表示跟随当前明暗（浅色主题下不再用深色高亮）。
-        // 解析逻辑在配置层（纯函数，有单测覆盖）。
-        let code_theme = resolve_code_theme(&cfg.preview.code_theme, crate::app::is_dark(cx));
+        // 代码块配色与编辑区同源：统一预置主题 + 当前明暗（不再走旧的 syntect 主题名）
+        let highlight_theme = cfg.highlight.theme.clone();
+        let dark = crate::app::is_dark(cx);
         let font = cfg.preview.font.clone();
 
         let density = cfg.preview.density;
@@ -314,17 +314,9 @@ impl Render for PreviewPanel {
                             // 代码块可能没有标注语言
                             let lang = block.lang();
                             let lang = lang.as_ref().map(|s| s.as_ref()).unwrap_or("");
-                            highlight_with_theme(lang, block.code().as_ref(), &code_theme)
+                            highlight(lang, block.code().as_ref(), &highlight_theme, dark)
                                 .into_iter()
-                                .map(|(range, color)| {
-                                    (
-                                        range,
-                                        HighlightStyle {
-                                            color: Some(color),
-                                            ..Default::default()
-                                        },
-                                    )
-                                })
+                                .map(|(range, style)| (range, to_highlight_style(style)))
                                 .collect()
                         })
                         .on_link_click(|url, _event, window, cx| {
@@ -335,6 +327,36 @@ impl Render for PreviewPanel {
 
         crate::ui::log_slow("PreviewPanel::render", started);
         view
+    }
+}
+
+/// 领域层的片段样式 → gpui 的 `HighlightStyle`
+///
+/// 以前只带颜色，粗体 / 斜体 / 下划线被丢掉了；现在统一主题里写了什么，
+/// 预览区就呈现什么（与编辑区同一份来源）。
+fn to_highlight_style(style: SpanStyle) -> HighlightStyle {
+    HighlightStyle {
+        color: style.color,
+        font_weight: if style.bold {
+            Some(gpui_kit::FontWeight::BOLD)
+        } else {
+            None
+        },
+        font_style: if style.italic {
+            Some(FontStyle::Italic)
+        } else {
+            None
+        },
+        underline: if style.underline {
+            Some(UnderlineStyle {
+                thickness: px(1.),
+                color: None,
+                wavy: false,
+            })
+        } else {
+            None
+        },
+        ..Default::default()
     }
 }
 

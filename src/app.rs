@@ -298,6 +298,22 @@ pub fn apply_theme(window: Option<&mut Window>, cx: &mut App) {
     // 每次 `Theme::change` 之后都要重新压成 0，否则会被主题配置覆盖回去。
     Theme::global_mut(cx).sheet.margin_top = px(0.);
 
+    // 高亮主题：编辑区与预览区共用同一份预置主题。
+    //
+    // 必须放在 `Theme::change` **之后**：它会把 `highlight_theme` 重置回框架默认，
+    // 跟上面 `sheet.margin_top` 是同一个坑。
+    // 未命中（主题名写错 / 资源损坏）时保持框架默认，不覆盖。
+    let theme_name = cx
+        .try_global::<AppState>()
+        .map(|state| state.config.highlight.theme.clone())
+        .unwrap_or_default();
+    if let Some(highlight) = crate::ui::theme::highlight_theme(
+        crate::core::theme::normalize_theme_name(&theme_name),
+        dark,
+    ) {
+        Theme::global_mut(cx).highlight_theme = highlight;
+    }
+
     // 记录解析结果：代码块高亮主题等需要"当前是否深色"。
     //
     // 必须判空：本函数也会被"系统外观变化"等窗口事件调用，而那些事件可能早于

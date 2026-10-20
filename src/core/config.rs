@@ -12,23 +12,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use crate::core::highlight::default_theme;
-
-/// `preview.code_theme` 的特殊取值：跟随当前明暗主题
-/// （浅色主题用浅色高亮、深色主题用深色高亮），由渲染时解析成具体主题名。
-pub const AUTO_CODE_THEME: &str = "auto";
-
-/// 解析代码块高亮主题：`auto` 跟随明暗，其余取值原样返回。
-///
-/// 抽成纯函数是为了可测——"改了配置会用什么主题"属于配置语义，
-/// 若写在渲染代码里就只能靠肉眼验收。
-pub fn resolve_code_theme(code_theme: &str, is_dark: bool) -> String {
-    if code_theme == AUTO_CODE_THEME {
-        default_theme(is_dark).to_string()
-    } else {
-        code_theme.to_string()
-    }
-}
+use crate::core::theme;
 use crate::state::workspace::config_path;
 
 // ── 枚举型配置项 ──────────────────────────────────────────────
@@ -213,8 +197,12 @@ impl Default for DataFileConfig {
 #[serde(default)]
 pub struct PreviewConfig {
     pub font: FontConfig,
-    /// 代码块高亮主题（syntect 主题名）
-    pub code_theme: String,
+    /// 旧版本的 `code_theme`（syntect 主题名）
+    ///
+    /// 仅用于反序列化时捕获旧配置并迁移一次（见 `sanitize_highlight`）；
+    /// 用 `skip_serializing` 保证写回配置文件时不再出现。
+    #[serde(default, skip_serializing)]
+    pub legacy_code_theme: Option<String>,
     pub image_display: ImageDisplay,
     /// 图片显示宽度占预览区宽度的百分比（20–100）
     pub image_width_percent: u32,
@@ -314,6 +302,29 @@ impl PreviewDensity {
     }
 }
 
+/// 高亮配置：编辑区与预览区**共用**
+///
+/// 以前两端各有一套配色：编辑区吃框架内嵌主题、预览区吃 `preview.code_theme`
+/// 指名的 syntect 主题，改一边另一边不动。现在统一从这里取，见
+/// `docs/editor/unified-highlight-config-design.md`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HighlightConfig {
+    /// 预置主题名（见 [`crate::core::theme::PRESET_THEMES`]）
+    ///
+    /// 明暗不由这里决定：每个预置主题自带 dark / light 两个变体，
+    /// 切换界面明暗时自动取对应变体。
+    pub theme: String,
+}
+
+impl Default for HighlightConfig {
+    fn default() -> Self {
+        Self {
+            theme: theme::DEFAULT_THEME.into(),
+        }
+    }
+}
+
 /// 完整应用配置
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -321,6 +332,7 @@ pub struct AppConfig {
     pub basic: BasicConfig,
     pub editor: EditorConfig,
     pub preview: PreviewConfig,
+    pub highlight: HighlightConfig,
 }
 
 // ── 默认值 ────────────────────────────────────────────────────
@@ -407,8 +419,7 @@ impl Default for PreviewConfig {
     fn default() -> Self {
         Self {
             font: FontConfig::body(),
-            // 默认跟随明暗：浅色主题下代码块不再固定用深色高亮
-            code_theme: AUTO_CODE_THEME.into(),
+            legacy_code_theme: None,
             density: PreviewDensity::default(),
             image_display: ImageDisplay::default(),
             // 100% = 占满预览区宽度（与框架默认行为一致）
@@ -484,9 +495,22 @@ impl AppConfig {
         if matches!(self.preview.image_display, ImageDisplay::Legacy) {
             self.preview.image_display = ImageDisplay::FitWidth;
         }
-        if self.preview.code_theme.trim().is_empty() {
-            self.preview.code_theme = PreviewConfig::default().code_theme;
+        self.sanitize_highlight();
+    }
+
+    /// 高亮主题的规范化与旧配置迁移
+    ///
+    /// 迁移只跑一次：把旧的 `preview.code_theme`（syntect 主题名）换成预置主题后，
+    /// 就把旧字段复位成默认值。否则用户改了新的 `highlight.theme`，
+    /// 下次启动又会被旧值覆盖回去。
+    fn sanitize_highlight(&mut self) {
+        // 迁移只跑一次：旧字段被 `take()` 掉后写回配置时不会再出现，
+        // 否则用户改了新的 `highlight.theme`，下次启动又被旧值覆盖回去。
+        if let Some(legacy) = self.preview.legacy_code_theme.take() {
+            self.highlight.theme = theme::migrate_code_theme(&legacy).into();
         }
+        // 手改配置写了不存在的主题名时退回默认，避免两端整片不着色
+        self.highlight.theme = theme::normalize_theme_name(&self.highlight.theme).into();
     }
 
     // ── 持久化 ────────────────────────────────────────────────

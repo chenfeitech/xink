@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use crate::core::datafile::is_data_file;
+use crate::core::datafile::{data_kind, is_data_file};
 use crate::core::note::is_markdown;
 
 /// 能否在编辑器里打开：Markdown 笔记 + 数据文件（JSON / YAML / TOML）
@@ -104,6 +104,25 @@ pub fn file_kind(path: &Path, is_dir: bool) -> FileKind {
         // 未识别的扩展名按设计决策归入 Other，与"普通文件"统一呈现
         _ => FileKind::Other,
     }
+}
+
+/// 编辑区 `set_highlighter` 的语言名
+///
+/// 只返回**已启用 feature** 的语言：json / yaml / toml / markdown。
+/// 传未注册的名字（或大小写不对，如 "Markdown"）时，框架只打一条
+/// `tracing::warn` 就静默退化成纯文本，不报错也不提示——所以宁可返回
+/// `"text"` 也不要去猜，猜错的表现是"看起来什么都没发生"，极难排查。
+///
+/// 数据文件的语言名复用 [`crate::core::datafile::DataKind::lang`]，
+/// 避免"预览围栏标签"和"编辑区高亮"两处各写一份扩展名列表而漂移。
+pub fn editor_language(path: &Path) -> &'static str {
+    if let Some(kind) = data_kind(path) {
+        return kind.lang();
+    }
+    if is_markdown(path) {
+        return "markdown";
+    }
+    "text"
 }
 
 // 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`

@@ -13,6 +13,7 @@ pub mod search;
 pub mod settings;
 pub mod tabs;
 pub mod tags;
+pub mod theme;
 pub mod vault_manager;
 
 pub use backlink::BacklinkPanel;

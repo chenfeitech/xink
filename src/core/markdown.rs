@@ -5,6 +5,7 @@
 //! 必须由应用自己补全成可加载的 URL。
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
@@ -781,6 +782,181 @@ fn default_wiki_label(inner: &str) -> String {
 
 fn find_byte(bytes: &[u8], from: usize, target: u8) -> Option<usize> {
     (from..bytes.len()).find(|&ix| bytes[ix] == target)
+}
+
+// ── 编辑区装饰 ────────────────────────────────────────────────
+//
+// 编辑区的 Markdown 是"源码全可见 + 加视觉样式"（不做 Obsidian 那种隐藏标记），
+// 所以装饰只负责把行首标记弱化、把链接标出来，让结构一眼可辨。
+
+/// 编辑区装饰的片段类型
+///
+/// 只描述"哪段字节该是什么语义"，**不含具体颜色**：颜色由 UI 层按主题决定，
+/// 领域层不引用 gpui 的类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpanKind {
+    /// ATX 标题的 `#` 标记：淡化
+    HeadingMarker,
+    /// 列表符号（`-` / `*` / `+` / `1.` / `1)`）：淡化
+    ListMarker,
+    /// 块引用 `>`：上色
+    QuoteMarker,
+    /// `[文字](url)` 里的"文字"：下划线
+    LinkText,
+}
+
+/// 一个待装饰的 **UTF-8 字节**范围
+///
+/// 用字节而非字符偏移：编辑控件的装饰接口就是字节范围，避免来回换算。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecorationSpan {
+    pub range: Range<usize>,
+    pub kind: SpanKind,
+}
+
+/// 扫描 Markdown，产出编辑区装饰所需的字节范围
+///
+/// 围栏 / frontmatter 的判据与 [`parse_facts`] 共用（见 [`fence_marker`]），
+/// 但这里**只做定位**、不提取事实——消费者不同（装饰 vs 索引），分开更好测。
+///
+/// 围栏代码块与 frontmatter 内部一律不产出装饰：那里是代码 / YAML，
+/// 给其中的 `#` 加淡化只会干扰阅读。
+pub fn decoration_spans(text: &str) -> Vec<DecorationSpan> {
+    let mut spans = Vec::new();
+    let mut fence: Option<String> = None;
+    let mut in_frontmatter = false;
+    // split_inclusive 保留换行，才能把行内偏移换算成整篇的字节偏移
+    let mut offset = 0;
+
+    for (index, raw) in text.split_inclusive('\n').enumerate() {
+        let line = raw.trim_end_matches(['\n', '\r']);
+        let base = offset;
+        offset += raw.len();
+
+        // frontmatter：只在文件开头，由 `---` 包围
+        if index == 0 {
+            if line.trim() == "---" {
+                in_frontmatter = true;
+                continue;
+            }
+        } else if in_frontmatter {
+            if line.trim() == "---" {
+                in_frontmatter = false;
+            }
+            continue;
+        }
+
+        if let Some(marker) = fence_marker(line) {
+            match &fence {
+                Some(open) if open == &marker => fence = None,
+                Some(_) => {}
+                None => fence = Some(marker),
+            }
+            continue;
+        }
+        if fence.is_some() {
+            continue;
+        }
+
+        collect_marker_spans(line, base, &mut spans);
+        collect_link_spans(line, base, &mut spans);
+    }
+
+    spans
+}
+
+/// 行首的块级标记：`>`（可嵌套）、`#`、列表符号
+fn collect_marker_spans(line: &str, base: usize, out: &mut Vec<DecorationSpan>) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+
+    // 块引用可嵌套（`> >`），每个 `>` 单独上色
+    while i < bytes.len() && bytes[i] == b'>' {
+        out.push(DecorationSpan {
+            range: base + i..base + i + 1,
+            kind: SpanKind::QuoteMarker,
+        });
+        i += 1;
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+    }
+
+    // 以 `#` 开头的行不会同时是列表，判完就可以收工
+    if bytes.get(i) == Some(&b'#') {
+        let start = i;
+        while i < bytes.len() && bytes[i] == b'#' && i - start < 6 {
+            i += 1;
+        }
+        // `#` 后必须是空格或行尾，`#hashtag` 不是标题
+        if matches!(bytes.get(i), None | Some(b' ') | Some(b'\t')) {
+            out.push(DecorationSpan {
+                range: base + start..base + i,
+                kind: SpanKind::HeadingMarker,
+            });
+        }
+        return;
+    }
+
+    let start = i;
+    if matches!(bytes.get(i), Some(b'-') | Some(b'*') | Some(b'+')) {
+        // 符号后要有空格；否则可能是 `*斜体*` 或分隔线
+        if matches!(bytes.get(i + 1), Some(b' ') | Some(b'\t')) {
+            out.push(DecorationSpan {
+                range: base + start..base + start + 1,
+                kind: SpanKind::ListMarker,
+            });
+        }
+        return;
+    }
+
+    if bytes.get(i).is_some_and(|b| b.is_ascii_digit()) {
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if matches!(bytes.get(i), Some(b'.') | Some(b')'))
+            && matches!(bytes.get(i + 1), Some(b' ') | Some(b'\t'))
+        {
+            out.push(DecorationSpan {
+                range: base + start..base + i + 1,
+                kind: SpanKind::ListMarker,
+            });
+        }
+    }
+}
+
+/// 行内链接 `[文字](url)`：只装饰"文字"，方括号与 URL 保持原样
+fn collect_link_spans(line: &str, base: usize, out: &mut Vec<DecorationSpan>) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'[' {
+            i += 1;
+            continue;
+        }
+        // 必须找到 `](` 这对字符，避免把 `[a] [b]` 误判成链接
+        let Some(close) = find_byte(bytes, i + 1, b']') else {
+            break;
+        };
+        if bytes.get(close + 1) != Some(&b'(') {
+            i += 1;
+            continue;
+        }
+        let Some(url_end) = find_byte(bytes, close + 2, b')') else {
+            break;
+        };
+        // `[](url)` 没有文字，零长度范围没有意义
+        if close > i + 1 {
+            out.push(DecorationSpan {
+                range: base + i + 1..base + close,
+                kind: SpanKind::LinkText,
+            });
+        }
+        i = url_end + 1;
+    }
 }
 
 // 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`

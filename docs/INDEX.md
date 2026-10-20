@@ -1,6 +1,6 @@
 # 文档索引
 
-> `docs/` 共 31 份 Markdown，按领域分组如下。
+> `docs/` 共 34 份 Markdown，按领域分组如下。
 > **状态以当前 `src/` 代码为准**（核对日期 2026-10-20），不是文档自述。
 > 新增文档请按 §7 的命名约定命名，并回到本文件登记一行。
 
@@ -44,6 +44,8 @@
 | [json-yaml-editing-requirements.md](./editor/json-yaml-editing-requirements.md) | 数据文件编辑需求 R13.1–R13.10 | `core/datafile.rs` | ⚠️ R13.1–R13.9 已交付；**R13.10 视频预览不做** |
 | [json-yaml-editing-design.md](./editor/json-yaml-editing-design.md) | JSON / YAML / TOML 编辑与格式化预览的实现设计 | `core/datafile.rs`、`ui/editor.rs` | ✅ |
 | [tab-close-button-design.md](./editor/tab-close-button-design.md) | 标签关闭按钮的样式收敛 | `ui/editor.rs` | ✅（第三轮取值） |
+| [editor-syntax-highlight-eval.md](./editor/editor-syntax-highlight-eval.md) | 编辑区语法高亮的调研与实施（markdown / json / yaml / toml） | `ui/editor.rs`、`core/media.rs` | ⚠️ **已实施，待人工验收**；开放问题见该文档 §6 |
+| [unified-highlight-config-design.md](./editor/unified-highlight-config-design.md) | 统一编辑区与预览区的高亮配置（单一配色源 + 两端适配） | `core/theme.rs`、`core/highlight.rs`、`ui/theme.rs`、`ui/preview.rs` | ⚠️ **M1–M4 已实施完毕，待人工验收**（3 套预置主题：xink / ocean / solarized，2026-10-20） |
 
 ## 4. 索引与导航（P1）— `docs/navigation/`
 
@@ -92,6 +94,14 @@
 
 ## 9. 已知缺口（文档说要做、代码还没做）
 
+- **编辑区 Markdown 高亮待人工验收**：feature 与代码已就绪（`editor-syntax-highlight-eval.md`），
+  但着色效果、代码块 injection、明暗跟随都只能肉眼确认，尚未验收。
+- **编辑区与预览区的高亮已合并为一套配色源**：`highlight.theme` → 预置主题 `xink`
+  （设置界面「基本 · 外观 → 高亮主题」），编辑区注入 `highlight_theme`、预览区用它
+  构造 syntect `Theme`，**两端同源**。仍有两处待人工验收确认：
+  ① 映射表只对常见语言实测过（Rust `let` 因 scope 共用会与编辑区不同色，见设计文档 §9）；
+  ② `ocean` / `solarized` 两套由 syntect 主题转换，明暗差异只在少数条目上。
+
 | 缺口 | 出处 | 说明 |
 |---|---|---|
 | `language` / `color_scheme` / `keymap` 三项死配置仍在模型里 | `config-wiring-design.md` | `keymap` 连设置界面入口都没有，`main.rs` 键位全部硬编码。文档结论是"要么接线、要么移除"，两者都未执行 |
@@ -137,7 +147,7 @@ docs/
 ├── wechat-promo.md   非工程文档（留根）
 ├── imgs/             被 README 引用的截图
 ├── file-tree/        文件树     5 份
-├── editor/           编辑器     7 份
+├── editor/           编辑器     9 份
 ├── navigation/       索引与导航 6 份
 ├── preview/          预览与界面 3 份
 ├── config/           配置       4 份

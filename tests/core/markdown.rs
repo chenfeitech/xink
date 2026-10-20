@@ -532,3 +532,101 @@ fn text_without_wikilinks_is_unchanged() {
     let md = "# 标题\n普通 [链接](a.md) 与 ![图](a.png)\n";
     assert_eq!(rewrite_wikilinks(md, resolver), md);
 }
+
+/// 取出某类装饰覆盖的原文，断言用起来比比对字节范围直观
+fn spans_of(text: &str, kind: SpanKind) -> Vec<String> {
+    decoration_spans(text)
+        .into_iter()
+        .filter(|span| span.kind == kind)
+        .map(|span| text[span.range].to_string())
+        .collect()
+}
+
+#[test]
+fn decoration_marks_heading_hashes() {
+    assert_eq!(spans_of("# 一级\n", SpanKind::HeadingMarker), ["#"]);
+    assert_eq!(spans_of("### 三级\n", SpanKind::HeadingMarker), ["###"]);
+    // 行首缩进的标题也算
+    assert_eq!(spans_of("  ## 缩进\n", SpanKind::HeadingMarker), ["##"]);
+}
+
+#[test]
+fn decoration_does_not_mark_hashtag_like_text() {
+    // `#` 后没有空格 → 不是标题，是普通文本/标签
+    assert!(spans_of("#hashtag\n", SpanKind::HeadingMarker).is_empty());
+    // 超过六级就不算标题
+    assert!(spans_of("####### 七级\n", SpanKind::HeadingMarker).is_empty());
+}
+
+#[test]
+fn decoration_marks_list_markers() {
+    for line in ["- 项\n", "* 项\n", "+ 项\n", "1. 项\n", "12) 项\n"] {
+        assert_eq!(
+            spans_of(line, SpanKind::ListMarker).len(),
+            1,
+            "{line} 应有一个列表符号"
+        );
+    }
+    assert_eq!(spans_of("- 项\n", SpanKind::ListMarker), ["-"]);
+    assert_eq!(spans_of("12) 项\n", SpanKind::ListMarker), ["12)"]);
+    // `*斜体*` 不是列表；分隔线也不是
+    assert!(spans_of("*斜体*\n", SpanKind::ListMarker).is_empty());
+    assert!(spans_of("---\n", SpanKind::ListMarker).is_empty());
+}
+
+#[test]
+fn decoration_marks_quote_markers() {
+    assert_eq!(spans_of("> 引用\n", SpanKind::QuoteMarker), [">"]);
+    // 嵌套引用每个 `>` 都单独装饰
+    assert_eq!(spans_of("> > 嵌套\n", SpanKind::QuoteMarker), [">", ">"]);
+    // 引用里的列表符号也要能同时识别
+    let md = "> - 项\n";
+    assert_eq!(spans_of(md, SpanKind::QuoteMarker), [">"]);
+    assert_eq!(spans_of(md, SpanKind::ListMarker), ["-"]);
+}
+
+#[test]
+fn decoration_underlines_link_text() {
+    let md = "见 [双链设计](./wikilink.md) 一文\n";
+    assert_eq!(spans_of(md, SpanKind::LinkText), ["双链设计"]);
+    // 空链接文字不产生零长度范围
+    assert!(spans_of("[](a.md)\n", SpanKind::LinkText).is_empty());
+    // `[a] [b]` 不是链接
+    assert!(spans_of("[a] [b]\n", SpanKind::LinkText).is_empty());
+}
+
+#[test]
+fn decoration_skips_fenced_code_blocks() {
+    // shell 注释以 `#` 开头、YAML 里也有 `- `，围栏内一律不算 Markdown 标记
+    let md = "# 标题\n\n```sh\n# 这是注释\n```\n\n- 列表\n";
+    assert_eq!(spans_of(md, SpanKind::HeadingMarker), ["#"]);
+    assert_eq!(spans_of(md, SpanKind::ListMarker), ["-"]);
+}
+
+#[test]
+fn decoration_skips_frontmatter() {
+    // frontmatter 是 YAML，里面的 `- a` 是数组项，不是 Markdown 列表
+    let md = "---\ntags:\n  - a\n---\n\n# 标题\n";
+    assert_eq!(spans_of(md, SpanKind::HeadingMarker), ["#"]);
+    assert!(spans_of(md, SpanKind::ListMarker).is_empty());
+}
+
+#[test]
+fn decoration_ranges_are_byte_offsets_of_the_whole_document() {
+    // 中文是多字节，范围必须按字节算，否则会切到字符中间
+    let md = "标题一\n# 中文标题 [链接](a.md)\n";
+    let spans = decoration_spans(md);
+    let heading = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::HeadingMarker)
+        .expect("应有标题标记");
+    // "标题一\n" 是 9 个 UTF-8 字节（3+3+3+1），所以 `#` 从第 10 个字节开始
+    assert_eq!(&md[heading.range.clone()], "#");
+    assert_eq!(heading.range.start, "标题一\n".len());
+    // 链接文字的字节范围也要能正确切出中文
+    let link = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::LinkText)
+        .expect("应有链接");
+    assert_eq!(&md[link.range.clone()], "链接");
+}

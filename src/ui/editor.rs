@@ -9,7 +9,9 @@ use gpui_kit::base::input::{Diagnostic, Position};
 use gpui_kit::component::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
-use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
+use gpui_kit::component::input::{
+    Editor, EditorState, InputEvent, TabSize, TextDecoration, TextDecorationCollection,
+};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size};
 use gpui_kit::*;
 
@@ -20,9 +22,15 @@ use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
 use crate::core::config::{DataFileConfig, IndentConfig};
 use crate::core::datafile::{DataKind, Parsed, ValidationError, data_kind};
 use crate::core::markdown::{
-    ImageOptions, resolve_image_urls, rewrite_wikilinks, sanitize_for_preview,
+    ImageOptions, SpanKind, decoration_spans, resolve_image_urls, rewrite_wikilinks,
+    sanitize_for_preview,
 };
+use crate::core::media::editor_language;
+use crate::core::note::is_markdown;
 use crate::core::{Note, tab_key};
+
+/// 行首标记（`#`、列表符号）的淡化程度，语义等同 CSS `opacity`
+const MARKER_FADE_OUT: f32 = 0.45;
 
 pub struct EditorPanel {
     focus_handle: FocusHandle,
@@ -54,6 +62,8 @@ pub struct EditorPanel {
     self_entity: WeakEntity<EditorPanel>,
     /// 双链补全浮层是否打开：避免每敲一个字符都重复弹一次
     completion_open: bool,
+    /// Markdown 装饰集合。范围随编辑自动平移，但内容变了要由我们重设。
+    decorations: Option<TextDecorationCollection>,
 }
 
 impl EditorPanel {
@@ -171,6 +181,7 @@ impl EditorPanel {
             last_published_version: None,
             self_entity: self_entity.clone(),
             completion_open: false,
+            decorations: None,
         };
 
         // 空白页：登记到集中列表，等待被笔记认领或统一清理。
@@ -387,16 +398,18 @@ impl EditorPanel {
                 self.editor.update(cx, |state, cx| {
                     state.set_value(text, window, cx);
                 });
-                // 数据文件按语言高亮；Markdown 用 "text"（沿用现状：不高亮）。
+                // 数据文件按各自语言高亮，Markdown 走 markdown 语法，其余纯文本。
+                // 代码块内的 ```json / ```yaml 由 tree-sitter injection 着色，
+                // 前提是那门语言自己也在上面的 features 里启用。
                 //
                 // 每次载入都显式设置：面板会被复用（空白页认领机制），
                 // 不重置的话"关掉 json 再打开 md"会残留 json 的高亮配色。
-                let lang = data_kind(note.path())
-                    .map(|kind| kind.lang())
-                    .unwrap_or("text");
+                let lang = editor_language(note.path());
                 self.editor.update(cx, |state, cx| {
                     state.set_highlighter(lang, cx);
                 });
+                // 载入即上一次装饰，不等防抖，否则新标签会先闪一下无装饰的样子
+                self.refresh_decorations(cx);
                 self.status = format!("已打开 {}", note.path().display()).into();
                 // 每篇笔记一个预览文档，首次解析后切回来就无需再解析
                 let (source, validation) =
@@ -438,8 +451,9 @@ impl EditorPanel {
 
         self.editor
             .update(cx, |state, cx| state.set_value("", window, cx));
-        // 清空后不留上一篇的波浪线
+        // 清空后不留上一篇的波浪线与装饰
         self.sync_diagnostics(cx);
+        self.refresh_decorations(cx);
 
         let self_entity = self.self_entity.clone();
         cx.update_global::<AppState, _>(|state, cx| {
@@ -582,10 +596,70 @@ impl EditorPanel {
                 if auto_save {
                     this.save_now(cx);
                 }
-                // 保存与预览共用同一个防抖
+                // 保存、预览、装饰共用同一个防抖
                 this.refresh_doc(cx);
+                this.refresh_decorations(cx);
             });
         }));
+    }
+
+    /// 重算编辑区的 Markdown 装饰
+    ///
+    /// 装饰范围会随编辑**自动平移**，但内容变了必须由我们重设，否则 `#`
+    /// 与链接的位置会错位。所以这里跟着 [`Self::schedule_save`] 的防抖一起跑。
+    ///
+    /// 只对 Markdown 笔记生效：数据文件走的是自己的 tree-sitter 高亮，
+    /// 再叠一层 Markdown 装饰没有意义。
+    fn refresh_decorations(&mut self, cx: &mut Context<Self>) {
+        let text = match &self.note {
+            Some(note) if is_markdown(note.path()) => note.text(),
+            _ => {
+                // 没有笔记 / 不是 Markdown：清空，避免残留上一篇的装饰
+                if let Some(collection) = &self.decorations {
+                    collection.clear(cx);
+                }
+                return;
+            }
+        };
+
+        let quote_color = cx.theme().accent;
+        let decorations: Vec<TextDecoration> = decoration_spans(&text)
+            .into_iter()
+            .map(|span| {
+                let style = match span.kind {
+                    // 行首标记淡化：弱化但不隐藏，源码始终完整可见
+                    SpanKind::HeadingMarker | SpanKind::ListMarker => HighlightStyle {
+                        fade_out: Some(MARKER_FADE_OUT),
+                        ..Default::default()
+                    },
+                    // 块引用标记上色（框架没有行级绘制，画不出竖线）
+                    SpanKind::QuoteMarker => HighlightStyle {
+                        color: Some(quote_color),
+                        ..Default::default()
+                    },
+                    // 链接文字下划线；颜色留空即跟随文字色
+                    SpanKind::LinkText => HighlightStyle {
+                        underline: Some(UnderlineStyle {
+                            thickness: px(1.),
+                            color: None,
+                            wavy: false,
+                        }),
+                        ..Default::default()
+                    },
+                };
+                TextDecoration::new(span.range, style)
+            })
+            .collect();
+
+        if self.decorations.is_none() {
+            let collection = self.editor.update(cx, |state, cx| {
+                state.create_decorations_collection(Vec::new(), cx)
+            });
+            self.decorations = Some(collection);
+        }
+        if let Some(collection) = &self.decorations {
+            collection.set(decorations, cx);
+        }
     }
 
     /// 在光标处插入文本（供目录树"插入到当前笔记"使用）。

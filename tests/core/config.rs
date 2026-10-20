@@ -1,6 +1,6 @@
 use super::*;
 use crate::core::datafile::{DEFAULT_INDENT, DEFAULT_MAX_FORMAT_BYTES};
-use crate::core::highlight::default_theme;
+use crate::core::theme;
 
 fn tmpdir() -> tempfile::TempDir {
     tempfile::tempdir().expect("创建临时目录")
@@ -24,7 +24,7 @@ fn defaults_are_sane() {
     assert_eq!(c.editor.indent.tab_size, 4);
     assert!(c.editor.keymap.is_empty());
 
-    assert_eq!(c.preview.code_theme, AUTO_CODE_THEME);
+    assert_eq!(c.highlight.theme, theme::DEFAULT_THEME);
     assert!(c.preview.sync_scroll, "默认应开启同步滚动");
     assert_eq!(c.preview.image_display, ImageDisplay::FitWidth);
     assert_eq!(c.preview.image_width_percent, 100, "默认占满预览区宽度");
@@ -91,7 +91,7 @@ fn roundtrip_preserves_values() {
     c.editor.indent.use_tabs = true;
     c.editor.indent.tab_size = 2;
     c.editor.keymap.insert("bold".into(), "cmd-b".into());
-    c.preview.code_theme = "InspiredGitHub".into();
+    c.highlight.theme = "xink".into();
     c.preview.sync_scroll = false;
 
     let text = serde_json::to_string(&c).unwrap();
@@ -146,14 +146,12 @@ fn sanitize_repairs_nan_font_size() {
 }
 
 #[test]
-fn sanitize_restores_empty_font_family_and_code_theme() {
+fn sanitize_restores_empty_font_family() {
     let mut c = AppConfig::default();
     c.basic.tree_font.family = "   ".into();
-    c.preview.code_theme = String::new();
 
     c.sanitize();
     assert_eq!(c.basic.tree_font.family, ".SystemUIFont");
-    assert_eq!(c.preview.code_theme, AUTO_CODE_THEME);
 }
 
 // ── 导入 / 导出 ───────────────────────────────────────────────
@@ -270,29 +268,6 @@ fn toggled_theme_never_falls_back_to_system() {
 }
 
 #[test]
-fn code_theme_auto_follows_appearance() {
-    let dark = resolve_code_theme(AUTO_CODE_THEME, true);
-    let light = resolve_code_theme(AUTO_CODE_THEME, false);
-
-    assert_eq!(dark, default_theme(true), "深色下解析为深色高亮主题");
-    assert_eq!(light, default_theme(false), "浅色下解析为浅色高亮主题");
-    assert_ne!(dark, light, "「跟随主题」必须随明暗变化，否则等于没接");
-}
-
-#[test]
-fn code_theme_explicit_value_is_not_overridden() {
-    // 指定具体主题名时不随明暗变化
-    assert_eq!(resolve_code_theme("InspiredGitHub", true), "InspiredGitHub");
-    assert_eq!(
-        resolve_code_theme("InspiredGitHub", false),
-        "InspiredGitHub"
-    );
-
-    // 未知主题名原样传出：由高亮层负责回落，配置层不吞掉用户的值
-    assert_eq!(resolve_code_theme("no-such-theme", true), "no-such-theme");
-}
-
-#[test]
 fn modified_wired_settings_survive_sanitize_and_reload() {
     let mut c = AppConfig::default();
     // 逐个覆盖本轮接线的配置项
@@ -301,7 +276,7 @@ fn modified_wired_settings_survive_sanitize_and_reload() {
     c.editor.indent.tab_size = 8;
     c.editor.font.weight = FontWeight::Bold;
     c.preview.font.weight = FontWeight::Semibold;
-    c.preview.code_theme = AUTO_CODE_THEME.into();
+    c.highlight.theme = "xink".into();
     c.preview.image_display = ImageDisplay::Hidden;
     c.preview.image_width_percent = 60;
     c.preview.link_open = LinkOpen::External;
@@ -318,7 +293,7 @@ fn modified_wired_settings_survive_sanitize_and_reload() {
     assert_eq!(back.editor.indent.tab_size, 8);
     assert_eq!(back.editor.font.weight, FontWeight::Bold);
     assert_eq!(back.preview.font.weight, FontWeight::Semibold);
-    assert_eq!(back.preview.code_theme, AUTO_CODE_THEME);
+    assert_eq!(back.highlight.theme, "xink");
     assert_eq!(back.preview.image_display, ImageDisplay::Hidden);
     assert_eq!(back.preview.image_width_percent, 60);
     assert_eq!(back.preview.link_open, LinkOpen::External);
@@ -364,6 +339,58 @@ fn modified_config_keeps_unmodified_fields_at_defaults() {
     let mut expected = before;
     expected.editor.show_line_numbers = true;
     assert_eq!(back, expected, "只改一项时，其余字段必须保持原样");
+}
+
+// ── 统一高亮配置 ──────────────────────────────────────────────
+
+#[test]
+fn highlight_theme_defaults_to_preset() {
+    let c = AppConfig::default();
+    assert_eq!(c.highlight.theme, theme::DEFAULT_THEME);
+    assert!(
+        theme::PRESET_THEMES.contains(&c.highlight.theme.as_str()),
+        "默认主题必须是预置主题之一"
+    );
+}
+
+#[test]
+fn legacy_code_theme_is_migrated_once() {
+    // 旧配置：用户选过 syntect 主题。升级后应落到预置主题上，且旧字段被丢弃，
+    // 避免下次启动时再迁移一次、把用户后选的 highlight.theme 顶掉。
+    let mut c = AppConfig::default();
+    c.preview.legacy_code_theme = Some("InspiredGitHub".into());
+
+    c.sanitize();
+    assert!(
+        c.preview.legacy_code_theme.is_none(),
+        "迁移后旧字段必须被丢弃"
+    );
+    assert_eq!(
+        c.highlight.theme,
+        theme::migrate_code_theme("InspiredGitHub")
+    );
+
+    // 写回配置时不应再带上旧字段
+    let text = serde_json::to_string(&c).unwrap();
+    assert!(
+        !text.contains("code_theme"),
+        "序列化结果不应再含 code_theme: {text}"
+    );
+
+    // 再跑一次：旧字段已不在，不应再动 highlight.theme
+    c.highlight.theme = "xink".into();
+    c.sanitize();
+    assert_eq!(c.highlight.theme, "xink");
+}
+
+#[test]
+fn unknown_highlight_theme_falls_back_to_default() {
+    // 手动改 config.json 写了不存在的主题名：规范化成默认，而不是让编辑区不着色
+    let mut c = AppConfig::default();
+    c.highlight.theme = "no-such-theme".into();
+
+    c.sanitize();
+    assert_eq!(c.highlight.theme, theme::DEFAULT_THEME);
 }
 
 #[test]
