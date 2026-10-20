@@ -90,7 +90,7 @@
 
 目录树刷新采用**保状态合并**：删除、新建、重命名后只重建受影响的节点，
 其余节点的展开状态、选中项与滚动位置都保持不变（详见
-`docs/file-tree-incremental-refresh-design.md`）。
+`docs/file-tree/file-tree-incremental-refresh-design.md`）。
 
 ### 6. 界面与外观
 
@@ -99,7 +99,7 @@
 | 功能 | 说明 |
 |---|---|
 | 三栏布局 | 左文件树 / 中编辑 / 右侧 dock（预览），基于可拖拽、可停靠的 DockArea；默认左 260px、右 420px |
-| 右侧按钮条 | 最右侧浮层（不占布局宽度），上下排列「大纲 / 反链 / 标签」三个按钮；点击即从右侧滑出**半透明抽屉**（宽 260px、上下撑满窗口），内容都在抽屉里展示，右上角有收回按钮，点遮罩或 `Esc` 也可收起。详见 `docs/right-rail-drawer-design.md` |
+| 右侧按钮条 | 最右侧浮层（不占布局宽度），上下排列「大纲 / 反链 / 标签」三个按钮；点击即从右侧滑出**半透明抽屉**（宽 260px、上下撑满窗口），内容都在抽屉里展示，右上角有收回按钮，点遮罩或 `Esc` 也可收起。详见 `docs/preview/right-rail-drawer-design.md` |
 | 布局持久化 | 布局写入 `layout.json`（带版本号），结构变更时自动重建默认布局 |
 | 主题 | 跟随系统 / 浅色 / 深色；跟随系统时随系统外观变化实时切换 |
 | 字体与图标 | 目录树、编辑区、预览区各自可设字体族 / 字号 / 行高 / 字重；目录树图标大小 12–48px |
@@ -171,19 +171,18 @@
 
 ---
 
-## 尚未实现
+## 尚未实现 / 决定不做
 
-以下功能**目前没有实现**，避免误以为可用：
+以下功能**不可用**，避免误以为已经支持：
 
 | 功能 | 状态 |
 |---|---|
-| 双链 `[[笔记名]]` | 未实现 |
-| 反向链接面板 | 未实现 |
-| 标签 `#tag` | 未实现 |
-| 全文搜索（跨笔记） | 未实现（设置窗口内的"搜索设置项"不算） |
-| 大纲 / TOC 面板 | 未实现 |
-| 命令面板（`Cmd+P`） | 未实现 |
+| 跨库检索 | **决定不做**（2026-10-20）：搜索与双链只覆盖当前库，切库即切换范围。见 `docs/vault/multi-vault-design.md` |
+| 拼写检查 | **决定不做**（2026-10-20）：框架无拼写能力、自研需新依赖与词典，配置项已移除。见 `docs/editor/editor-features-analysis.md` §4 |
 | 视频播放 | **已尝试并放弃**：Spike 阶段解码 / 渲染 / 音频 / 音画同步全部验证通过，但接进应用后画面始终出不来，代码与依赖已清理。完整复盘在 `docs/video-playback-design.md`（该文件位于 `spike/video-playback` 分支，未合入 main） |
+| PDF 预览 | 未立项：`REQUIREMENTS.md` 列为 P2 非目标 |
+
+> 双链、反链、标签、全文搜索、大纲、命令面板均已实现（P1 已交付），不再属于此列。
 
 ---
 
@@ -302,15 +301,18 @@ src/
 
 ## 文档索引
 
+完整索引（31 份文档的状态、对应模块、已知缺口）见 [`docs/INDEX.md`](docs/INDEX.md)。
+
 | 文档 | 内容 |
 |---|---|
+| [`docs/INDEX.md`](docs/INDEX.md) | **文档总索引**（状态 / 对应模块 / 已知缺口） |
 | [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) | 需求规格（R1–R13） |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | 技术设计 |
 | [`docs/TESTS.md`](docs/TESTS.md) | 测试代码的组织方式与命令 |
-| [`docs/json-yaml-editing-requirements.md`](docs/json-yaml-editing-requirements.md) | 数据文件编辑需求（R13） |
-| [`docs/json-yaml-editing-design.md`](docs/json-yaml-editing-design.md) | 数据文件编辑设计 |
-| [`docs/multi-vault-design.md`](docs/multi-vault-design.md) | 多库机制设计 |
-| [`docs/preview-layout-design.md`](docs/preview-layout-design.md) | 预览版面设计 |
+| [`docs/editor/json-yaml-editing-requirements.md`](docs/editor/json-yaml-editing-requirements.md) | 数据文件编辑需求（R13） |
+| [`docs/editor/json-yaml-editing-design.md`](docs/editor/json-yaml-editing-design.md) | 数据文件编辑设计 |
+| [`docs/vault/multi-vault-design.md`](docs/vault/multi-vault-design.md) | 多库机制设计 |
+| [`docs/preview/preview-layout-design.md`](docs/preview/preview-layout-design.md) | 预览版面设计 |
 | `.codebuddy/rules/` | 开发铁律（开工前必读，含会导致编译失败的硬约束） |
 
 ---

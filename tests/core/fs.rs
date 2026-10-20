@@ -63,7 +63,7 @@ fn import_paths_copy_keeps_source() {
     let dst = TempDir::new().unwrap();
     let file = touch(src.path(), "a.png");
 
-    let results = import_paths(&[file.clone()], dst.path(), ImportMode::Copy);
+    let results = import_paths(std::slice::from_ref(&file), dst.path(), ImportMode::Copy);
     assert!(results[0].is_ok(), "复制应成功: {:?}", results[0]);
     assert!(file.exists(), "复制模式必须保留源文件");
     assert!(dst.path().join("a.png").exists());
@@ -75,7 +75,7 @@ fn import_paths_move_removes_source() {
     let dst = TempDir::new().unwrap();
     let file = touch(src.path(), "b.md");
 
-    let results = import_paths(&[file.clone()], dst.path(), ImportMode::Move);
+    let results = import_paths(std::slice::from_ref(&file), dst.path(), ImportMode::Move);
     assert!(results[0].is_ok(), "移动应成功: {:?}", results[0]);
     assert!(!file.exists(), "移动模式应移除源文件");
     assert!(dst.path().join("b.md").exists());

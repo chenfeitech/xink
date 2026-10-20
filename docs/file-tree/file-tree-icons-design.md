@@ -1,6 +1,6 @@
 # 目录树文件类型图标 — 设计方案
 
-> 状态：**待确认**（2026-10-12）· 确认后再开发
+> 状态：**已实现**（2026-10-12 设计；2026-10-20 补齐音频 / 视频两类，缺口已消除）
 > 范围：`src/core/media.rs`（分类，可单测）、`src/ui/file_tree.rs`（图标映射）
 
 ---
@@ -38,15 +38,17 @@ if is_dir {                    // 目录：FolderOpen / FolderClosed
 | 数据 / 配置 | json/toml/yaml/yml/xml/csv/ini | `FileCode` | 无 `file-json`，归入代码类 |
 | 压缩包 | zip/tar/gz/tgz/7z/rar | `FileArchive` | 可用 ✓ |
 | 表格 | xls/xlsx/numbers | `FileSpreadsheet` | 可用 ✓ |
-| 音频 | mp3/wav/flac/aac/m4a/ogg | `Music`（待确认） | 无 `file-audio` |
-| 视频 | mp4/mov/mkv/avi/webm | `Video`（待确认） | 无 `file-video` |
+| 音频 | mp3/wav/flac/aac/m4a/ogg/oga/opus/wma/aiff/aif | `file-music`（内联 SVG） | ✅ 已实现（2026-10-20） |
+| 视频 | mp4/mov/mkv/avi/webm/m4v/mpg/mpeg/wmv/flv | `file-play`（内联 SVG） | ✅ 已实现（2026-10-20） |
 | 其他 | 其余一切 | `FileText` | 兜底，保证"都有标识" |
 
-> 图标名是否存在的核实结果：
+> 图标名是否存在的核实结果（2026-10-20 复核 `gpui-kit-assets-0.6.4/assets/icons/`）：
 > `file-text` ✓、`file-code` ✓、`file-image` ✓、`file-archive` ✓、
-> `file-spreadsheet` ✓、`file-type` ✓、`file` ✓；
+> `file-spreadsheet` ✓、`file-music` ✓、`file-play` ✓；
 > `file-json` ✗、`file-pdf` ✗、`file-audio` ✗、`file-video` ✗。
-> 后两类改用 `music` / `video`，实施时先确认，缺失则回落 `FileText`。
+> 因此音频取 `file-music`、视频取 `file-play`；两者都内联为 SVG 常量
+> （`ICON_FILE_AUDIO` / `ICON_FILE_VIDEO`，见 `src/ui/file_tree.rs`），
+> 与其它图标同走 `Icon::default().data(...)` 通道。
 
 ## 4. 实现结构
 

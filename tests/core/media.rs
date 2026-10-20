@@ -79,9 +79,27 @@ fn is_editable_text_covers_markdown_and_data_files() {
 }
 
 #[test]
+fn file_kind_recognizes_audio_and_video() {
+    for name in ["a.mp3", "b.wav", "c.flac", "d.m4a", "e.ogg"] {
+        assert_eq!(
+            file_kind(Path::new(name), false),
+            FileKind::Audio,
+            "{name} 应归入 Audio"
+        );
+    }
+    for name in ["f.mp4", "g.mov", "h.mkv", "i.webm", "j.avi"] {
+        assert_eq!(
+            file_kind(Path::new(name), false),
+            FileKind::Video,
+            "{name} 应归入 Video"
+        );
+    }
+}
+
+#[test]
 fn file_kind_falls_back_to_other() {
-    // 音视频、无扩展名、未知扩展名都归 Other（json/yaml/toml 已单独成类）
-    for name in ["f.mp3", "g.mp4", "noext", "x.qqq"] {
+    // 无扩展名、未知扩展名归 Other（音视频、json/yaml/toml 已各自成类）
+    for name in ["noext", "x.qqq", "a.mp3.bak"] {
         assert_eq!(
             file_kind(Path::new(name), false),
             FileKind::Other,

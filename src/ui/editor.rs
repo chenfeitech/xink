@@ -186,7 +186,7 @@ impl EditorPanel {
                 window,
                 move |this, _, ev: &PreviewScrolled, window, cx| {
                     let PreviewScrolled(ratio) = ev;
-                    let is_active = cx.try_global::<AppState>().map_or(false, |s| {
+                    let is_active = cx.try_global::<AppState>().is_some_and(|s| {
                         s.preview.read(cx).active_doc.as_ref() == this.doc.as_ref()
                     });
                     if is_active {
@@ -420,8 +420,6 @@ impl EditorPanel {
         cx.notify();
         loaded
     }
-
-    /// 在所属标签组中选中自己。
 
     /// 清空为空白占位页。
     ///
@@ -1001,13 +999,6 @@ fn close_editor_tab(weak: WeakEntity<EditorPanel>, window: &mut Window, cx: &mut
     crate::app::sync_placeholder(window, cx);
 }
 
-/// 数据文件的预览源文：顶部提示 + 格式化后的围栏代码块。
-///
-/// 返回 `(源文, 校验结果)`：调用方拿校验结果去更新状态，避免重复解析一遍。
-///
-/// - 合法 → 展示格式化结果；非法 → 展示原文并在顶部给出行列与原因；
-/// - 超过 `max_format_bytes` → 跳过格式化，只展示原文并说明原因；
-/// - 格式化结果**只用于预览**，写盘永远用用户原文（见 `core::datafile` 模块文档）。
 /// 用当前索引解析双链目标（预览改写用）。
 ///
 /// 索引只读：解析不到时返回 `None`，`rewrite_wikilinks` 会把原文原样留着。
@@ -1016,6 +1007,13 @@ fn resolve_wikilink(cx: &App, target: &str) -> Option<PathBuf> {
     index.read(cx).resolve_path(target)
 }
 
+/// 数据文件的预览源文：顶部提示 + 格式化后的围栏代码块。
+///
+/// 返回 `(源文, 校验结果)`：调用方拿校验结果去更新状态，避免重复解析一遍。
+///
+/// - 合法 → 展示格式化结果；非法 → 展示原文并在顶部给出行列与原因；
+/// - 超过 `max_format_bytes` → 跳过格式化，只展示原文并说明原因；
+/// - 格式化结果**只用于预览**，写盘永远用用户原文（见 `core::datafile` 模块文档）。
 fn data_preview_source(
     text: &str,
     kind: DataKind,

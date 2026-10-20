@@ -97,7 +97,7 @@
 | 子任务 | 内容 | 落点 |
 |---|---|---|
 | T3.1 | 核验非法内容是否显示波浪线（`sync_diagnostics`），能显示则收尾，不能则记入文档"已知限制" | `src/ui/editor.rs:306,333` |
-| T3.2 | 按 `docs/json-yaml-editing-requirements.md` 逐条人工验收并在文档中勾选 | 该文档 |
+| T3.2 | 按 `docs/editor/json-yaml-editing-requirements.md` 逐条人工验收并在文档中勾选 | 该文档 |
 | T3.3 | R13 到此结项，后续 P1 不再回头 | — |
 
 ---
@@ -117,7 +117,7 @@
 
 ### T5 — Markdown 事实解析（`core/markdown.rs` 扩展）— 需设计
 
-设计要点（写进 `docs/markdown-facts-design.md`）：
+设计要点（写进 `docs/navigation/markdown-facts-design.md`）：
 
 | 子任务 | 内容 |
 |---|---|
@@ -131,7 +131,7 @@
 
 ### T6 — `core/index.rs` 全库索引 — 需设计
 
-设计要点（写进 `docs/note-index-design.md`）：
+设计要点（写进 `docs/navigation/note-index-design.md`）：
 
 | 子任务 | 内容 |
 |---|---|

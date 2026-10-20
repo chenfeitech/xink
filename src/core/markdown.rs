@@ -64,12 +64,16 @@ pub fn sanitize_for_preview(md: &str) -> String {
     out
 }
 
+/// 图片缓存条目：`(修改时间, 文件长度, data URL)`。
+///
+/// 抽成别名是为了让下面的缓存类型不必写成一长串嵌套泛型。
+type ImageCacheEntry = (SystemTime, u64, String);
+
 /// 图片转 data URL 的缓存：避免每次刷新预览都重新读盘与编码。
 ///
 /// 键是图片绝对路径，值是 `(修改时间, 文件长度, data URL)`；
 /// 用 mtime + 长度作为内容指纹，足够可靠且比全文哈希便宜。
-static IMAGE_DATA_URLS: OnceLock<Mutex<HashMap<PathBuf, (SystemTime, u64, String)>>> =
-    OnceLock::new();
+static IMAGE_DATA_URLS: OnceLock<Mutex<HashMap<PathBuf, ImageCacheEntry>>> = OnceLock::new();
 
 /// 单张图片转 data URL 的体积上限（5 MB）。
 ///
@@ -143,10 +147,11 @@ fn image_data_url(path: &Path) -> Option<String> {
     // 命中缓存且指纹未变则直接复用
     {
         let cache = IMAGE_DATA_URLS.get_or_init(Default::default).lock().ok()?;
-        if let Some((cached_mtime, cached_len, url)) = cache.get(&key) {
-            if *cached_mtime == mtime && *cached_len == meta.len() {
-                return Some(url.clone());
-            }
+        if let Some((cached_mtime, cached_len, url)) = cache.get(&key)
+            && *cached_mtime == mtime
+            && *cached_len == meta.len()
+        {
+            return Some(url.clone());
         }
     }
 
@@ -264,12 +269,13 @@ fn decode_percent(s: &str) -> String {
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
-                out.push(hi * 16 + lo);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
+        {
+            out.push(hi * 16 + lo);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;

@@ -17,8 +17,8 @@
 |---|---|---|
 | 叶子配置项（顶层字段展开后） | **28** | 18 个顶层字段（`default_mode` 已于 2026-09-24 移除），其中 `tree_font` / `editor.font` / `preview.font` / `indent` 为结构体 |
 | 已真正作用于软件功能 | **22** | 含 Spike 后接线的 `indent.*` 两项、内核升级后的 `show_line_numbers`、P1 补接线的 `font.weight` ×2 |
-| **死配置（存了不生效）** | **4** | 值能保存、能导出，但不影响任何行为：`language`、`spell_check`、`color_scheme`、`keymap` |
-| 其中：设置界面已标注 ⚠ | 2 | `language`、`color_scheme`（`spell_check` 已判定移除；`link_open` 已接线，仅剩标记待清理） |
+| **死配置（存了不生效）** | **3** | 值能保存、能导出，但不影响任何行为：`language`、`color_scheme`、`keymap`（`spell_check` 已于 2026-10-20 **移除**） |
+| 其中：设置界面已标注 ⚠ | 2 | `language`、`color_scheme`（`link_open` 已接线，仅剩标记待清理） |
 | 其中：界面有入口但未标注 | 0 | P1 已为两个 `font.weight` 补上设置界面入口并接线 |
 | 其中：**连设置项入口都没有** | 1 | `editor.keymap`（`main.rs:46-56` 快捷键全部硬编码） |
 | 覆盖"配置改动 → UI 行为改变"的测试 | **0** | `src/ui/settings.rs` 无 `tests.rs`，配置单测全部停留在数据层 |
@@ -31,7 +31,9 @@
 > **`default_mode` 已移除**。
 > **2026-10-09 P1 已收尾**：两个 `font.weight` 已接线并补界面入口、`code_theme` 支持跟随明暗
 > （默认 `auto`）、`sync_scroll` 编辑器侧已判断、`link_open` 已随图片预览接线。
-> 因此**当前仍未接线的为 4 项**：`language`、`spell_check`（已判定移除）、`color_scheme`、`keymap`。
+> **2026-10-20**：`spell_check` **已实际移除**——`core/config.rs`（字段 + `Default`）与
+> `settings.rs` 的 `all_fields()` 条目均已删除，旧 `config.json` 里的该字段被 serde 忽略。
+> 因此**当前仍未接线的为 3 项**：`language`、`color_scheme`、`keymap`。
 > （`link_open` 已随"图片预览"接线，`image_display` 与新增的 `image_width_percent` 已接线。）
 
 ### 1.1 三条根因
@@ -50,7 +52,7 @@
 | 配置项 | 核实结果 | 证据 | 决策 |
 |---|---|---|---|
 | `link_open` | **框架有能力** | `gpui-base-0.6.4/src/text/text_view.rs:333` 提供 `TextView::on_link_click(handler)`；`gpui-component-0.6.4/src/text/compat.rs:136` 同名转发；**未挂 handler 时默认走 `cx.open_url(&url)`**（`text_view.rs:96`） | **保留并接线，从 P3 提前到 P1** |
-| `spell_check` | **框架无能力** | 全量搜索 `gpui-*` 依赖：无 `NSSpellChecker` 绑定、无任何拼写 API；`input/editor/diagnostics.rs:280` 的 "Spelling mistake" 只是 LSP 诊断的**测试 fixture 字符串**，不是拼写能力 | **移除**（见 §6 P3 与本节末） |
+| `spell_check` | **框架无能力** | 全量搜索 `gpui-*` 依赖：无 `NSSpellChecker` 绑定、无任何拼写 API；`input/editor/diagnostics.rs:280` 的 "Spelling mistake" 只是 LSP 诊断的**测试 fixture 字符串**，不是拼写能力 | ✅ **已移除**（2026-10-20，见本节末） |
 | `image_display` | 有能力（部分受限） | 内联 HTML 默认启用且支持 `<img style="width: N%">`；但渲染层硬编码 `max_w(relative(1.))`，无法突破容器宽 | 已接线 `FitWidth` + `Hidden`；`Original` 移除 |
 
 **`link_open` 接线方案（P1，约 15 行）**
@@ -63,7 +65,7 @@
 > ⚠️ 注意默认行为反转：当前默认值为 `InApp`，而"不挂 handler"的框架默认行为是浏览器打开。
 > 实现时两种取值都必须显式处理，否则 `External` 与 `InApp` 会表现一致（都走浏览器）。
 
-**`spell_check` 移除方案**
+**`spell_check` 移除方案（已于 2026-10-20 执行完毕）**
 
 - 判定依据：框架无能力 + 自研需新增依赖（objc 调 `NSSpellChecker` 或 hunspell + 词典）+ 编辑器装饰接入，属于**独立特性**而非"配置项"，与本地优先轻量定位不符；
 - 移除范围：`config.rs`（字段 + `Default`）、`settings.rs`（`all_fields()` 该项）、`config/tests.rs`（默认值断言）、本文档 §2.2/§4/§7.3 对应行；
@@ -114,7 +116,7 @@
 | `indent.use_tabs` | `bool` / `false` | 编辑行为 → 使用 Tab | 无 | ❌ |
 | `indent.tab_size` | `u32` 1–16 / `4` | 编辑行为 → 缩进宽度 | 无 | ❌ |
 | `show_line_numbers` | `bool` / `false` | 编辑行为 → 行号 | `editor.rs`（构造 + `render` 增量下发） | ✅ 已接线（2026-09-24，随内核升级为 `EditorState`） |
-| `spell_check` | `bool` / `false` | 编辑行为 → 拼写检查 | 无 | ❌ **已核实框架无能力 → 决策移除**（§1.2） |
+| ~~`spell_check`~~ | — | — | — | ✅ **已于 2026-10-20 移除**：数据模型与设置界面均无此项 |
 | `font.family` | `String` / 等宽 | 字体与排版 → 字体 | `editor.rs:664,669` | ✅ |
 | `font.size` | `f32` / `14` | 字体与排版 → 字号 | `editor.rs:670` | ✅ |
 | `font.line_height` | `f32` / `1.6` | 字体与排版 → 行高 | `editor.rs:671` | ✅ |
@@ -248,7 +250,7 @@ UI 呈现规则：
 | 7 | `auto_save_delay_ms` | 防抖延时 | 已接线；注意延时在 `schedule_save` 调用瞬间快照进异步任务 | L2 | — |
 | 8 | `indent.use_tabs` / `tab_size` | Tab 键插入的字符 | **Spike 已验证并落地**：`set_tab_size` 属 `impl<M: MultiLineMode>`（`indent.rs:492`），`TextareaState` 可直接设 `TabSize { tab_size, hard_tabs }`，**无需更换编辑内核**。已在 `spike/editor-core` 实现（create 首次下发 + render 增量下发） | L1 | ✅ 已完成（待合入） |
 | 9 | `show_line_numbers` | 编辑区左侧行号 | **已完成**：编辑内核升级为 `EditorState`（行号 API 仅它提供，`state.rs:9330`）。构造期按配置设置，`render` 中检测变更增量下发 → 开关即时生效；同时显式关闭 `auto_close` / `smart_indent` / `folding` / `indent_guides`，避免干扰 Markdown 写作 | L1 | ✅ 已完成（待人工验证） |
-| 10 | `spell_check` | 拼写检查 | **已核实框架无能力 → 移除**（§1.2）。自研需新依赖 + 词典 + 编辑器装饰，属独立特性 | — | P3 移除 |
+| 10 | `spell_check` | 拼写检查 | **已核实框架无能力 → 移除**（§1.2）。自研需新依赖 + 词典 + 编辑器装饰，属独立特性 | — | ✅ 已移除（2026-10-20） |
 | 11 | `editor.font.*` | 编辑区字体 | **已完成**：family/size/line_height/weight 全部接线；`editor.rs` 的 `Editor::new` 链加 `.font_weight(FontWeight(font.weight.value()))`，设置界面补"编辑器字重"入口 | L1 | ✅ 已完成（待人工验证） |
 | 12 | `color_scheme` | 编辑区配色独立于主题 | `Auto`=跟随全局主题；`Light/Dark`=在编辑区容器显式设前景/背景色（不依赖全局 Theme） | L1 | P3 |
 | 13 | `keymap` | 快捷键覆盖 | 新增 `core/keymap.rs`：`default_bindings() + override(cfg.editor.keymap)`；`main.rs:46-56` 改为 `cx.bind_keys(resolve_bindings(&cfg))`；设置界面补键值对列表入口 | **L3** | P2 |
@@ -383,7 +385,7 @@ rg -o '// config: [a-z_.]+' src --no-filename | sed 's|// config: ||' | sort -u
 | V19 | `link_open` | ① 设为"浏览器打开"，点外链<br>② 设为"应用内打开"，点库内 `.md` 链接 | ① 系统浏览器打开<br>② 在当前窗口打开为标签 | **当前两者都走浏览器**；P1 后按配置分流 | ❌ → **P1** |
 | V20 | ~~`default_mode`~~ | — | — | **配置项已移除**：设置界面不再显示该项，导出 JSON 不含该字段 | ✅ 已移除 |
 | V21 | `color_scheme` | 任意改动 | 编辑区配色 | 无变化；P3 接线或移除 | ❌ → P3 |
-| V24 | `spell_check` | — | 设置界面是否已移除该项 | P3 后界面与模型均无此项，导出 JSON 不含该字段 | ❌ → P3 移除 |
+| V24 | `spell_check` | — | 设置界面是否已移除该项 | P3 后界面与模型均无此项，导出 JSON 不含该字段 | ✅ 已移除（2026-10-20） |
 | V22 | 持久化 | 改任意项 → 退出 → 重启 | 设置值、实际效果 | 值保留且效果一致（配置确实被消费而非仅显示） | 需逐项复测 |
 | V23 | 导入导出 | 导出 → 改乱 → 导入 | 全部设置项 | 完全还原，且效果同步还原 | ✅（数据层已测） |
 

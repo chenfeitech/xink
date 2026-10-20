@@ -8,7 +8,7 @@
 | 打开笔记只有 `open_note(path)`，没有"跳到某一行"的入口 | `src/ui/tabs.rs:181` |
 | 编辑区可用 `set_cursor_position(Position)` + `set_scroll_offset` 定位 | `src/ui/editor.rs:1232`、`src/ui/editor.rs:434`（预览滚动同步已用） |
 | 右侧 dock 目前只有预览一个 tab | `src/app.rs:603` |
-| 索引（T6）是"保存后"语义，不适合跟手的大纲 | `docs/note-index-design.md` §5 |
+| 索引（T6）是"保存后"语义，不适合跟手的大纲 | `docs/navigation/note-index-design.md` §5 |
 
 缺的是：把标题显示出来，并且点一下能跳过去。
 

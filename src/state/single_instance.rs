@@ -13,12 +13,11 @@ pub fn try_acquire() -> bool {
     let path = pid_file();
 
     // 记录过 pid 且该进程还活着 → 已有实例
-    if let Ok(content) = fs::read_to_string(&path) {
-        if let Ok(pid) = content.trim().parse::<i32>() {
-            if process_alive(pid) {
-                return false;
-            }
-        }
+    if let Ok(content) = fs::read_to_string(&path)
+        && let Ok(pid) = content.trim().parse::<i32>()
+        && process_alive(pid)
+    {
+        return false;
     }
 
     if let Some(parent) = path.parent() {

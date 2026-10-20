@@ -58,7 +58,8 @@
 - 操作完成后调用 `state.focus(window, cx)` 重新聚焦编辑区，使光标可见，保证后续输入落在笔记内。
 
 ### 2.5 自动保存联动
-- 所有插入均通过 `TextareaState` 的 `insert` / `replace` 完成，这些方法会触发 `Change` 事件，从而驱动既有的自动保存逻辑，无需额外处理。
+- 所有插入均通过 `EditorState` 的 `insert` / `replace` 完成，这些方法会触发 `Change` 事件，从而驱动既有的自动保存逻辑，无需额外处理。
+  （2026-10-20 注：编辑内核已由 `TextareaState` 升级为 `EditorState`，见 `docs/editor/editor-core-migration-eval.md`；本需求的接口名随之变更，行为不变。）
 
 ### 2.6 状态栏反馈
 - 每次操作后在底部状态栏显示「已插入：<操作名>」，操作名复用 `Format::label()`（如「加粗」「表格」）。

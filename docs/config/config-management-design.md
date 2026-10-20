@@ -74,7 +74,6 @@ pub struct EditorConfig {       // 编辑器
     pub auto_save_delay_ms: u64,       // 200–60000，默认 300
     pub indent: IndentConfig,          // use_tabs: bool, tab_size: 1–16
     pub show_line_numbers: bool,
-    pub spell_check: bool,
     pub font: FontConfig,              // 默认等宽
     pub color_scheme: ColorScheme,     // Auto | Light | Dark
     pub keymap: BTreeMap<String, String>,
@@ -255,7 +254,7 @@ this method can only be called during paint
 | ~~默认编辑模式~~ | **已于 2026-09-24 从配置模型与设置界面移除**：仅源码模式可用；分屏由 `DockArea` 布局直接提供，所见即所得按 `REQUIREMENTS.md` 不在本期范围 |
 | 缩进规则 | `TextareaState` 未暴露 `tab_size` 设置入口（该能力仅存在于代码编辑模式的内部 `TabSize`） |
 | 行号显示 | `set_line_number` 只对 `LayoutMode::CodeEditor` 生效，当前编辑区是纯文本多行模式 |
-| 拼写检查 | 框架未提供拼写检查接口 |
+| ~~拼写检查~~ | **已于 2026-10-20 从配置模型与设置界面移除**：框架无拼写能力，自研属独立特性（见 `editor-features-analysis.md` §4） |
 | 快捷键映射 | 仅预留 `BTreeMap<String, String>` 结构，键位覆盖逻辑待实现 |
 | 图片显示方式 | 预览控件未暴露图片渲染开关 |
 | 链接打开行为 | 预览控件未暴露链接点击回调 |

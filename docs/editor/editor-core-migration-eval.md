@@ -5,9 +5,12 @@
 > - **后续决策：采纳内核升级**（`Textarea` → `EditorState`）。原因是拼写检查所需的诊断能力
 >   同样只在 `EditorState`（见 [`editor-features-analysis.md`](./editor-features-analysis.md) §1.2），
 >   一次升级可同时解锁行号与诊断，比分别推进更划算
+> - **注（2026-10-20）**：拼写检查已决定**不做**（见 `editor-features-analysis.md` §4），
+>   "解锁诊断"不再作为推进理由；但内核升级本身的收益依然成立——行号、语法高亮、
+>   缩进、搜索、代码动作等都只在 `EditorState` 上可用
 > - 现状：已实施，`cargo build` 通过、`cargo test` 85 passed，待 GUI 人工验收
 > Spike 结果见 [§9](#9-spike-执行结果2026-09-24)，实施结果见 [§10](#10-实施结果2026-09-24)
-> 关联：[`config-wiring-design.md`](./config-wiring-design.md) §4 #9（行号）、#8（缩进）、§9 Q1/Q3
+> 关联：[`config-wiring-design.md`](../config/config-wiring-design.md) §4 #9（行号）、#8（缩进）、§9 Q1/Q3
 > 涉及：`src/ui/editor.rs`（编辑面板全部逻辑）、`src/core/config.rs`、`src/ui/preview.rs`（滚动同步）
 
 ---
@@ -159,7 +162,7 @@ impl InputBaseState<crate::input::EditorMode> {
 
 ## 8. 与既有文档的关系
 
-- 更新 [`config-wiring-design.md`](./config-wiring-design.md) §4 #9：`show_line_numbers` 的处置**前置于本 Spike**，不再在 P3 内直接决定；
+- 更新 [`config-wiring-design.md`](../config/config-wiring-design.md) §4 #9：`show_line_numbers` 的处置**前置于本 Spike**，不再在 P3 内直接决定；
 - 本 Spike 的结论同时是"编辑形态演进"的技术前提——若将来做所见即所得，必然基于 `Editor` 而非 `Textarea`
   （原 `default_mode` 配置项已于 2026-09-24 移除）；
 - 行号/缩进两项配置的最终去向（接线 or 移除）在决策门后回填到 `config-wiring-design.md` 的接线总表。
@@ -255,4 +258,5 @@ impl<M: crate::input::MultiLineMode> InputBaseState<M> {
 验证：`cargo build` 通过、`cargo test` **85 passed / 0 failed**、`cargo clippy` 无 error。
 
 **仍需人工验收**：§9.6 第 6–8 条（行号开关、写作手感、保存与滚动同步无回归、大文件）。
-这批验证通过后，可继续推进拼写检查（诊断能力已随内核解锁）。
+~~这批验证通过后，可继续推进拼写检查~~——拼写检查已于 2026-10-20 **决定不做**
+（见 `editor-features-analysis.md` §4），"诊断能力已解锁"不再作为推进理由。

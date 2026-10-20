@@ -59,7 +59,11 @@ pub enum FileKind {
     Archive,
     /// 表格
     Spreadsheet,
-    /// 其余一切（音视频、未知扩展名）
+    /// 音频
+    Audio,
+    /// 视频
+    Video,
+    /// 其余一切（未知扩展名）
     Other,
 }
 
@@ -92,7 +96,12 @@ pub fn file_kind(path: &Path, is_dir: bool) -> FileKind {
         }
         "zip" | "tar" | "gz" | "tgz" | "7z" | "rar" | "bz2" | "xz" => FileKind::Archive,
         "xls" | "xlsx" | "numbers" | "ods" | "csv" => FileKind::Spreadsheet,
-        // json / yaml / 音视频等按设计决策归入 Other，与"普通文件"统一呈现
+        "mp3" | "wav" | "flac" | "aac" | "m4a" | "ogg" | "oga" | "opus" | "wma" | "aiff"
+        | "aif" => FileKind::Audio,
+        "mp4" | "mov" | "mkv" | "avi" | "webm" | "m4v" | "mpg" | "mpeg" | "wmv" | "flv" => {
+            FileKind::Video
+        }
+        // 未识别的扩展名按设计决策归入 Other，与"普通文件"统一呈现
         _ => FileKind::Other,
     }
 }

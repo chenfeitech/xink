@@ -191,7 +191,7 @@ fn status_duplicate_when_same_path_registered_twice() {
     let b = VaultEntry::new(lib, "第二个（重复）");
     // 重复是对称判定：两条都会被标成 Duplicate，
     // "保留先注册的那条"是上层的策略，不在状态判定里
-    assert_eq!(b.status(&[a.clone()]), VaultStatus::Duplicate);
+    assert_eq!(b.status(std::slice::from_ref(&a)), VaultStatus::Duplicate);
     assert_eq!(a.status(&[b]), VaultStatus::Duplicate);
 }
 
@@ -204,7 +204,7 @@ fn status_nested_when_inside_another_vault() {
 
     let o = VaultEntry::new(outer, "外层");
     let i = VaultEntry::new(inner, "内层");
-    assert_eq!(i.status(&[o.clone()]), VaultStatus::Nested);
+    assert_eq!(i.status(std::slice::from_ref(&o)), VaultStatus::Nested);
     // 嵌套只是警告，仍然可用
     assert!(i.status(&[o]).is_usable());
     assert_eq!(

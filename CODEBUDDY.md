@@ -29,7 +29,7 @@ src/
 └── state/        持久化（workspace.json）
 tests/            单元测试（目录结构镜像 src/，由 src 里的 #[path] 挂载；
                   不是 Cargo 集成测试目录，详见 docs/TESTS.md）
-docs/             需求规格 + 技术设计
+docs/             需求 + 设计文档（31 份，**入口见 docs/INDEX.md**）
 .codebuddy/       rules（开发铁律） + skills（开发技能）
 ```
 

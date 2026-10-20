@@ -167,7 +167,6 @@ pub struct EditorConfig {
     pub auto_save_delay_ms: u64,
     pub indent: IndentConfig,
     pub show_line_numbers: bool,
-    pub spell_check: bool,
     pub font: FontConfig,
     pub color_scheme: ColorScheme,
     /// 快捷键映射：动作名 → 按键串（如 "cmd-b"），留空则用内置默认
@@ -396,7 +395,6 @@ impl Default for EditorConfig {
             auto_save_delay_ms: 300,
             indent: IndentConfig::default(),
             show_line_numbers: false,
-            spell_check: false,
             font: FontConfig::mono(),
             color_scheme: ColorScheme::default(),
             keymap: BTreeMap::new(),

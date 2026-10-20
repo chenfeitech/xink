@@ -96,7 +96,7 @@ impl VaultManagerView {
                 .detach();
                 state
             });
-            if state.read(cx).value().to_string() != entry.name {
+            if state.read(cx).value() != entry.name {
                 let name = entry.name.clone();
                 state.update(cx, |s, cx| s.set_value(name, window, cx));
             }
@@ -293,9 +293,7 @@ impl Global for VaultManagerWindow {}
 
 /// 打开库管理窗口；已存在则聚焦已有窗口（与设置窗口一致）
 pub fn open_vault_manager(cx: &mut App) {
-    let existing = cx
-        .try_global::<VaultManagerWindow>()
-        .and_then(|g| g.handle.clone());
+    let existing = cx.try_global::<VaultManagerWindow>().and_then(|g| g.handle);
 
     if let Some(handle) = existing {
         let mut alive = false;
@@ -314,7 +312,7 @@ pub fn open_vault_manager(cx: &mut App) {
             cx.new(|cx| Root::new(view, window, cx))
         }) {
             Ok(handle) => {
-                _ = cx.update(move |cx| {
+                cx.update(move |cx| {
                     cx.set_global(VaultManagerWindow {
                         handle: Some(handle),
                     });
@@ -364,7 +362,7 @@ pub fn prompt_create_vault(cx: &mut App) {
         let Some(root) = paths.into_iter().next() else {
             return;
         };
-        _ = cx.update(move |cx| create_or_switch_vault(root, cx));
+        cx.update(move |cx| create_or_switch_vault(root, cx));
     })
     .detach();
 }
@@ -414,7 +412,7 @@ fn prompt_relocate(id: &str, cx: &mut App) {
         let Some(root) = paths.into_iter().next() else {
             return;
         };
-        _ = cx.update(move |cx| relocate_vault(&id, root, cx));
+        cx.update(move |cx| relocate_vault(&id, root, cx));
     })
     .detach();
 }

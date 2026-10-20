@@ -86,7 +86,7 @@ preview_source(note)
 | 数据文件（json/yaml）里有 `[[..]]` | 不进 Markdown 预览链路（`preview_source` 已分流） |
 | 空目标 `[[]]` | `parse_wiki_inner` 已丢弃，不会被改写 |
 | 浮层被点遮罩关掉（不走 `on_cancel`） | 编辑区 `completion_open` 会卡在 true；因此在浮层实体上挂 `cx.on_release` 兜底复位 |
-| 浮层里打字却没反应 | dialog 的 build 闭包每次重绘都会重放，实体必须建在 `open_dialog` 外面（详见 `docs/command-palette-design.md` §3） |
+| 浮层里打字却没反应 | dialog 的 build 闭包每次重绘都会重放，实体必须建在 `open_dialog` 外面（详见 `docs/navigation/command-palette-design.md` §3） |
 
 ## 7. 测试计划
 

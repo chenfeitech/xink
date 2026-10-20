@@ -1,6 +1,6 @@
 # 设计：JSON / YAML / TOML 文本文件编辑与格式化预览
 
-> 需求见 `docs/json-yaml-editing-requirements.md`。
+> 需求见 `docs/editor/json-yaml-editing-requirements.md`。
 > 本设计**已做源码级可行性核实**（依据均标注 文件:行号），未核实项在 §9 单独列出。
 > **状态：已实施**（四项拍板结论见 §0，S1–S5 记录见 §11）。
 

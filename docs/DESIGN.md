@@ -42,7 +42,7 @@ gpui-kit 0.6.4            ← 应用只依赖这一个
 |---|---|---|
 | Markdown 预览 | `gpui_base::TextView::markdown()` | 标题/列表/表格/代码块/图片/链接/脚注、可选中复制、虚拟滚动、插件机制 |
 | 预览增量更新 | `TextViewState` + `set_text()` | 只重算变动块，不重解析全文档 |
-| Markdown 源码编辑 | `Textarea`（多行）/ `Editor`（tree-sitter 高亮） | 官方建议：普通多行用 `Textarea`，源码编辑用 `Editor` |
+| Markdown 源码编辑 | `EditorState`（tree-sitter 高亮） | 已从 `Textarea` 迁到 `EditorState`：行号与诊断只有它提供，见 `docs/editor/editor-core-migration-eval.md` |
 | 目录树 | `Tree` | 直接复用 |
 | 面板布局 | `DockArea` | 拖拽/分屏/嵌套，**且可序列化持久化** |
 | 文件变更监听 | `notify 7.0`（组件库已依赖） | 外部修改同步 |
@@ -58,17 +58,32 @@ edition = "2024"          # gpui-kit 要求 edition 2024
 rust-version = "1.98"
 
 [dependencies]
-gpui-kit = "0.6"
+gpui-kit = { version = "0.6", features = [
+    "tree-sitter",        # 编辑区语法高亮（按需启用语言，不开全量）
+    "tree-sitter-yaml",   # 数据文件：JSON 随 tree-sitter 自带，YAML/TOML 需显式开启
+    "tree-sitter-toml",
+] }
 
 # 以下版本必须与 gpui-component 内部保持一致，否则会出现多版本类型不兼容
 ropey = "=2.0.0-beta.1"   # gpui-component 是精确锁定，必须对齐
-notify = "7"
-markdown = "1"            # 自研 AST 解析（大纲/双链提取）时使用
+syntect = "5.3.0"         # 代码块语法高亮（版本同 gpui-component）
+
+notify = "7"              # 文件监听
+flume = "0.11"            # 监听事件传给 UI（gpui 内部同版本）
+rust-embed = "8.12"       # 图标资源在 debug 下也内嵌，避免换机器后图标全丢
+noyalib = "0.0.57"        # JSON / YAML 解析与格式化（serde_yaml 已废弃）
+toml = "0.8"              # 与 Cargo.lock 中已有版本对齐
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
-thiserror = "2"
+dirs = "5"                # 配置与状态目录
+regex = "1"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+markdown = "1.0"          # 仅用于测试：复现 gpui-base 对畸形 Markdown 的行为
 ```
 
 > **铁律**：`ropey` 必须与 `gpui-component` 精确同版本（`=2.0.0-beta.1`）。
@@ -79,22 +94,38 @@ thiserror = "2"
 ### 2.1 分层
 
 ```
-ui/          视图层——只负责渲染与交互，不含业务规则
-  ├── workspace.rs   DockArea 布局、标签栏
-  ├── tabs.rs        标签注册表 + 打开笔记的唯一入口
-  ├── file_tree.rs   目录树
-  ├── editor.rs      编辑区
-  ├── preview.rs     预览区
-  └── command.rs     命令面板 / 搜索
-core/        领域层——与 UI 完全解耦，可独立单元测试
-  ├── vault.rs       库：根路径、文件枚举、增删改移动
-  ├── note.rs        笔记：Rope 内容、脏标记、保存
-  ├── session.rs     会话：标签标识归一化、保序去重、失效判定
-  ├── markdown.rs    解析：AST → 预览数据 / 大纲 / 双链
-  ├── index.rs       索引：标题、链接、标签 → 搜索
-  └── watcher.rs     notify 文件监听 → 外部变更事件
-state/       持久化：workspace.json、最近库、布局
+src/
+├── main.rs         启动入口
+├── app.rs          根视图 `Workspace`（DockArea 编排）+ 全局 `AppState`
+├── actions.rs      全局 Action 定义
+├── ui/             视图层——只负责渲染与交互，不含业务规则
+│   ├── tabs.rs          标签注册表 + 打开笔记的唯一入口
+│   ├── file_tree.rs     目录树
+│   ├── editor.rs        编辑区（EditorState）
+│   ├── preview.rs       预览区（TextView）
+│   ├── command.rs       命令面板   completion.rs  双链补全
+│   ├── search.rs        全文搜索
+│   ├── outline.rs       大纲   backlink.rs 反链   tags.rs 标签
+│   ├── rail.rs / drawer.rs  右侧按钮条与半透明抽屉
+│   ├── settings.rs      设置窗口   vault_manager.rs 库管理
+├── core/           领域层——与 UI 完全解耦，可独立单元测试
+│   ├── vault.rs         库：注册/切换/扫描、增删改移动
+│   ├── note.rs          笔记：Rope 内容、脏标记、原子保存
+│   ├── session.rs       会话：标签标识归一化、保序去重、失效判定
+│   ├── markdown.rs      自研解析：事实提取、双链改写、图片 URL
+│   ├── index.rs         索引：标题 / 双链图 / 标签表
+│   ├── search.rs        全文搜索   fuzzy.rs 模糊匹配
+│   ├── datafile.rs      数据文件（JSON/YAML/TOML）判定与格式化
+│   ├── media.rs         文件类型判定（可编辑 / 图片 / 类型图标）
+│   ├── highlight.rs     代码块语法高亮（syntect）
+│   ├── config.rs        配置模型、校正、导入导出
+│   ├── fs.rs            文件操作：复制/移动/删除/导入/唯一名
+│   └── watcher.rs       notify 文件监听 → 外部变更事件
+└── state/          持久化：config.json / layout.json / vaults.json / open_notes.json
 ```
+
+> 没有 `ui/workspace.rs`：根视图 `Workspace` 直接定义在 `src/app.rs`，
+> 与全局状态 `AppState` 同处一个文件（布局编排与状态本来就要频繁互相访问）。
 
 **依赖方向严格单向**：`ui → core → 无`。`core` 不允许 `use` 任何 `gpui_kit` 的 UI 类型，
 只允许使用 `gpui` 的 `Entity`/`App`/`Task` 等运行时类型（保证领域层可测试）。
@@ -103,13 +134,18 @@ state/       持久化：workspace.json、最近库、布局
 
 GPUI 用 `Entity<T>` 持有跨组件共享状态，通过 `cx.notify()` 驱动重绘：
 
-| Entity | 职责 |
+| 状态 | 职责 |
 |---|---|
-| `Entity<Workspace>` | 顶层：当前库、打开的标签、布局状态 |
-| `Entity<Vault>` | 当前库：根路径、文件树快照 |
+| `AppState`（`cx` 全局） | 顶层：`dock_area`、配置、库注册表、标签、索引、大纲、rail |
 | `Entity<Note>` | 单篇笔记：`Rope` 内容 + `dirty` 标记 + 磁盘 mtime |
 | `Entity<NoteIndex>` | 全库索引：路径树 + 双链图 + 标签表，供搜索/补全 |
+| `Entity<OutlineState>` | 当前笔记的大纲（`parse_facts` 的派生状态） |
+| `Entity<RailState>` | 右侧按钮条：当前展开哪个抽屉 |
 | `Entity<TextViewState>` | 预览文档状态（gpui-base 提供），`set_text()` 增量更新 |
+
+> `AppState` 不是 `Entity`，而是用 `cx.set_global()` 注册的**全局值**：
+> 文件树、编辑器、预览分散在不同面板，都要读它，用全局比层层传引用简单。
+> 库注册表 `VaultRegistry` 是它的普通字段，也不是 Entity。
 
 ### 2.3 数据流（单向）
 
@@ -133,7 +169,7 @@ struct Note {
 }
 
 struct WorkspaceState {           // 按职责拆成多个 JSON 落盘
-    vault_root: Option<PathBuf>,  // vault.json
+    vaults: VaultRegistry,        // vaults.json：已注册的库 + 当前库
     open_tabs: Vec<PathBuf>,      // open_notes.json：顺序即标签顺序
     active_tab: Option<PathBuf>,  // open_notes.json：上次活动的标签
     layout: Option<String>,       // layout.json：DockArea 序列化结果
@@ -143,10 +179,12 @@ struct WorkspaceState {           // 按职责拆成多个 JSON 落盘
 存储位置（macOS）：`~/Library/Application Support/xink/`
 - `config.json` — 偏好设置
 - `layout.json` — `DockArea` 布局（带 schema 版本）
-- `vault.json` — 上次打开的库
+- `vaults.json` — 已注册的库 + 当前库（多库机制，见 `docs/vault/multi-vault-design.md`）
 - `open_notes.json` — **会话恢复的唯一来源**：已打开标签的顺序 + 活动标签
-- `recent.json` — 最近文件（最多 10 条）
-- `index/` — 索引缓存，**可随时删除重建**
+
+> 索引**不落盘**：它是磁盘的派生数据，启动与切库时后台重建，
+> 单文件保存与监听事件做增量更新（见 `docs/navigation/note-index-design.md`）。
+> "最近文件"列表已随 R4.3 移除，不再有 `recent.json`。
 
 > `open_notes.json` 只存**路径**，绝不存正文（见 §1 铁律 5）。
 > 文件被删除后这条记录自然失效，恢复时剔除即可，无需额外清理机制。
@@ -284,7 +322,7 @@ sync_placeholder：有笔记则清空白页，无笔记则保留一个
 | 编辑时预览实时但不卡顿 | 停止输入 300ms 防抖后解析；用 `TextViewState::set_text()` 增量更新（gpui-base 只重算变动块，不重解析全文档） |
 | 大库首次加载慢 | 索引构建放 `cx.background_spawn()` 后台线程；文件树子目录懒加载 |
 | 外部修改冲突 | `notify` 监听 + mtime 比对，冲突时弹提示，**绝不静默覆盖** |
-| 双链 `[[...]]` 解析 | GFM 不含此语法；用 `markdown` crate 解析后遍历 AST 提取，配合自定义扫描 |
+| 双链 `[[...]]` 解析 | GFM 不含此语法；`core/markdown.rs` 自研状态机：`parse_facts` 提取、`rewrite_wikilinks` 改写。**不依赖** `markdown` crate（它只是 dev-dependency，用于测试复现 gpui-base 行为） |
 | 重复标签（同一文件两个实例） | 统一入口 `tabs::open_note` + 规范化路径键 `tab_key`，命中即激活，不新建 |
 | 恢复顺序随机漂移 | 顺序单独由 `OpenTabs.order` 维护并落盘，不取 `HashMap` 迭代顺序 |
 | 切标签时的重入 panic | 只在 dock 层 `select_panel`，绝不在 panel 写租约内切换（封装为 `reveal_panel`） |
@@ -300,7 +338,10 @@ rustgpui/
 ├── README.md                 项目说明 + 构建前置条件
 ├── docs/
 │   ├── REQUIREMENTS.md       需求规格
-│   └── DESIGN.md             本文档
+│   ├── DESIGN.md             本文档
+│   ├── P1-PLAN.md            P1 任务拆解与进度
+│   ├── INDEX.md              文档索引（状态 + 对应模块 + 已知缺口）
+│   └── <功能>-design.md      每个功能一份设计文档（共 30+ 篇，按功能命名）
 ├── .codebuddy/
 │   ├── rules/                开发铁律（AI 必须遵守）
 │   └── skills/               项目开发技能
@@ -326,6 +367,8 @@ rustgpui/
 | **M6** | P1 公共底座 | `core/fuzzy` 模糊匹配、`core/markdown` 事实解析、`core/index` 全库索引 |
 | **M7** | P1 导航与结构 | 命令面板（R10）、大纲（R9）、双链（R5）、反链（R6）、标签（R7）、全文搜索（R8） |
 | **M8** | P1 收尾 | 明暗主题入口（R11）、Markdown 快捷键（R12）、数据文件（R13）、目录树增量刷新 |
+
+> **M0–M8 已全部完成**（P0 与 P1 均已交付）。
 
 M6–M8 的拆解与进度见 `docs/P1-PLAN.md`；各功能的取舍记录在设计文档
 （`wikilink-design.md` / `outline-design.md` / `index-panels-design.md` /

@@ -262,7 +262,7 @@ impl Render for PreviewPanel {
         // 排版样式：段间距与标题层级随密度变化；颜色沿用主题，明暗自动一致
         // `from_theme` 要 gpui_base 的 Theme（与 gpui_component 的 Theme 是不同类型），
         // 它是全局的，直接取即可——这样颜色随主题，只覆盖布局相关的几项
-        let text_style = TextViewStyle::from_theme(&cx.global::<BaseTheme>())
+        let text_style = TextViewStyle::from_theme(cx.global::<BaseTheme>())
             .with_paragraph_gap(rems(layout.paragraph_gap))
             .with_heading_base_font_size(px(font.size * layout.heading_scale))
             .with_heading_font_size(|level: u8, base: Pixels| {

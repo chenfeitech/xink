@@ -64,6 +64,19 @@ pub enum FieldKind {
 /// 高阶生命周期约束（HRTB）。控件内部需要的 `cx` 由各自的事件回调自行取得。
 type ControlFn = Rc<dyn Fn(&mut SettingsView, &AppConfig) -> AnyElement>;
 
+// 下面这组回调统一抽成别名，避免 `Rc<dyn Fn(…)>` 在字段上层层嵌套。
+
+/// 返回 Some(原因) 时该项禁用
+type DisabledFn = Rc<dyn Fn(&AppConfig) -> Option<&'static str>>;
+/// 当前值是否等于默认值（决定是否显示 ⟲）
+type IsDefaultFn = Rc<dyn Fn(&AppConfig) -> bool>;
+/// 恢复该项默认值
+type ResetFn = Rc<dyn Fn(&mut AppConfig)>;
+/// 数值型取值（非数值项恒为 0），供统一渲染与输入框同步使用
+type ValueFn = Rc<dyn Fn(&AppConfig) -> f32>;
+/// 数值型写入（非数值项为空操作）
+type SetValueFn = Rc<dyn Fn(&mut AppConfig, f32)>;
+
 /// 一项设置的完整描述
 pub struct SettingField {
     pub id: &'static str,
@@ -74,21 +87,23 @@ pub struct SettingField {
     pub kind: FieldKind,
     /// Some(原因)：该项已可配置但尚未接入渲染
     pub unavailable: Option<&'static str>,
-    /// 返回 Some(原因) 时该项禁用
-    pub disabled: Rc<dyn Fn(&AppConfig) -> Option<&'static str>>,
-    /// 当前值是否等于默认值（决定是否显示 ⟲）
-    pub is_default: Rc<dyn Fn(&AppConfig) -> bool>,
-    /// 恢复该项默认值
-    pub reset: Rc<dyn Fn(&mut AppConfig)>,
-    /// 数值型取值（非数值项恒为 0），供统一渲染与输入框同步使用
-    pub value: Rc<dyn Fn(&AppConfig) -> f32>,
-    /// 数值型写入（非数值项为空操作）
-    pub set_value: Rc<dyn Fn(&mut AppConfig, f32)>,
+    pub disabled: DisabledFn,
+    pub is_default: IsDefaultFn,
+    pub reset: ResetFn,
+    pub value: ValueFn,
+    pub set_value: SetValueFn,
     pub control: ControlFn,
 }
 
 // ── 描述表的构造器（消除逐项重复代码） ──────────────────────────
-
+//
+// 这三个构造器的参数个数（8 / 10 / 11）超过了 clippy 默认的 7 个。
+// 这是元数据表的固有形态：**一行 = 一项设置的全部元信息**
+// （id / 标题 / 说明 / 分类 / 分组 / 类型 / 取值 / 写入 …），
+// 刻意保持"一项一行"的平铺写法——`all_fields()` 里几十项要能上下比对差异，
+// 改成 builder 链式调用会把一行拆成七八行，可读性反而变差。
+// 因此这里显式放行，而不是为了消告警去重构表结构。
+#[allow(clippy::too_many_arguments)]
 fn bool_field(
     id: &'static str,
     title: &'static str,
@@ -127,6 +142,8 @@ fn bool_field(
     }
 }
 
+// 同上：一行 = 一项设置，参数多是元数据表的固有形态
+#[allow(clippy::too_many_arguments)]
 fn choice_field(
     id: &'static str,
     title: &'static str,
@@ -167,6 +184,8 @@ fn choice_field(
     }
 }
 
+// 同上：一行 = 一项设置，参数多是元数据表的固有形态
+#[allow(clippy::too_many_arguments)]
 fn number_field(
     id: &'static str,
     title: &'static str,
@@ -458,21 +477,6 @@ fn all_fields() -> Vec<SettingField> {
             None,
             None,
         ),
-        with_meta(
-            bool_field(
-                "editor.spell_check",
-                "拼写检查",
-                "标记可疑拼写（检查引擎尚未接入）",
-                Editor,
-                "编辑行为",
-                None,
-                |c| c.editor.spell_check,
-                |c, v| c.editor.spell_check = v,
-            ),
-            // 诊断展示层已随内核就绪，缺的是拼写引擎，因此仍属"当前不可用"
-            Some("拼写检查引擎尚未接入（诊断展示层已就绪）"),
-            None,
-        ),
         // ── 编辑器 · 字体与排版 ──
         choice_field(
             "editor.font.family",
@@ -520,7 +524,7 @@ fn all_fields() -> Vec<SettingField> {
             "字体与排版",
             None,
             FieldKind::Choice,
-            || font_weight_options(),
+            font_weight_options,
             |c| font_weight_value(c.editor.font.weight),
             |c, v| c.editor.font.weight = font_weight_parse(&v),
         ),
@@ -734,7 +738,7 @@ fn all_fields() -> Vec<SettingField> {
             "排版",
             None,
             FieldKind::Choice,
-            || font_weight_options(),
+            font_weight_options,
             |c| font_weight_value(c.preview.font.weight),
             |c, v| c.preview.font.weight = font_weight_parse(&v),
         ),
@@ -843,6 +847,10 @@ fn dropdown(
 }
 
 /// 数值：步进器 + 可直接输入的输入框
+///
+/// 参数 8 个（id / 当前值 / 最小 / 最大 / 步长 / 单位 / 写入回调 / view），
+/// 就是"画一个步进器需要知道的全部"，拆成结构体反而要在调用点来回传。
+#[allow(clippy::too_many_arguments)]
 fn number_control(
     view: &mut SettingsView,
     id: &'static str,
@@ -966,6 +974,8 @@ pub struct SettingsView {
     highlight: Option<&'static str>,
     /// 数值项的输入框状态，按字段 id 索引
     inputs: HashMap<&'static str, Entity<InputState>>,
+    /// 顶部搜索框的输入状态
+    search_input: Entity<InputState>,
     /// 上次自适应所用的内容指纹（分类 + 搜索词 + 可见项数 + 分组数）。
     /// 指纹不变就不动窗口尺寸，避免每帧 resize，也保留用户手动调整的结果。
     size_fingerprint: Option<(SettingsTab, String, usize, usize)>,
@@ -1013,14 +1023,31 @@ impl SettingsView {
         // 系统字体列表只取一次，之后全局缓存
         SYSTEM_FONTS.get_or_init(|| cx.text_system().all_font_names());
 
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索设置…"));
+
         let mut this = Self {
             tab: SettingsTab::Basic,
             query: String::new(),
             highlight: None,
             inputs: HashMap::new(),
+            search_input,
             // None 表示"还没自适应过"，首次渲染会立即贴合内容
             size_fingerprint: None,
         };
+
+        // 搜索框是唯一的 query 写入口：输入即过滤，无需回车
+        cx.subscribe_in(
+            &this.search_input,
+            window,
+            |this, state, ev: &InputEvent, _window, cx| {
+                if !matches!(ev, InputEvent::Change) {
+                    return;
+                }
+                this.query = state.read(cx).value().to_string();
+                cx.notify();
+            },
+        )
+        .detach();
 
         let cfg = crate::app::config(cx);
         for field in all_fields() {
@@ -1094,10 +1121,10 @@ impl Render for SettingsView {
 
         // 搜索命中时自动切到命中项所属分类
         if let Some(id) = self.first_match(&cfg) {
-            if let Some(field) = fields.iter().find(|f| f.id == id) {
-                if self.tab != field.tab {
-                    self.tab = field.tab;
-                }
+            if let Some(field) = fields.iter().find(|f| f.id == id)
+                && self.tab != field.tab
+            {
+                self.tab = field.tab;
             }
             self.highlight = Some(id);
         } else {
@@ -1110,10 +1137,10 @@ impl Render for SettingsView {
                 continue;
             }
             let text = format_number(field, &cfg);
-            if let Some(state) = self.inputs.get(field.id) {
-                if state.read(cx).value().to_string() != text {
-                    state.update(cx, |s, cx| s.set_value(text.clone(), window, cx));
-                }
+            if let Some(state) = self.inputs.get(field.id)
+                && state.read(cx).value() != text
+            {
+                state.update(cx, |s, cx| s.set_value(text.clone(), window, cx));
             }
         }
 
@@ -1224,17 +1251,17 @@ impl Render for SettingsView {
 impl SettingsView {
     /// 搜索框：输入即过滤，回车跳转到首个命中项
     fn render_search(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let state = self.query.clone();
         div()
             .flex()
             .items_center()
             .gap_2()
-            .child(div().flex_1().text_sm().child(if state.is_empty() {
-                "搜索设置…".to_string()
-            } else {
-                state.clone()
-            }))
-            .children(if state.is_empty() {
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&self.search_input).small().w_full()),
+            )
+            .children(if self.query.is_empty() {
                 None
             } else {
                 Some(
@@ -1242,8 +1269,11 @@ impl SettingsView {
                         .small()
                         .ghost()
                         .label("清除")
-                        .on_click(cx.listener(|this, _, _, cx| {
+                        .on_click(cx.listener(|this, _, window, cx| {
                             this.query.clear();
+                            this.search_input.update(cx, |state, cx| {
+                                state.set_value(String::new(), window, cx);
+                            });
                             cx.notify();
                         })),
                 )
@@ -1427,9 +1457,7 @@ impl Global for SettingsWindow {}
 
 /// 打开设置窗口；已存在则聚焦已有窗口。
 pub fn open_settings(cx: &mut App) {
-    let existing = cx
-        .try_global::<SettingsWindow>()
-        .and_then(|g| g.handle.clone());
+    let existing = cx.try_global::<SettingsWindow>().and_then(|g| g.handle);
 
     if let Some(handle) = existing {
         let mut alive = false;
@@ -1448,7 +1476,7 @@ pub fn open_settings(cx: &mut App) {
             cx.new(|cx| Root::new(view, window, cx))
         }) {
             Ok(handle) => {
-                _ = cx.update(move |cx| {
+                cx.update(move |cx| {
                     cx.set_global(SettingsWindow {
                         handle: Some(handle),
                     });

@@ -50,7 +50,7 @@
 | R2.4 | 大文件不卡：10MB 级笔记可正常编辑 | 使用 Rope 结构，不做全量字符串拷贝 |
 | R2.5 | UTF-8 编码，中英文混排、CJK 光标定位正确 | 中文输入（IME）正常 |
 | R2.6 | 标签关闭按钮视觉精致、尺寸收敛（约 12–14px 图标），与工具栏按钮风格一致 | 平时无边框无背景，hover 才有轻微反馈；点击热区 ≥ 20×20px |
-| ~~R2.7~~ | ~~选中文字设置背景色~~ | **已撤回**（2026-10-10）：框架只在行内代码分支绘制背景矩形，`<mark>` 与 `<mark><code>` 均无法呈现底色；入口与代码已移除，调研结论见 `docs/text-format-design.md` |
+| ~~R2.7~~ | ~~选中文字设置背景色~~ | **已撤回**（2026-10-10）：框架只在行内代码分支绘制背景矩形，`<mark>` 与 `<mark><code>` 均无法呈现底色；入口与代码已移除，调研结论见 `docs/editor/text-format-design.md` |
 | ~~R2.8~~ | ~~选中文字设置文字颜色（前景）~~ | **不实现**（2026-10-10）：框架无 `span`/`font` 与前景色解析，写入也无法在预览中呈现 |
 | ~~R2.9~~ | ~~选中文字设置字体~~ | **不实现**（2026-10-10）：框架无 `font-family` 处理，同上 |
 
@@ -77,15 +77,15 @@
 
 | # | 需求 | 状态 | 实现要点 |
 |---|---|---|---|
-| R5 | 双链 `[[笔记名]]`：可点击跳转，支持自动补全 | ✅ | `docs/wikilink-design.md` |
-| R6 | 反向链接面板：显示"哪些笔记引用了当前笔记" | ✅ | `docs/index-panels-design.md` |
+| R5 | 双链 `[[笔记名]]`：可点击跳转，支持自动补全 | ✅ | `docs/navigation/wikilink-design.md` |
+| R6 | 反向链接面板：显示"哪些笔记引用了当前笔记" | ✅ | `docs/navigation/index-panels-design.md` |
 | R7 | 标签 `#tag`：解析、侧栏聚合、点击筛选 | ✅ | 同上 |
-| R8 | 全文搜索 `Cmd+Shift+F`：跨库检索，结果可跳转 | ✅ | 当前库内全文检索；**跨库检索待多库方案确定**（`docs/multi-vault-design.md:43`） |
-| R9 | 大纲（TOC）面板：按标题层级展示，点击跳转 | ✅ | `docs/outline-design.md` |
-| R10 | 命令面板 `Cmd+P`：模糊搜索文件名快速打开 | ✅ | `docs/command-palette-design.md` |
+| R8 | 全文搜索 `Cmd+Shift+F`：库内检索，结果可跳转 | ✅ | 只检索**当前库**；**跨库检索已决定不做**（2026-10-20，见 `docs/vault/multi-vault-design.md` 非目标） |
+| R9 | 大纲（TOC）面板：按标题层级展示，点击跳转 | ✅ | `docs/navigation/outline-design.md` |
+| R10 | 命令面板 `Cmd+P`：模糊搜索文件名快速打开 | ✅ | `docs/navigation/command-palette-design.md` |
 | R11 | 明暗主题切换，跟随系统 | ✅ | `Cmd+Shift+L`，纯逻辑 `ThemeMode::toggled` |
 | R12 | 常用 Markdown 快捷键（`Cmd+B` 加粗、`Cmd+I` 斜体等） | ✅ | `Cmd+B/I/Shift+X/E/K` |
-| R13 | 数据文件（JSON / YAML / TOML）编辑 | ✅ | `docs/json-yaml-editing-requirements.md`（R13.8 波浪线待人工确认） |
+| R13 | 数据文件（JSON / YAML / TOML）编辑 | ✅ | `docs/editor/json-yaml-editing-requirements.md`（R13.8 波浪线待人工确认） |
 
 ### P2 — 明确不在本期范围
 

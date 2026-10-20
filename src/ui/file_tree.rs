@@ -345,19 +345,19 @@ impl FilesPanel {
         });
 
         cx.spawn_in(window, async move |this, window| {
-            if let Ok(Ok(Some(dirs))) = prompt.await {
-                if let Some(dir) = dirs.into_iter().next() {
-                    _ = this.update_in(window, |this, window, cx| {
-                        if let Some(vault) = &this.vault {
-                            match vault.move_to(&path, &dir) {
-                                Ok(to) => this.status = format!("已移动到 {}", to.display()).into(),
-                                Err(err) => this.status = format!("移动失败: {err}").into(),
-                            }
+            if let Ok(Ok(Some(dirs))) = prompt.await
+                && let Some(dir) = dirs.into_iter().next()
+            {
+                _ = this.update_in(window, |this, window, cx| {
+                    if let Some(vault) = &this.vault {
+                        match vault.move_to(&path, &dir) {
+                            Ok(to) => this.status = format!("已移动到 {}", to.display()).into(),
+                            Err(err) => this.status = format!("移动失败: {err}").into(),
                         }
-                        this.refresh(window, cx);
-                        cx.notify();
-                    });
-                }
+                    }
+                    this.refresh(window, cx);
+                    cx.notify();
+                });
             }
         })
         .detach();
@@ -553,10 +553,10 @@ impl FilesPanel {
     /// 用于监听可能漏掉的场景（休眠唤醒后、网络盘、权限变化），
     /// 或用户只是想马上确认一次目录状态。
     fn refresh_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(last) = self.last_manual_refresh {
-            if last.elapsed() < std::time::Duration::from_millis(300) {
-                return;
-            }
+        if let Some(last) = self.last_manual_refresh
+            && last.elapsed() < std::time::Duration::from_millis(300)
+        {
+            return;
         }
         self.last_manual_refresh = Some(Instant::now());
         self.status = "正在扫描…".into();
@@ -808,10 +808,15 @@ const ICON_FILE_CODE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2
 const ICON_FILE_ARCHIVE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M13.659 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v11.5" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M8 12v-1" /> <path d="M8 18v-2" /> <path d="M8 7V6" /> <circle cx="8" cy="20" r="2" /> </svg>"#;
 const ICON_FILE_SPREADSHEET: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M8 13h2" /> <path d="M14 13h2" /> <path d="M8 17h2" /> <path d="M14 17h2" /> </svg>"#;
 
+const ICON_FILE_AUDIO: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M11.65 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v10.35" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M8 20v-7l3 1.474" /> <circle cx="6" cy="20" r="2" /> </svg>"#;
+const ICON_FILE_VIDEO: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M15.033 13.44a.647.647 0 0 1 0 1.12l-4.065 2.352a.645.645 0 0 1-.968-.56v-4.704a.645.645 0 0 1 .967-.56z" /> </svg>"#;
+
 /// 文件类型 → 图标 SVG
 fn kind_icon_svg(kind: FileKind) -> &'static str {
     match kind {
         FileKind::Image => ICON_FILE_IMAGE,
+        FileKind::Audio => ICON_FILE_AUDIO,
+        FileKind::Video => ICON_FILE_VIDEO,
         // 数据文件（json/yaml/toml）与源码一样是"带结构的代码"，共用代码图标
         FileKind::Code | FileKind::Data => ICON_FILE_CODE,
         FileKind::Archive => ICON_FILE_ARCHIVE,
@@ -1265,7 +1270,7 @@ impl Render for FilesPanel {
                                             return;
                                         }
                                         if let Some(panel) = weak.upgrade() {
-                                            _ = panel.update(cx, |p, cx| {
+                                            panel.update(cx, |p, cx| {
                                                 p.import_external(paths, target, window, cx);
                                             });
                                         }
@@ -1306,7 +1311,7 @@ impl Render for FilesPanel {
                                             return;
                                         };
                                         if let Some(panel) = weak.upgrade() {
-                                            _ = panel.update(cx, |this, cx| {
+                                            panel.update(cx, |this, cx| {
                                                 this.drag_hover = None;
                                                 this.drop_move(src.clone(), target, window, cx);
                                             });
@@ -1446,7 +1451,7 @@ impl Render for FilesPanel {
                                             &rel,
                                             crate::core::media::is_image_path(&p_insert),
                                         );
-                                        _ = panel.update(cx, |p, cx| {
+                                        panel.update(cx, |p, cx| {
                                             p.insert_at_cursor(&link, window, cx);
                                         });
                                     },
