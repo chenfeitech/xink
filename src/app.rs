@@ -636,8 +636,8 @@ impl Workspace {
     /// 打开设置对话框（Cmd-,）。
     ///
     /// 由 [`Render::render`] 里根元素上的 `.on_action` 触发；动作从子面板冒泡到这里。
-    fn open_settings(&mut self, _: &OpenSettings, _window: &mut Window, cx: &mut Context<Self>) {
-        crate::ui::open_settings(cx);
+    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        crate::ui::open_settings(window, cx);
     }
 
     /// 在浅色 / 深色之间切换主题（Cmd-Shift-L）。
@@ -692,10 +692,9 @@ impl Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let sheet_layer = gpui_kit::component::Root::render_sheet_layer(window, cx);
-        let dialog_layer = gpui_kit::component::Root::render_dialog_layer(window, cx);
-        let notification_layer = gpui_kit::component::Root::render_notification_layer(window, cx);
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // gpui-kit 0.7 起 `Root` 自己托管浮层：sheet / dialog / notification
+        // 三层由 Root 在窗口层渲染，手动的 `render_*_layer` 已被删除。
         // 最右侧按钮条（大纲 / 反链 / 标签）
         let rail = cx
             .try_global::<AppState>()
@@ -708,13 +707,9 @@ impl Render for Workspace {
             .flex()
             .flex_col()
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
-            .children(sheet_layer)
-            // 按钮条放在 sheet 之后、dialog 之前：抽屉打开时它仍可点（切换/收起），
-            // 而命令面板等模态打开时会被盖住——正是模态该有的语义。
-            // 它是绝对定位的浮层，不占布局宽度。
+            // 按钮条是绝对定位的浮层，不占布局宽度；z 序由 Root 托管的浮层决定，
+            // 模态（命令面板等）打开时会自动盖在它上面。
             .children(rail)
-            .children(dialog_layer)
-            .children(notification_layer)
             // 打开设置（Cmd-,）：必须在渲染阶段注册，动作由子面板冒泡至此
             .on_action(cx.listener(Self::open_settings))
             // 切换主题（Cmd-Shift-L）：同上，注册在根元素上以覆盖任意焦点位置

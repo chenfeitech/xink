@@ -10,13 +10,16 @@
 
 | | `gpui` (crates.io) | `gpui-pre` (crates.io) |
 |---|---|---|
-| 版本 | **0.2.2** | **0.3.5** |
-| 发布时间 | 2025-10-22（已停滞一年） | 2026-09-14（`zed@d89e9c2` 快照） |
+| 版本 | **0.2.2** | **0.3.9**（本项目当前） |
+| 发布时间 | 2025-10-22（已停滞一年） | 2026-10（zed 快照，随 gpui-kit 周更） |
 | 发布方 | Zed Industries 官方 | huacnlee（gpui-kit 作者） |
-| 生态配套 | 无 | `gpui-component` 0.6.4 依赖它 |
+| 生态配套 | 无 | `gpui-base` 0.8.0 **精确锁定**它 |
 
-**关键事实**：活跃的组件库 `gpui-component` 0.6.4 的依赖是 `gpui-pre = "^0.3.5"`，
+**关键事实**：活跃的组件库 `gpui-base` 0.8.0 的依赖是 `gpui-pre = "=0.3.9"`，
 **不是** `gpui = "0.2.2"`。两者 API 不兼容，**绝不能混用**。
+
+> 2026-10-21：项目从 gpui-kit 0.6.4（gpui-pre 0.3.5）升级到 0.8.0（gpui-pre 0.3.9）。
+> 详见 §1.3。
 
 ### 1.2 决策：使用 `gpui-kit` 单依赖
 
@@ -24,13 +27,31 @@
 文件树、编辑器、Markdown 渲染全部要从 `div()` 手搓，对本项目是数月工作量。
 
 ```
-gpui-kit 0.6.4            ← 应用只依赖这一个
-├── gpui-base             无样式行为层：TextView / Markdown / HTML / 文本选择
-└── gpui-component        60+ 成品组件：Tree / Editor / Textarea / DockArea / Input ...
-     └── 内部 pin: gpui-pre 0.3.5
+gpui-kit 0.8.0            ← 应用只依赖这一个
+├── gpui-base 0.8.0       无样式行为层：TextView / Markdown / HTML / 文本选择
+├── gpui-component 0.8.0  60+ 成品组件：Tree / Editor / Textarea / DockArea / Input ...
+└── 内部 pin: gpui-pre =0.3.9（精确锁定）
 ```
 
 `gpui-kit` 会 pin 匹配的 GPUI 版本并 re-export，应用只列一个依赖，**从根上杜绝版本错配**。
+
+### 1.3 0.6.4 → 0.8.0 升级记录（2026-10-21）
+
+跨过了 0.7.0 的架构性重构，改动集中在"窗口与浮层的托管方式"：
+
+| 变更 | 旧（0.6） | 新（0.8） |
+|---|---|---|
+| 浮层托管 | `Root::render_dialog_layer` 等三层手工渲染 | **API 已删除**，Root 自动托管 |
+| 开 dialog | `Root::update(... root.open_dialog(build, window, cx))` | `window.open_dialog(cx, build)` |
+| 开 sheet | `root.open_sheet_at(placement, build, window, cx)` | `window.open_sheet_at(placement, cx, build)` |
+| 标题排版 | `with_heading_base_font_size` + `with_heading_font_size` | 合并为 `with_heading(level) -> StyleRefinement` |
+| 开窗 | `cx.open_window + Root::new` | 推荐 `gpui_kit::open_window`（仍可用旧写法） |
+
+对齐校验（升级前提，均已确认仍然成立）：`ropey` 仍是 `=2.0.0-beta.1`、
+`markdown` 仍是 `^1.0.0`，不会解析出第二份。
+
+待人工验证：滚动同步（内核 0.3.5 → 0.3.9，且 0.8.0 在 macOS 默认启用
+scroll bounce）、预览排版、文件树点击行为（0.8.0 改为 click 触发）。
 
 **代价（已接受）**：
 - `gpui-pre` 是 Zed main 分支快照，非语义化版本，升级必须跟随 `gpui-kit` 节奏

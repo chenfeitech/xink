@@ -12,7 +12,6 @@ fn tmpdir() -> tempfile::TempDir {
 fn defaults_are_sane() {
     let c = AppConfig::default();
     assert_eq!(c.basic.theme, ThemeMode::System, "默认应跟随系统主题");
-    assert_eq!(c.basic.language, Language::Zh);
     assert_eq!(c.basic.icon_size, 16);
     assert_eq!(c.basic.tree_font.size, 14.0);
     assert_eq!(c.basic.tree_font.line_height, 1.5);

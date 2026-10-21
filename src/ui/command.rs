@@ -6,10 +6,11 @@
 //! 3. **排序用 `core::fuzzy`**——框架 `Command` 组件内置只有子串匹配（`command/item.rs:114`），
 //!    没有模糊也没有打分，因此关掉它的过滤，由我们自己算。
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::Root;
+use gpui_kit::component::WindowExt;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::*;
 
@@ -275,47 +276,38 @@ fn highlighted_label(label: &str, hits: &[usize], cx: &App) -> Div {
 
 /// 打开命令面板（Cmd+P）。
 ///
-/// 通过 `Root::open_dialog` 挂到窗口的 dialog 层——`Workspace::render`
-/// 已经渲染了 `render_dialog_layer`，不渲染这一层浮层就不会出现。
+/// 挂到窗口的 dialog 层——gpui-kit 0.7 起 `Root` 自己托管浮层，
+/// 通过 `WindowExt::open_dialog`（`window.open_dialog`）打开即可。
 pub fn open_command_palette(window: &mut Window, cx: &mut App) {
-    // 视图必须在 `open_dialog` **之外** 创建一次。
+    // 视图必须在 build 闭包 **之外** 创建一次。
     //
-    // `Root::render_dialog_layer`（gpui-component root.rs:262）每次重绘都会重放
-    // build 闭包，而子视图的重绘会把祖先 `Workspace` 一起标脏——在闭包里
-    // `cx.new` 等于"每敲一个键就换一个面板实例"，输入内容与选中项被清空，
-    // 表现就是"能弹出来但打不了字"。
+    // build 闭包是"渲染闭包"而不是一次性构造器：dialog 层重建时会再跑一次。
+    // 在闭包里 `cx.new` 等于"每敲一个键就换一个面板实例"，输入内容与选中项
+    // 被清空，表现就是"能弹出来但打不了字"。
     let view = cx.new(|cx| CommandPalette::new(window, cx));
+    // 只在本次打开的**首次** build 里给焦点：泛层重建时无条件 focus 会去抢
+    // 别的控件或嵌套 dialog 的焦点（gpui-kit 0.8 的契约要求）。
+    let initial_focus = Cell::new(true);
 
-    Root::update(window, cx, |root, window, cx| {
-        root.open_dialog(
-            move |dialog, window, cx| {
-                // 焦点必须在这里（每帧）给：`Root::open_dialog` 打开时先把焦点收进
-                // dialog 自己的句柄，若在打开之后再调一次 focus，同一帧里就会出现
-                // 两个"已聚焦"的焦点节点，命中框架的 a11y 断言
-                // （`div.rs:2329` → `a11y.rs:529`：set_focus called more than once）。
-                // 已聚焦时 `Window::focus` 直接返回，不会打断输入。
-                view.update(cx, |palette, cx| palette.focus(window, cx));
-                let view = view.clone();
-                dialog
-                    .w(px(PALETTE_WIDTH))
-                    .margin_top(px(MARGIN_TOP))
-                    // 命令面板不需要右上角的关闭按钮：Esc 与点击遮罩都能关
-                    .close_button(false)
-                    .overlay(true)
-                    .overlay_closable(true)
-                    .content(move |content, _, _| content.child(view.clone()))
-            },
-            window,
-            cx,
-        )
+    window.open_dialog(cx, move |dialog, window, cx| {
+        if initial_focus.replace(false) {
+            view.update(cx, |palette, cx| palette.focus(window, cx));
+        }
+        let view = view.clone();
+        dialog
+            .w(px(PALETTE_WIDTH))
+            .margin_top(px(MARGIN_TOP))
+            // 命令面板不需要右上角的关闭按钮：Esc 与点击遮罩都能关
+            .close_button(false)
+            .overlay(true)
+            .overlay_closable(true)
+            .content(move |content, _, _| content.child(view.clone()))
     });
 }
 
 /// 关闭命令面板
 fn close_palette(window: &mut Window, cx: &mut App) {
-    Root::update(window, cx, |root, window, cx| {
-        root.close_dialog(window, cx);
-    });
+    window.close_dialog(cx);
 }
 
 /// 扫描库内可打开的文件（在后台线程执行）。

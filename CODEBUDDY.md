@@ -7,8 +7,8 @@
 
 以下 5 条是本项目的技术铁律，**违反会导致编译失败或架构腐化**：
 
-1. **只依赖 `gpui-kit = "0.6"`，禁止在 `Cargo.toml` 里直接写 `gpui = "0.2.2"`。**
-   `gpui-kit` 内部已 pin `gpui-pre 0.3.5`。crates.io 上的 `gpui 0.2.2` 与 `gpui-pre 0.3.5`
+1. **只依赖 `gpui-kit = "0.8"`，禁止在 `Cargo.toml` 里直接写 `gpui = "0.2.2"`。**
+   `gpui-kit` 内部已 pin `gpui-pre 0.3.9`。crates.io 上的 `gpui 0.2.2` 与 `gpui-pre 0.3.9`
    是两条互不相通的线，混用必然编译失败。
 2. **`ropey` 必须写 `= "2.0.0-beta.1"`（精确版本）**，与 `gpui-component` 内部对齐，
    否则 cargo 会解析出第二份，导致类型不兼容。
@@ -47,7 +47,7 @@ cargo fmt
 
 | 项 | 值 |
 |---|---|
-| UI 框架 | `gpui-kit` 0.6.4（内含 `gpui-pre` 0.3.5 = `zed@d89e9c2` 快照） |
+| UI 框架 | `gpui-kit` 0.8.0（内含 `gpui-base` 0.8.0 → 精确锁定 `gpui-pre` 0.3.9） |
 | Rust 版本 | 1.98.1，edition 2024 |
 | 平台 | macOS，渲染走 Metal（需 Xcode） |
 | Markdown 渲染 | `gpui_kit::base::TextView::markdown()` |
@@ -76,7 +76,7 @@ cargo fmt
 **下一个里程碑：P1** —— 双链 `[[wikilink]]`、反向链接、标签、全文搜索、大纲、命令面板。
 
 已验证：
-- `gpui-kit 0.6.4` + `gpui-pre 0.3.5` 编译通过，Metal 渲染跑通（无需完整 Xcode.app）
+- `gpui-kit 0.8.0` + `gpui-pre 0.3.9` 编译通过，Metal 渲染跑通（无需完整 Xcode.app）
 - `DockArea` 三栏布局 + 布局持久化（`~/Library/Application Support/xink/layout.json`）
 - 原子写盘（临时文件 + rename）、外部修改检测均有测试覆盖
 

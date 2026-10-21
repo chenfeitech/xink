@@ -17,8 +17,8 @@ name = "xink"
 path = "src/main.rs"
 
 [dependencies]
-# 唯一直接依赖。gpui-kit 内部 pin gpui-pre 0.3.5 并 re-export GPUI。
-# 禁止直接依赖 crates.io 上的 gpui 0.2.2（与 gpui-pre 0.3.5 不兼容）。
+# 唯一直接依赖。gpui-kit 内部 pin gpui-pre 0.3.9 并 re-export GPUI。
+# 禁止直接依赖 crates.io 上的 gpui 0.2.2（与 gpui-pre 0.3.x 不兼容）。
 #
 # features：编辑区语法高亮依赖 tree-sitter，且语言是按需编译的。
 # json / yaml / toml 对应"数据文件编辑"需求（见 docs/json-yaml-editing-design.md）；
@@ -28,7 +28,7 @@ path = "src/main.rs"
 # 未启用某门语言时 `set_highlighter` 会**静默**退化为纯文本，不报错、无提示。
 # JSON 语法随 `tree-sitter` 自带（gpui-component 把它列在 tree-sitter 的默认依赖里），
 # gpui-kit 没有单独的同名 feature；YAML / TOML / MARKDOWN 才需要显式开启。
-gpui-kit = { version = "0.6", features = [
+gpui-kit = { version = "0.8", features = [
     "tree-sitter",
     "tree-sitter-yaml",
     "tree-sitter-toml",

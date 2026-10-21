@@ -12,7 +12,7 @@
 //!    里统一做，避免每次 `Theme::change` 后被主题配置覆盖。
 
 use gpui_kit::base::Placement;
-use gpui_kit::component::{ActiveTheme, Root};
+use gpui_kit::component::{ActiveTheme, WindowExt};
 use gpui_kit::*;
 
 use crate::app::AppState;
@@ -102,42 +102,33 @@ pub fn open(kind: DrawerKind, window: &mut Window, cx: &mut App) {
     let view = DrawerView::new(kind, cx);
     let title = kind.label();
 
-    Root::update(window, cx, |root, window, cx| {
-        root.open_sheet_at(
-            Placement::Right,
-            move |sheet, _window, cx| {
-                let body = view.element();
-                sheet
-                    .size(px(DRAWER_WIDTH))
-                    .resizable(false)
-                    .overlay(true)
-                    .overlay_closable(true)
-                    .title(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().foreground)
-                            .child(title),
-                    )
-                    // 半透明：`refine_style` 在 `.bg(theme.tokens.background)`
-                    // 之后生效，这里传带 alpha 的背景色即可覆盖
-                    .bg(cx.theme().background.opacity(DRAWER_OPACITY))
-                    // 右上角自带收回按钮（点它 → Cancel → close_sheet）；
-                    // 这里只是同步按钮条的选中态
-                    .on_close(|_, _window, cx| clear_opened(cx))
-                    // 给内容一个确定高度，面板内部的列表才能自己滚动
-                    .child(div().flex_1().min_h_0().overflow_hidden().child(body))
-            },
-            window,
-            cx,
-        )
+    window.open_sheet_at(Placement::Right, cx, move |sheet, _window, cx| {
+        let body = view.element();
+        sheet
+            .size(px(DRAWER_WIDTH))
+            .resizable(false)
+            .overlay(true)
+            .overlay_closable(true)
+            .title(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().foreground)
+                    .child(title),
+            )
+            // 半透明：`refine_style` 在 `.bg(theme.tokens.background)`
+            // 之后生效，这里传带 alpha 的背景色即可覆盖
+            .bg(cx.theme().background.opacity(DRAWER_OPACITY))
+            // 右上角自带收回按钮（点它 → Cancel → close_sheet）；
+            // 这里只是同步按钮条的选中态
+            .on_close(|_, _window, cx| clear_opened(cx))
+            // 给内容一个确定高度，面板内部的列表才能自己滚动
+            .child(div().flex_1().min_h_0().overflow_hidden().child(body))
     });
 }
 
 /// 收起抽屉
 pub fn close(window: &mut Window, cx: &mut App) {
-    Root::update(window, cx, |root, window, cx| {
-        root.close_sheet(window, cx);
-    });
+    window.close_sheet(cx);
 }
 
 /// 抽屉被关闭后清掉按钮条的选中态。

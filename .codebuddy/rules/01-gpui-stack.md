@@ -8,7 +8,7 @@ description: GPUI 技术栈与依赖管理的硬约束。在新建/修改 Cargo.
 
 ```toml
 [dependencies]
-gpui-kit = "0.6"
+gpui-kit = "0.8"
 ```
 
 **禁止**在 `Cargo.toml` 中出现：
@@ -25,9 +25,9 @@ GPUI 生态已分裂为两条互不相通的线：
 | crate | 版本 | 状态 |
 |---|---|---|
 | `gpui` | 0.2.2（2025-10） | Zed 官方发布，已停滞一年，**生态组件库不用它** |
-| `gpui-pre` | 0.3.5（2026-09） | `zed@d89e9c2` 快照，是活跃组件库实际使用的版本 |
+| `gpui-pre` | 0.3.9（2026-10） | zed 快照，是活跃组件库实际使用的版本（本项目随 gpui-kit 0.8 使用） |
 
-`gpui-component` 0.6.4 依赖的是 `gpui-pre ^0.3.5`。两者 API 不兼容。
+`gpui-base` 0.8.0 依赖的是 `gpui-pre =0.3.9`（精确锁定）。两者 API 不兼容。
 `gpui-kit` 会 pin 匹配的 GPUI 版本并 re-export，应用只列一个依赖即可杜绝版本错配。
 
 代码里通过 `gpui_kit::*` 使用 GPUI 类型（`div()`、`Render`、`Window`、`Context` 等）。
@@ -62,11 +62,12 @@ fn main() {
             gpui_kit::init(cx);
 
             cx.spawn(async move |cx| {
-                cx.open_window(WindowOptions::default(), |window, cx| {
-                    let view = cx.new(|_| AppView::new());
-                    // 窗口第一层必须是 Root
-                    cx.new(|cx| Root::new(view, window, cx))
-                })
+                // 0.7 起推荐：Kit 自动包 Root，返回 (窗口句柄, 内容实体)
+                let (_handle, _view) = gpui_kit::open_window(
+                    WindowOptions::default(),
+                    cx,
+                    |window, cx| cx.new(|_| AppView::new()),
+                )
                 .expect("failed to open window");
             })
             .detach();
@@ -76,8 +77,29 @@ fn main() {
 
 三条不可省略：
 - `gpui_kit::init(cx)` 必须在用组件之前
-- 窗口根元素必须是 `Root::new(view, window, cx)`
+- 窗口根元素必须是 `Root`（`gpui_kit::open_window` 会自动包一层；
+  手工 `Root::new(view, window, cx)` 仍可用，本项目 `main.rs` 沿用）
 - `Render` 的实现签名是 `fn render(&mut self, window: &mut Window, cx: &mut Context<Self>)`
+
+### 浮层（0.7 起 Root 自动托管，**不要**手工渲染层）
+
+`Root::render_dialog_layer` / `render_sheet_layer` / `render_notification_layer`
+**已在 0.7.0 删除**。Root 自己托管这三层，不要再在 `render` 里拼。
+
+打开/关闭一律走 `WindowExt`（`use gpui_kit::component::WindowExt;`）：
+
+```rust
+window.open_dialog(cx, |dialog, window, cx| dialog.content(..));
+window.close_dialog(cx);
+window.open_sheet_at(Placement::Right, cx, |sheet, _, cx| sheet.child(..));
+window.close_sheet(cx);
+```
+
+build 闭包是**渲染闭包**，浮层重建时会重放：
+
+- 实体（`InputState`、子视图）必须在闭包**外**创建一次，否则每次重建都会丢输入；
+- 焦点只在本次打开的**首次** build 里给（`Cell::new(true)` 守卫），
+  无条件 focus 会抢走别的控件或嵌套 dialog 的焦点。
 
 ## 4. 升级策略
 

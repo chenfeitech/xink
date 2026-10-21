@@ -15,10 +15,10 @@
 
 | 指标 | 数量 | 说明 |
 |---|---|---|
-| 叶子配置项（顶层字段展开后） | **31** | 18 个顶层字段（`default_mode` 已于 2026-09-24 移除，`code_theme` 已于 2026-10-20 下线，新增 `editor.soft_wrap` / `preview.debug_scroll_sync` / `preview.sync_mode`），其中 `tree_font` / `editor.font` / `preview.font` / `indent` 为结构体 |
+| 叶子配置项（顶层字段展开后） | **29** | 18 个顶层字段（`default_mode` 已于 2026-09-24 移除，`code_theme` 已于 2026-10-20 下线，`language` / `color_scheme` 已于 2026-10-21 移除，新增 `editor.soft_wrap` / `preview.debug_scroll_sync` / `preview.sync_mode`），其中 `tree_font` / `editor.font` / `preview.font` / `indent` 为结构体 |
 | 已真正作用于软件功能 | **25** | 含 Spike 后接线的 `indent.*` 两项、内核升级后的 `show_line_numbers`、P1 补接线的 `font.weight` ×2、滚动同步重构新增的 `soft_wrap` / `debug_scroll_sync` / `sync_mode` |
-| **死配置（存了不生效）** | **3** | 值能保存、能导出，但不影响任何行为：`language`、`color_scheme`、`keymap`（`spell_check` 已于 2026-10-20 **移除**） |
-| 其中：设置界面已标注 ⚠ | 2 | `language`、`color_scheme`（`link_open` 已接线，仅剩标记待清理） |
+| **死配置（存了不生效）** | **1** | 值能保存、能导出，但不影响任何行为：仅剩 `keymap`（`spell_check` 已于 2026-10-20 **移除**；`language`、`color_scheme` 已于 2026-10-21 移除） |
+| 其中：设置界面已标注 ⚠ | 0 | `language`、`color_scheme` 已随字段一并删除，不再占位 |
 | 其中：界面有入口但未标注 | 0 | P1 已为两个 `font.weight` 补上设置界面入口并接线 |
 | 其中：**连设置项入口都没有** | 1 | `editor.keymap`（`main.rs:46-56` 快捷键全部硬编码） |
 | 覆盖"配置改动 → UI 行为改变"的测试 | **0** | `src/ui/settings.rs` 无 `tests.rs`，配置单测全部停留在数据层 |
@@ -33,7 +33,9 @@
 > （默认 `auto`）、`sync_scroll` 编辑器侧已判断、`link_open` 已随图片预览接线。
 > **2026-10-20**：`spell_check` **已实际移除**——`core/config.rs`（字段 + `Default`）与
 > `settings.rs` 的 `all_fields()` 条目均已删除，旧 `config.json` 里的该字段被 serde 忽略。
-> 因此**当前仍未接线的为 3 项**：`language`、`color_scheme`、`keymap`。
+> **2026-10-21**：`language`、`color_scheme` **已实际移除**（数据模型 + `Default` +
+> `settings.rs` 条目一并删除，旧 `config.json` 里的字段被 serde 忽略）。
+> 因此**当前仍未接线的只剩 1 项**：`keymap`。
 > （`link_open` 已随"图片预览"接线，`image_display` 与新增的 `image_width_percent` 已接线。）
 
 ### 1.1 三条根因
@@ -78,7 +80,7 @@
 
 ### 2.1 功能范围
 
-设置界面 `src/ui/settings.rs`（`Cmd-,` 打开独立窗口，元数据驱动）：
+设置界面 `src/ui/settings.rs`（`Cmd-,` 打开**主窗口内居中浮层**，元数据驱动；2026-10-21 由独立窗口改为浮层，见 `settings-ui-design.md` §4.1）：
 
 | 能力 | 落地情况 |
 |---|---|
@@ -99,7 +101,7 @@
 | 配置项 | 类型 / 默认 | 设置项入口 | 消费点 | 状态 |
 |---|---|---|---|---|
 | `theme` | `ThemeMode` / `System` | 外观 → 主题模式 | `app.rs:142-148` `apply_theme` | ✅ |
-| `language` | `Language` / `Zh` | 外观 → 界面语言 | 无 | ❌ 文案未本地化 |
+| ~~`language`~~ | — | — | — | ✅ **已于 2026-10-21 移除**：文案未本地化，不留死配置 |
 | `icon_size` | `u32` 12–48 / `16` | 目录树 → 图标大小 | `file_tree.rs:606,710`、`editor.rs:508` | ✅ |
 | `tree_font.family` | `String` / `.SystemUIFont` | 目录树 → 字体 | `file_tree.rs:716` | ✅ |
 | `tree_font.size` | `f32` 8–72 / `14` | 目录树 → 字号 | `file_tree.rs:717` | ✅ |
@@ -122,7 +124,7 @@
 | `font.size` | `f32` / `14` | 字体与排版 → 字号 | `editor.rs:670` | ✅ |
 | `font.line_height` | `f32` / `1.6` | 字体与排版 → 行高 | `editor.rs:671` | ✅ |
 | `font.weight` | `FontWeight` / `Regular` | 编辑区字体 → 字重 | `editor.rs`（`Editor::new` 链） | ✅ 已接线（2026-10-09 P1）：渲染加 `.font_weight`，设置界面补"编辑器字重"入口 |
-| `color_scheme` | `ColorScheme` / `Auto` | 字体与排版 → 配色 | 无 | ❌ |
+| ~~`color_scheme`~~ | — | — | — | ✅ **已于 2026-10-21 移除**：编辑区配色跟随全局主题与 `highlight.theme`，不再单列 |
 | `keymap` | `BTreeMap<String,String>` / `{}` | **无入口** | 无 | ❌ `main.rs:46-56` 全硬编码 |
 
 #### 预览（PreviewConfig，`config.rs:155-165`）

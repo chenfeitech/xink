@@ -1492,7 +1492,7 @@ impl Render for FilesPanel {
                             .ghost()
                             .label("设置")
                             .tooltip("打开设置（Cmd-,）")
-                            .on_click(|_, _, cx| crate::ui::open_settings(cx)),
+                            .on_click(|_, window, cx| crate::ui::open_settings(window, cx)),
                     ),
             );
 

@@ -7,22 +7,22 @@
 //! - 单项重置（值 ≠ 默认时出现 ⟲）、依赖禁用、未接入渲染项标注"暂未生效"。
 //! - 改动经 [`crate::app::update_config`] 立即生效并落盘。
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use gpui_kit::component::Root;
+use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme, Sizable};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Size};
 use gpui_kit::*;
 
 use crate::core::config::{
-    AppConfig, ColorScheme, FontWeight, ImageDisplay, Language, LinkOpen, PreviewDensity,
-    ScrollSyncMode, ThemeMode,
+    AppConfig, FontWeight, ImageDisplay, LinkOpen, PreviewDensity, ScrollSyncMode, ThemeMode,
 };
 use crate::core::theme::PRESET_THEMES;
 
@@ -43,6 +43,18 @@ impl SettingsTab {
             SettingsTab::Basic => "基本",
             SettingsTab::Editor => "编辑器",
             SettingsTab::Preview => "预览",
+        }
+    }
+
+    /// 侧栏图标
+    ///
+    /// 只取 `gpui_component::IconName` 的兼容子集（gpui-kit 内置图标清单），
+    /// 不引项目外的图标资源。
+    fn icon(self) -> IconName {
+        match self {
+            SettingsTab::Basic => IconName::Settings,
+            SettingsTab::Editor => IconName::FileText,
+            SettingsTab::Preview => IconName::Eye,
         }
     }
 }
@@ -268,36 +280,6 @@ fn all_fields() -> Vec<SettingField> {
                     _ => ThemeMode::System,
                 }
             },
-        ),
-        with_meta(
-            choice_field(
-                "basic.language",
-                "界面语言",
-                "界面文案语言（界面文案尚未本地化）",
-                Basic,
-                "外观",
-                None,
-                FieldKind::Choice,
-                || {
-                    vec![
-                        ("zh".into(), "中文".into()),
-                        ("en".into(), "English".into()),
-                    ]
-                },
-                |c| match c.basic.language {
-                    Language::Zh => "zh".into(),
-                    Language::En => "en".into(),
-                },
-                |c, v| {
-                    c.basic.language = if v == "en" {
-                        Language::En
-                    } else {
-                        Language::Zh
-                    }
-                },
-            ),
-            Some("界面文案尚未本地化"),
-            None,
         ),
         choice_field(
             "highlight.theme",
@@ -554,38 +536,6 @@ fn all_fields() -> Vec<SettingField> {
             font_weight_options,
             |c| font_weight_value(c.editor.font.weight),
             |c, v| c.editor.font.weight = font_weight_parse(&v),
-        ),
-        with_meta(
-            choice_field(
-                "editor.color_scheme",
-                "编辑器配色",
-                "编辑区明暗配色",
-                Editor,
-                "字体与排版",
-                None,
-                FieldKind::Choice,
-                || {
-                    vec![
-                        ("auto".into(), "跟随主题".into()),
-                        ("light".into(), "浅色".into()),
-                        ("dark".into(), "深色".into()),
-                    ]
-                },
-                |c| match c.editor.color_scheme {
-                    ColorScheme::Auto => "auto".into(),
-                    ColorScheme::Light => "light".into(),
-                    ColorScheme::Dark => "dark".into(),
-                },
-                |c, v| {
-                    c.editor.color_scheme = match v.as_str() {
-                        "light" => ColorScheme::Light,
-                        "dark" => ColorScheme::Dark,
-                        _ => ColorScheme::Auto,
-                    }
-                },
-            ),
-            Some("编辑区配色跟随主题，暂未独立适配"),
-            None,
         ),
         // ── 编辑器 · 数据文件 ──
         number_field(
@@ -1028,9 +978,6 @@ pub struct SettingsView {
     inputs: HashMap<&'static str, Entity<InputState>>,
     /// 顶部搜索框的输入状态
     search_input: Entity<InputState>,
-    /// 上次自适应所用的内容指纹（分类 + 搜索词 + 可见项数 + 分组数）。
-    /// 指纹不变就不动窗口尺寸，避免每帧 resize，也保留用户手动调整的结果。
-    size_fingerprint: Option<(SettingsTab, String, usize, usize)>,
 }
 
 /// 设置窗口各部分的固定尺寸。
@@ -1047,30 +994,24 @@ mod layout {
     pub const ROW_H: f32 = 52.;
     /// 分组标题行高
     pub const GROUP_H: f32 = 32.;
-    /// 内容区上下内边距之和（`py_2` × 2）
-    pub const CONTENT_PAD_Y: f32 = 16.;
     /// 搜索无结果时的空态高度
     pub const EMPTY_H: f32 = 64.;
-    pub const MIN_H: f32 = 220.;
-    pub const MAX_H: f32 = 860.;
+    /// 浮层高度：够放下大多数分类，超出部分由内容列滚动
+    pub const INITIAL_H: f32 = 620.;
 
-    /// 按可见项数与分组数计算窗口内容区高度。
-    pub fn window_height(rows: usize, groups: usize) -> f32 {
-        let content = if rows == 0 {
-            EMPTY_H
-        } else {
-            CONTENT_PAD_Y + rows as f32 * ROW_H + groups as f32 * GROUP_H
-        };
-        (SEARCH_H + FOOTER_H + content).clamp(MIN_H, MAX_H)
-    }
-
-    /// 窗口宽度固定：侧栏 + 内容列。固定宽度可避免控件列在切换分类时左右跳动。
+    /// 浮层宽度：侧栏 + 内容列。固定宽度可避免控件列在切换分类时左右跳动。
     pub fn window_width() -> f32 {
         SIDEBAR_W + CONTENT_W
     }
 }
 
 impl SettingsView {
+    /// 把焦点交给搜索框（浮层打开 / 重复触发时调用）
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_input
+            .update(cx, |state, cx| state.focus(window, cx));
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // 系统字体列表只取一次，之后全局缓存
         SYSTEM_FONTS.get_or_init(|| cx.text_system().all_font_names());
@@ -1083,8 +1024,6 @@ impl SettingsView {
             highlight: None,
             inputs: HashMap::new(),
             search_input,
-            // None 表示"还没自适应过"，首次渲染会立即贴合内容
-            size_fingerprint: None,
         };
 
         // 搜索框是唯一的 query 写入口：输入即过滤，无需回车
@@ -1204,33 +1143,65 @@ impl Render for SettingsView {
             .collect();
 
         // ── 左侧分类 ──
-        let mut sidebar = div().w(px(160.)).flex_col().gap_1().p_2();
+        //
+        // 不用 `Button`：它内部强制 `justify_center`，图标 + 文字会被居中，
+        // 改不了（Styled 的调用顺序在 render 里被覆盖）。这里自己排一行，
+        // 左靠齐 + 图标在前，选中态用主色底。
+        let mut sidebar = div()
+            .w(px(layout::SIDEBAR_W))
+            .flex_col()
+            .gap_1()
+            .p_2()
+            .border_r_1()
+            .border_color(cx.theme().border);
         for tab in SettingsTab::ALL {
             let selected = tab == self.tab;
-            let mut button = Button::new(tab.title()).small().label(tab.title());
-            button = if selected {
-                button.primary()
+            // `.id()` 是必须的：只有 `Stateful` 才带点击与 hover 交互
+            let mut item = div()
+                .id(format!("settings-tab-{}", tab.title()))
+                .h_8()
+                .px_2()
+                .w_full()
+                .flex()
+                .items_center()
+                // 左靠齐：图标 + 文字从左侧排，不做居中
+                .justify_start()
+                .gap_2()
+                .rounded(cx.theme().radius)
+                .text_sm()
+                .cursor_pointer()
+                .hover(|this| this.bg(cx.theme().primary.opacity(0.12)));
+            // 框架没给 Stateful 提供 `when`，选中态用普通分支（同 `rail.rs`）
+            if selected {
+                item = item
+                    .bg(cx.theme().primary)
+                    .text_color(cx.theme().primary_foreground);
             } else {
-                button.ghost()
-            };
-            sidebar = sidebar.child(button.on_click(cx.listener(move |this, _, _, cx| {
-                this.tab = tab;
-                cx.notify();
-            })));
+                item = item.text_color(cx.theme().foreground);
+            }
+            sidebar = sidebar.child(
+                item.child(
+                    Icon::new(tab.icon())
+                        // 图标颜色跟随文字色，选中态自动反白
+                        .with_size(Size::Size(px(16.))),
+                )
+                .child(tab.title())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.tab = tab;
+                    cx.notify();
+                })),
+            );
         }
 
         // ── 右侧设置项（按分组）──
         let mut content = div().flex_1().min_w_0().flex_col().px_4().py_2();
         let mut current_group = String::new();
-        // 分组数参与窗口高度计算
-        let mut group_count = 0usize;
         for field in &visible {
             if field.group != current_group {
                 current_group = field.group.to_string();
-                group_count += 1;
                 content = content.child(
                     div()
-                        // 固定行高，使窗口高度可精确计算
+                        // 固定行高，分组标题不随内容长短跳动
                         .h(px(layout::GROUP_H))
                         .flex()
                         .items_center()
@@ -1256,21 +1227,9 @@ impl Render for SettingsView {
             );
         }
 
-        // ── 窗口尺寸自适应内容 ──
-        //
-        // 只在"内容指纹"变化时调整：打开窗口、切换分类、搜索过滤会改变可见项数；
-        // 单纯改某个配置值不会，因此用户手动调大的窗口不会被立刻缩回。
-        let fingerprint = (self.tab, query.clone(), visible.len(), group_count);
-        if self.size_fingerprint.as_ref() != Some(&fingerprint) {
-            self.size_fingerprint = Some(fingerprint);
-            let desired = size(
-                px(layout::window_width()),
-                px(layout::window_height(visible.len(), group_count)),
-            );
-            if window.viewport_size() != desired {
-                window.resize(desired);
-            }
-        }
+        // 尺寸由外层对话框给定，这里不再动窗口：设置界面现在是主窗口内的
+        // 居中浮层（见 [`open_settings`]），调 `window.resize` 会把主窗口改小。
+        // 内容超出时由内容列自己的滚动条承担。
 
         div()
             .id("settings-view")
@@ -1293,7 +1252,7 @@ impl Render for SettingsView {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(sidebar.border_r_1().border_color(cx.theme().border))
+                    .child(sidebar)
                     .child(content.overflow_y_scrollbar()),
             )
             .child(self.render_footer(cx))
@@ -1498,44 +1457,66 @@ fn export_config(cx: &mut App) {
     .detach();
 }
 
-// ── 独立设置窗口（单例） ──────────────────────────────────────
+// ── 设置浮层（主窗口内居中，单例） ────────────────────────────
 
-/// 记录已打开的设置窗口，重复触发时聚焦而不是再开一个
-struct SettingsWindow {
-    handle: Option<WindowHandle<Root>>,
+/// 记录已打开的设置浮层，重复触发时不再叠第二层
+struct SettingsDialog {
+    view: Option<Entity<SettingsView>>,
 }
 
-impl Global for SettingsWindow {}
+impl Global for SettingsDialog {}
 
-/// 打开设置窗口；已存在则聚焦已有窗口。
-pub fn open_settings(cx: &mut App) {
-    let existing = cx.try_global::<SettingsWindow>().and_then(|g| g.handle);
-
-    if let Some(handle) = existing {
-        let mut alive = false;
-        _ = handle.update(cx, |_, window, _cx| {
-            window.activate_window();
-            alive = true;
-        });
-        if alive {
-            return;
+/// 在**主窗口内**居中打开设置界面。
+///
+/// 这里刻意不再单独开窗口：新窗口的位置由系统决定（gpui 的 `default_bounds`
+/// 在拿不到活动窗口时会落到 (0,0)，表现就是"贴着屏幕左上角"），而且跨屏时
+/// 更不可控。改成主窗口里的居中浮层后，"相对软件主界面居中"是天然的——
+/// 对话框的位置本来就是按当前窗口视口算的。
+///
+/// 尺寸：宽度取 [`layout::window_width`]（与之前一致），高度取
+/// [`layout::INITIAL_H`] 并按视口高度收窄；内容超出时靠内容列滚动。
+pub fn open_settings(window: &mut Window, cx: &mut App) {
+    if let Some(state) = cx.try_global::<SettingsDialog>()
+        && state.view.is_some()
+    {
+        // 已经开着：只把焦点给搜索框，不再叠一层
+        if let Some(view) = state.view.clone() {
+            view.update(cx, |view, cx| view.focus(window, cx));
         }
+        return;
     }
 
-    cx.spawn(async move |cx| {
-        match cx.open_window(WindowOptions::default(), |window, cx| {
-            let view = cx.new(|cx| SettingsView::new(window, cx));
-            cx.new(|cx| Root::new(view, window, cx))
-        }) {
-            Ok(handle) => {
-                cx.update(move |cx| {
-                    cx.set_global(SettingsWindow {
-                        handle: Some(handle),
-                    });
-                });
-            }
-            Err(err) => eprintln!("[xink] 打开设置窗口失败: {err:?}"),
+    // 与搜索面板同理：视图只创建一次（build 闭包在浮层重建时会重放），
+    // 否则输入框会被不断重建，打进去的字留不下来。
+    let view = cx.new(|cx| SettingsView::new(window, cx));
+    cx.set_global(SettingsDialog {
+        view: Some(view.clone()),
+    });
+    // 只在本次打开的首次 build 里给焦点（gpui-kit 0.8 的契约）
+    let initial_focus = Cell::new(true);
+
+    let width = px(layout::window_width());
+    let height = px(layout::INITIAL_H);
+
+    window.open_dialog(cx, move |dialog, window, cx| {
+        if initial_focus.replace(false) {
+            view.update(cx, |view, cx| view.focus(window, cx));
         }
-    })
-    .detach();
+        let view = view.clone();
+        // 对话框默认水平居中、顶部留 1/10 视口；这里按视口高度算出
+        // 上边距，让它在垂直方向也居中。
+        let margin_top = ((window.viewport_size().height - height) / 2.).max(px(0.));
+        let h = height.min((window.viewport_size().height - px(48.)).max(px(220.)));
+        dialog
+            .w(width.min(window.viewport_size().width - px(32.)))
+            .h(h)
+            .margin_top(margin_top)
+            .close_button(true)
+            .overlay(true)
+            .overlay_closable(true)
+            .on_close(|_, _, cx| {
+                cx.set_global(SettingsDialog { view: None });
+            })
+            .content(move |content, _, _| content.child(view.clone()))
+    });
 }

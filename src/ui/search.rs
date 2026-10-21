@@ -4,11 +4,12 @@
 //! 输入框 + 结果列表，输入防抖 200ms，检索在后台线程做（读盘是同步 IO）。
 //! 点击结果走 `tabs::open_note_at` 跳到命中行。
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::Root;
+use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::*;
 
@@ -168,35 +169,29 @@ impl Render for SearchView {
 
 /// 打开全文搜索面板（Cmd+Shift+F）
 pub fn open_search(window: &mut Window, cx: &mut App) {
-    // 同命令面板：视图只能创建一次（`Root::render_dialog_layer` 每次重绘都会
-    // 重放 build 闭包），否则输入框会被不断重建，打进去的字留不下来。
+    // 同命令面板：视图只能创建一次（build 闭包在浮层重建时会重放），
+    // 否则输入框会被不断重建，打进去的字留不下来。
     let view = cx.new(|cx| SearchView::new(window, cx));
+    // 只在本次打开的首次 build 里给焦点（gpui-kit 0.8 的契约）
+    let initial_focus = Cell::new(true);
 
-    Root::update(window, cx, |root, window, cx| {
-        root.open_dialog(
-            move |dialog, window, cx| {
-                // 与命令面板同理：焦点在每帧的 build 里给；放到 open_dialog 之后
-                // 会同帧出现两个"已聚焦"节点，触发框架的 a11y 断言。
-                view.update(cx, |view, cx| view.focus(window, cx));
-                let view = view.clone();
-                dialog
-                    .w(px(560.))
-                    .h(px(480.))
-                    .margin_top(px(60.))
-                    .close_button(false)
-                    .overlay(true)
-                    .overlay_closable(true)
-                    .content(move |content, _, _| content.child(view.clone()))
-            },
-            window,
-            cx,
-        )
+    window.open_dialog(cx, move |dialog, window, cx| {
+        if initial_focus.replace(false) {
+            view.update(cx, |view, cx| view.focus(window, cx));
+        }
+        let view = view.clone();
+        dialog
+            .w(px(560.))
+            .h(px(480.))
+            .margin_top(px(60.))
+            .close_button(false)
+            .overlay(true)
+            .overlay_closable(true)
+            .content(move |content, _, _| content.child(view.clone()))
     });
 }
 
 /// 关闭搜索面板
 fn close(window: &mut Window, cx: &mut App) {
-    Root::update(window, cx, |root, window, cx| {
-        root.close_dialog(window, cx);
-    });
+    window.close_dialog(cx);
 }

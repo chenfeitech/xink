@@ -43,15 +43,6 @@ impl ThemeMode {
     }
 }
 
-/// 界面语言
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Language {
-    #[default]
-    Zh,
-    En,
-}
-
 /// 字重
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -61,17 +52,6 @@ pub enum FontWeight {
     Medium,
     Semibold,
     Bold,
-}
-
-/// 编辑器配色方案
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ColorScheme {
-    /// 跟随主题
-    #[default]
-    Auto,
-    Light,
-    Dark,
 }
 
 /// 预览区图片显示方式
@@ -157,7 +137,6 @@ pub struct IndentConfig {
 #[serde(default)]
 pub struct BasicConfig {
     pub theme: ThemeMode,
-    pub language: Language,
     /// 图标边长（像素）
     pub icon_size: u32,
     /// 目录树字体
@@ -182,7 +161,6 @@ pub struct EditorConfig {
     /// 见 `docs/preview/scroll-sync-design.md` §8 D1。
     pub soft_wrap: bool,
     pub font: FontConfig,
-    pub color_scheme: ColorScheme,
     /// 快捷键映射：动作名 → 按键串（如 "cmd-b"），留空则用内置默认
     pub keymap: BTreeMap<String, String>,
     /// JSON / YAML / TOML 等数据文件的编辑与预览
@@ -426,7 +404,6 @@ impl Default for BasicConfig {
     fn default() -> Self {
         Self {
             theme: ThemeMode::default(),
-            language: Language::default(),
             icon_size: 16,
             tree_font: FontConfig::body(),
             // 默认显示全部：其他类型的文件也常需要在树里查看或引用（噪音目录仍始终跳过）
@@ -447,7 +424,6 @@ impl Default for EditorConfig {
             // 默认不动；想要最精确的滚动同步可以在设置里关掉。
             soft_wrap: true,
             font: FontConfig::mono(),
-            color_scheme: ColorScheme::default(),
             keymap: BTreeMap::new(),
             data_file: DataFileConfig::default(),
         }

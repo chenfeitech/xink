@@ -59,6 +59,11 @@ pub struct PreviewPanel {
     last_realign: Option<Instant>,
     /// 最近一次**由同步写入**滚动位置的时刻（与编辑区的 `last_write_at` 对称）
     last_write_at: Option<Instant>,
+    /// 文档内容最近一次发生变化的时刻（重解析 / 图片加载 / 测到新高度）
+    ///
+    /// 这段时间里预览的滚动位置不可信（重解析会把它打回顶部），
+    /// 一律**不推**给编辑区，否则编辑区会被拽到文章开头。
+    content_changed_at: Option<Instant>,
 }
 
 impl PreviewPanel {
@@ -78,6 +83,7 @@ impl PreviewPanel {
             last_content_h: px(0.),
             last_realign: None,
             last_write_at: None,
+            content_changed_at: None,
         };
 
         let Some(state) = cx.try_global::<AppState>().map(|s| s.preview.clone()) else {
@@ -138,6 +144,11 @@ impl PreviewPanel {
     const REALIGN_COOLDOWN: Duration = Duration::from_millis(300);
     /// 刚被对端写过之后，这段时间内不反向推（斩断互推）
     const PUSH_SUPPRESS: Duration = Duration::from_millis(400);
+    /// 文档内容变化后的静默期：这段时间预览的位置不可信，不推给编辑区
+    ///
+    /// 要覆盖"编辑防抖（默认 300ms）+ 重解析 + 重新测量"的完整往返，
+    /// 短了会漏掉前半段，长了会吃掉用户紧接着滚预览的同步。
+    const CONTENT_SETTLE: Duration = Duration::from_millis(800);
 
     /// 是否处于"用户正在滚预览"的静默窗口内
     fn is_user_scrolling(&self, now: Instant) -> bool {
@@ -234,9 +245,11 @@ impl PreviewPanel {
         let target_y = {
             let st = doc.read(cx);
             let list = st.list_state();
-            let content_h = list.content_size().height;
-            let viewport_h = list.viewport_bounds().size.height;
-            let max = (content_h - viewport_h).max(px(1.));
+            // 可滚动范围拿不到（没布局 / 内容不足一屏）就别写：
+            // 此时任何比例都会被夹成同一个位置，看起来就是"预览自己乱跳"
+            let Some(max) = self.scroll_range(list) else {
+                return;
+            };
             -(ratio.clamp(0.0, 1.0) * max)
         };
         doc.update(cx, |st, cx| {
@@ -271,16 +284,16 @@ impl PreviewPanel {
         // 比例模式（默认）：两端各按自己的可滚动范围取百分比。
         // 不依赖块是否测量，也就不存在"未测量块"导致的跳变。
         if crate::app::config(cx).preview.sync_mode != ScrollSyncMode::Anchor {
-            return Some(ScrollAnchor::Ratio(self.ratio_now(&list)));
+            return Some(ScrollAnchor::Ratio(self.ratio_now(&list)?));
         }
 
         let Some(table) = self.anchors(cx) else {
             // 数据文件：没有块 ↔ 行映射，退回比例
-            return Some(ScrollAnchor::Ratio(self.ratio_now(&list)));
+            return Some(ScrollAnchor::Ratio(self.ratio_now(&list)?));
         };
         // 块数对不上：解析器行为有出入，本帧按比例算，绝不乱跳
         if table.is_empty() || table.len() != list.item_count() {
-            return Some(ScrollAnchor::Ratio(self.ratio_now(&list)));
+            return Some(ScrollAnchor::Ratio(self.ratio_now(&list)?));
         }
 
         let top = list.logical_scroll_top();
@@ -295,12 +308,25 @@ impl PreviewPanel {
         Some(ScrollAnchor::Line(table.line_of(top.item_ix, frac)))
     }
 
-    /// 当前滚动比例（降级路径 / 数据文件）
-    fn ratio_now(&self, list: &ListState) -> f32 {
-        let content_h = list.content_size().height;
+    /// 可滚动范围（内容高度 − 视口高度）
+    ///
+    /// 拿不到（视口还没布局）或**内容不足一屏**时返回 `None`：此时"滚动比例"
+    /// 没有意义——虚拟列表还没测量出高度时 `content_size ≈ viewport`，
+    /// 硬算会得到 0（或 1），把对端一下拽到文章开头（或结尾）。
+    /// 这个 `None` 必须一路传上去让本帧**不产生锚点**。
+    fn scroll_range(&self, list: &ListState) -> Option<Pixels> {
         let viewport_h = list.viewport_bounds().size.height;
-        let max = (content_h - viewport_h).max(px(1.));
-        (-list.offset().y / max).clamp(0.0, 1.0)
+        if viewport_h <= px(0.) {
+            return None;
+        }
+        let max = list.content_size().height - viewport_h;
+        (max > px(1.)).then_some(max)
+    }
+
+    /// 当前滚动比例（降级路径 / 数据文件）
+    fn ratio_now(&self, list: &ListState) -> Option<f32> {
+        let max = self.scroll_range(list)?;
+        Some((-list.offset().y / max).clamp(0.0, 1.0))
     }
 
     /// 每帧轮询预览滚动位置，换算成锚点推给编辑器。
@@ -354,14 +380,20 @@ impl PreviewPanel {
             let cooled = self
                 .last_realign
                 .is_none_or(|at| now.duration_since(at) >= Self::REALIGN_COOLDOWN);
-            if (count != self.last_item_count || (content_h - self.last_content_h).abs() > px(1.))
-                && cooled
-            {
-                self.last_item_count = count;
-                self.last_content_h = content_h;
-                self.last_realign = Some(now);
-                if let Some(anchor) = self.last_applied {
-                    self.apply_editor_anchor(anchor, cx);
+            if count != self.last_item_count || (content_h - self.last_content_h).abs() > px(1.) {
+                // 内容刚变过（编辑防抖后重解析 / 图片加载完成 / 虚拟列表测到
+                // 新高度）。这一刻预览的滚动位置是**不可信**的：重解析会
+                // 把它打回顶部，而它看起来和"用户滚到了顶部"一模一样。
+                // 若照样推给编辑区，编辑区就会被拽到文章开头 ——
+                // "一边打字一边跳回开头"就是这么来的。
+                self.content_changed_at = Some(now);
+                if cooled {
+                    self.last_item_count = count;
+                    self.last_content_h = content_h;
+                    self.last_realign = Some(now);
+                    if let Some(anchor) = self.last_applied {
+                        self.apply_editor_anchor(anchor, cx);
+                    }
                 }
             }
         }
@@ -383,6 +415,14 @@ impl PreviewPanel {
         let Some(anchor) = self.current_anchor(cx) else {
             return;
         };
+
+        // 内容刚变过：预览此刻的滚动位置不可信（重解析可能把它打回顶部），
+        // 推出去会把编辑区拽到文章开头。静默一拍再推。
+        if let Some(at) = self.content_changed_at
+            && now.duration_since(at) < Self::CONTENT_SETTLE
+        {
+            return;
+        }
 
         // 实时模式的死区：亚像素级变化不推（避免两端来回微调形成抖动）
         //
@@ -548,10 +588,14 @@ impl Render for PreviewPanel {
         // 排版样式：段间距与标题层级随密度变化；颜色沿用主题，明暗自动一致
         // `from_theme` 要 gpui_base 的 Theme（与 gpui_component 的 Theme 是不同类型），
         // 它是全局的，直接取即可——这样颜色随主题，只覆盖布局相关的几项
+        // 标题：gpui-kit 0.7.3 起 `with_heading_base_font_size` /
+        // `with_heading_font_size` 合并成一个 `with_heading(level)` 钩子；
+        // 框架内部只在 refinement 没给 `font_size` 时才用"继承字号 × 层级系数"，
+        // 因此这里把字号显式算好写回去，保持与升级前一致的标题层级。
+        let heading_base = font.size * layout.heading_scale;
         let text_style = TextViewStyle::from_theme(cx.global::<BaseTheme>())
             .with_paragraph_gap(rems(layout.paragraph_gap))
-            .with_heading_base_font_size(px(font.size * layout.heading_scale))
-            .with_heading_font_size(|level: u8, base: Pixels| {
+            .with_heading(move |level: u8| {
                 let factor = match level {
                     1 => 1.0,
                     2 => 0.87,
@@ -560,7 +604,7 @@ impl Render for PreviewPanel {
                     5 => 0.62,
                     _ => 0.58,
                 };
-                base * factor
+                StyleRefinement::default().text_size(px(heading_base * factor))
             });
 
         let view = div()
