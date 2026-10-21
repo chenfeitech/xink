@@ -1,7 +1,7 @@
 //! 中间编辑面板：Editor 编辑 + 防抖自动保存 + 原子写盘
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui_kit::base::TextViewState;
 use gpui_kit::base::dock::TabGroup;
@@ -19,7 +19,7 @@ use crate::actions::{
     FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, Save,
 };
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
-use crate::core::config::{DataFileConfig, IndentConfig};
+use crate::core::config::{DataFileConfig, IndentConfig, ScrollSyncMode};
 use crate::core::datafile::{DataKind, Parsed, ValidationError, data_kind};
 use crate::core::markdown::{
     ImageOptions, SpanKind, decoration_spans, resolve_image_urls, rewrite_wikilinks,
@@ -27,7 +27,9 @@ use crate::core::markdown::{
 };
 use crate::core::media::editor_language;
 use crate::core::note::is_markdown;
+use crate::core::sync::{AnchorTable, GestureGuard, ScrollAnchor, Side, SyncGuard};
 use crate::core::{Note, tab_key};
+use std::sync::Arc;
 
 /// 行首标记（`#`、列表符号）的淡化程度，语义等同 CSS `opacity`
 const MARKER_FADE_OUT: f32 = 0.45;
@@ -51,10 +53,54 @@ pub struct EditorPanel {
     /// 防抖保存任务。每次编辑都用新任务覆盖，旧任务被 drop 即取消。
     save_task: Option<Task<()>>,
     status: SharedString,
-    /// 上次推送给预览的滚动比例，用于判断是否需要再次同步
-    last_emitted_ratio: f32,
-    /// 上次从预览接收并应用的滚动比例，用于吸收回显、避免同步循环
-    last_received_ratio: f32,
+    /// 滚动同步方向锁：谁先滚谁在一段时间内独占推动同步，对端回显一律吸收
+    /// （取代旧的"单值 EPS 比较"，后者既会 ping-pong 也会吃掉用户滚动）
+    guard: SyncGuard,
+    /// 刚从预览收到、还没精调到位的锚点。
+    ///
+    /// 软换行下"第 N 行在哪个像素位置"框架不直接给，只能先按行高粗调、
+    /// 再等布局出来用 `range_to_bounds` 精调，因此需要 1~2 帧收敛。
+    pending_anchor: Option<ScrollAnchor>,
+    /// 精调尝试次数，超过上限就放弃（避免布局迟迟不来时卡在循环里）
+    pending_tries: u8,
+    /// 上一帧读到的顶部源码行：下一帧以它为起点做局部探测，避免全表扫描
+    last_top_line: f32,
+    /// 用户手势静默窗口：窗口内**绝不**向编辑区写滚动位置。
+    ///
+    /// 滚轮 / 触控板惯性期间，任何外部写入都会表现为"滚不动 / 被拉回"。
+    /// 框架的 `set_scroll_offset` 只是种 `deferred_scroll_offset`，绘制时它会
+    /// 压过同一帧里用户滚轮的结果（`input/base/element.rs:671-679`），
+    /// 所以必须在应用层让位。
+    gesture: GestureGuard,
+    /// 上一帧的滚动位置，用来识别"位置变了但不是我们写的" = 用户在滚
+    last_scroll_y: Pixels,
+    /// 帧计数：实时模式下推送降频用
+    sync_tick: u8,
+    /// 实时模式下最近一次推送出去的锚点（死区判定）
+    last_pushed: Option<ScrollAnchor>,
+    /// 有滚动发生过、但还没同步出去（"停止后对齐"模式下用）
+    ///
+    /// 抖动根治策略：滚动过程中**绝不写对端**，停下（静默窗口结束）后对齐一次。
+    /// 滚动中写对端必然产生跳变——换算再准也躲不掉（块内渲染非线性、
+    /// 虚拟列表高度在变），取舍下来"停止后对齐"是唯一能彻底不抖的方案。
+    pending_push: bool,
+    /// 上一次"每源行多少像素"的采样点（顶部行号，当时的滚动位置）
+    ///
+    /// 只用于比例模式下的内容高度学习，不参与同步判定。
+    last_probe: Option<(f32, Pixels)>,
+    /// 最近一次**由同步写入**滚动位置的时刻
+    ///
+    /// 刚被对端写过的一端，短时间内不再反向推（[`Self::PUSH_SUPPRESS`]）。
+    /// 写入是 deferred 的、落点还会被精调修正，误差超过回显阈值时就会
+    /// 触发一次反推 → 对端再写回来 = 两端互推（持续抖动的真正来源）。
+    last_write_at: Option<Instant>,
+    /// 一个源码行大约占多少像素（软换行下大于行高）
+    ///
+    /// 粗调目标行位置时要用到：软换行下按 `行号 × 行高` 估会系统性偏上，
+    /// 靠实测值能让粗调一步到位，减少精调帧数与可见跳动。
+    px_per_source_line: Pixels,
+    /// 已下发的软换行开关，用于检测配置变更并增量应用
+    applied_soft_wrap: bool,
     /// 上次推送给预览的内容标识（路径 + 版本），用于跳过无变化的重算
     last_published_path: Option<PathBuf>,
     last_published_version: Option<u64>,
@@ -175,8 +221,19 @@ impl EditorPanel {
             doc: None,
             save_task: None,
             status: SharedString::default(),
-            last_emitted_ratio: 0.0,
-            last_received_ratio: 0.0,
+            guard: SyncGuard::default(),
+            pending_anchor: None,
+            pending_tries: 0,
+            last_top_line: 0.0,
+            gesture: GestureGuard::default(),
+            sync_tick: 0,
+            last_pushed: None,
+            last_probe: None,
+            last_write_at: None,
+            pending_push: true,
+            last_scroll_y: px(0.),
+            px_per_source_line: px(0.),
+            applied_soft_wrap: crate::app::config(cx).editor.soft_wrap,
             last_published_path: None,
             last_published_version: None,
             self_entity: self_entity.clone(),
@@ -196,12 +253,12 @@ impl EditorPanel {
                 &preview,
                 window,
                 move |this, _, ev: &PreviewScrolled, window, cx| {
-                    let PreviewScrolled(ratio) = ev;
+                    let PreviewScrolled(anchor) = ev;
                     let is_active = cx.try_global::<AppState>().is_some_and(|s| {
                         s.preview.read(cx).active_doc.as_ref() == this.doc.as_ref()
                     });
                     if is_active {
-                        this.apply_preview_ratio(*ratio, window, cx);
+                        this.apply_anchor(*anchor, window, cx);
                     }
                 },
             )
@@ -250,12 +307,28 @@ impl EditorPanel {
         let Some(note) = &self.note else {
             return;
         };
+        // 锚点表要用行数与"是否 Markdown"，先取出来，
+        // 后面 `sync_diagnostics` 会拿走 `self` 的可变借用
+        let line_count = note.line_count();
+        let is_md = is_markdown(note.path());
         let (source, validation) = Self::preview_source(note, opts, &data_cfg, cx);
         self.validation = validation;
         self.sync_diagnostics(cx);
         if let Some(doc) = &self.doc {
             doc.update(cx, |doc, cx| doc.set_text(source.as_str(), cx));
         }
+
+        // 滚动同步的锚点表：预览面板拿不到源文本，只能由编辑区把"块 ↔ 源码行"
+        // 的映射放进全局。数据文件预览是格式化后的文本，行号对不上 → 不发布，
+        // 两端自动退回比例同步。
+        let anchors =
+            is_md.then(|| Arc::new(AnchorTable::from_source(source.as_str(), line_count)));
+        cx.update_global::<AppState, _>(|state, cx| {
+            state.preview.update(cx, |preview, cx| {
+                preview.anchors = anchors.clone();
+                cx.notify();
+            });
+        });
 
         // 大纲跟手：标题一改就重新解析（纯内存操作，成本可忽略）。
         // 不走索引——索引是"保存之后"的语义，等它更新大纲会慢半拍。
@@ -408,6 +481,25 @@ impl EditorPanel {
                 self.editor.update(cx, |state, cx| {
                     state.set_highlighter(lang, cx);
                 });
+                // 软换行：只在需要"关闭"时下发。框架默认开启，再下发一次 true
+                // 是多余的一次重排（display_map 会重算换行），打开笔记时没必要
+                let soft_wrap = crate::app::config(cx).editor.soft_wrap;
+                self.applied_soft_wrap = soft_wrap;
+                if !soft_wrap {
+                    self.editor.update(cx, |state, cx| {
+                        state.set_soft_wrap(false, window, cx);
+                    });
+                }
+
+                // 关掉"最后一行之后的空白"：`EditorMode::CODE_EDITOR = true`
+                // （gpui-base `input/editor/mod.rs:15`），框架会按代码编辑器的习惯在
+                // 滚动区尾部加**半屏空白**（`empty_bottom_height`，
+                // `input/base/element.rs:377-390`）。写 Markdown 时它的表现是：
+                // 内容明明已经到底了还能继续滚半屏（内容不动）→ "滚不动 / 卡住"。
+                // 同时这段空白会让编辑区与预览区的可滚动范围对不上，破坏同步。
+                self.editor.update(cx, |state, cx| {
+                    state.set_scroll_beyond_last_line(Some(0), window, cx);
+                });
                 // 载入即上一次装饰，不等防抖，否则新标签会先闪一下无装饰的样子
                 self.refresh_decorations(cx);
                 self.status = format!("已打开 {}", note.path().display()).into();
@@ -418,6 +510,8 @@ impl EditorPanel {
                 self.validation = validation;
                 self.doc = Some(cx.new(|cx| TextViewState::markdown(source.as_str(), cx)));
                 self.note = Some(note);
+                // 新笔记：滚动同步状态必须归零，否则会带着上一篇的位置跳一下（R6）
+                self.reset_scroll_sync();
                 true
             }
             Err(err) => {
@@ -448,6 +542,7 @@ impl EditorPanel {
         self.last_published_path = None;
         self.last_published_version = None;
         self.status = SharedString::default();
+        self.reset_scroll_sync();
 
         self.editor
             .update(cx, |state, cx| state.set_value("", window, cx));
@@ -479,88 +574,571 @@ impl EditorPanel {
         cx.notify();
     }
 
-    /// 每帧轮询编辑区滚动比例，变化超阈值则推给预览。
-    ///
-    /// 同步循环防护：
-    /// - `last_received_ratio` 记录"上次从预览接收并应用"的比例。若当前比例与之一致，
-    ///   说明本次变化是"预览→编辑器"同步的回显，直接吸收，不再反向推送，避免死循环。
-    /// - 否则与 `last_emitted_ratio` 比较，确属真实用户滚动才推送。
-    fn tick_scroll_sync(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        const EPS: f32 = 0.002;
+    /// 滚动同步状态归零（切换笔记 / 清空面板时）
+    fn reset_scroll_sync(&mut self) {
+        self.guard.reset();
+        self.pending_anchor = None;
+        self.pending_tries = 0;
+        self.last_top_line = 0.0;
+        self.last_scroll_y = px(0.);
+        // 换行宽度与文档都换了，上一份"每行多少像素"的实测值不再适用
+        self.px_per_source_line = px(0.);
+        self.gesture.reset();
+        self.last_write_at = None;
+        self.last_pushed = None;
+        self.last_probe = None;
+        // 换文档后要对齐一次（否则预览停在上一篇的位置）
+        self.pending_push = true;
+    }
 
-        // 编辑器侧也判断开关：关闭后不再向预览推送滚动比例。
+    /// 实时模式的推送降频倍率（每 N 帧推一次）
+    const SYNC_EVERY_N_FRAMES: u8 = 2;
+    /// 实时模式的死区：锚点变化小于这个值不推送（单位：源码行）
+    const DEAD_ZONE: f32 = 0.2;
+    /// 每几帧采样一次"每源行多少像素"（软换行下内容高度估算用）
+    const LEARN_EVERY_N_FRAMES: u8 = 8;
+    /// 刚被对端写过之后，这段时间内不反向推（斩断互推）
+    const PUSH_SUPPRESS: Duration = Duration::from_millis(400);
+
+    /// 是否处于"用户正在滚编辑区"的静默窗口内
+    fn is_user_scrolling(&self, now: Instant) -> bool {
+        self.gesture.is_quiet(now)
+    }
+
+    /// 本面板是否是当前活动笔记的编辑区
+    ///
+    /// 后台标签的编辑器也在跑帧轮询，若不判断就会把预览带跑（设计文档 §2 R5）。
+    fn is_active(&self, cx: &App) -> bool {
+        let Some(doc) = self.doc.as_ref() else {
+            return false;
+        };
+        cx.try_global::<AppState>()
+            .is_some_and(|state| state.preview.read(cx).active_doc.as_ref() == Some(doc))
+    }
+
+    /// 每帧轮询编辑区滚动位置，换算成**源码行锚点**推给预览。
+    ///
+    /// 与旧实现的两点区别（详见 `docs/preview/scroll-sync-design.md`）：
+    /// 1. 推的是"视口顶部在第几源码行"而不是滚动条百分比——两端内容结构不同，
+    ///    百分比必然错位（R1）。
+    /// 2. 防循环用 [`SyncGuard`] 方向锁，不再拿固定阈值比较单值（R4）。
+    fn tick_scroll_sync(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        // 编辑器侧也判断开关：关闭后不再向预览推送。
         // 配置在每次触发时读取，因此改设置后下一次滚动即生效（L2）。
         if !crate::app::config(cx).preview.sync_scroll {
             return;
         }
+        if !self.is_active(cx) {
+            return;
+        }
 
-        let ratio = if let Some(note) = &self.note {
-            let (off, viewport, line_h) = {
-                let st = self.editor.read(cx);
-                (
-                    st.scroll_offset().y,
-                    st.input_bounds().size.height,
-                    st.line_height(),
-                )
-            };
-            let Some(line_h) = line_h else {
-                return;
-            };
-            if viewport <= px(0.) {
-                return;
+        let now = Instant::now();
+        // 识别用户手势：滚动位置变了，而我们这一帧并没有写入 → 只能是用户滚的
+        // （滚轮、触控板惯性、拖滚动条、光标移动引起的自动滚动）。
+        // 识别到就开一个静默窗口，期间同步不再写编辑区（详见字段注释）。
+        let off_now = self.editor.read(cx).scroll_offset().y;
+        if self.pending_anchor.is_none()
+            && (off_now - self.last_scroll_y).abs() > px(0.5)
+            && !self.is_own_write(cx)
+        {
+            self.gesture.note_user_movement(now);
+        }
+        let prev_scroll_y = self.last_scroll_y;
+        let prev_top_line = self.last_top_line;
+        self.last_scroll_y = off_now;
+
+        let mode = crate::app::config(cx).preview.sync_mode;
+        let scrolling = self.is_user_scrolling(now);
+
+        // 用户滚动中一律让位：预览推过来的精调也别写了（会与手势抢）
+        if scrolling && self.pending_anchor.is_some() {
+            self.pending_anchor = None;
+            self.pending_tries = 0;
+        }
+
+        match mode {
+            ScrollSyncMode::OnStop => {
+                // 滚动中：不读（省掉每帧的布局探测）、不写对端，
+                // 只记"待对齐"，等停下后补一次 —— 绝对不抖的方案
+                if scrolling {
+                    self.pending_push = true;
+                    return;
+                }
+                if self.pending_anchor.is_some() {
+                    self.refine_pending(cx);
+                    return;
+                }
+                if !self.pending_push {
+                    return;
+                }
+                self.pending_push = false;
             }
-            // editor 内部滚动，无直接内容高度 API，用行高×行数估算。
-            // 左右两侧共用同一估算，保证"相对位置一致"。
-            let content = line_h * note.line_count() as f32;
-            let max = (content - viewport).max(px(1.));
-            (-off / max).clamp(0.0, 1.0)
-        } else {
-            // 空白占位页：无内容可同步
-            self.last_emitted_ratio = 0.0;
-            self.last_received_ratio = 0.0;
+            // 比例 / 块锚点：实时跟随（隔帧推送，观感仍然跟手）
+            ScrollSyncMode::Ratio | ScrollSyncMode::Anchor => {
+                if self.pending_anchor.is_some() {
+                    self.refine_pending(cx);
+                    return;
+                }
+                // 软换行下"每源行多少像素"决定内容高度估算准不准，
+                // 比例方案也依赖它（估低了就是"不同步"）。不必每帧探，
+                // 隔几帧学一次即可。
+                if self.applied_soft_wrap
+                    && self.sync_tick.is_multiple_of(Self::LEARN_EVERY_N_FRAMES)
+                {
+                    self.learn_px_per_line(cx);
+                }
+                // 降频：滚动时每帧都让预览重排不划算（虚拟列表 + 代码块高亮），
+                // 隔帧推送在观感上仍然跟手
+                self.sync_tick = self.sync_tick.wrapping_add(1);
+                if !self.sync_tick.is_multiple_of(Self::SYNC_EVERY_N_FRAMES) {
+                    return;
+                }
+            }
+        }
+
+        let Some(anchor) = self.current_anchor(cx) else {
             return;
         };
 
-        // 回显吸收：本次比例与"预览给我的目标"一致 → 是我刚应用的同步结果
-        if (ratio - self.last_received_ratio).abs() <= EPS {
-            self.last_emitted_ratio = ratio;
+        // 软换行下顺便学"一个源码行约多少像素"，供粗调使用
+        if let (ScrollAnchor::Line(line), true) = (anchor, self.applied_soft_wrap) {
+            let d_line = (line - prev_top_line).abs();
+            let d_off = (off_now - prev_scroll_y).abs();
+            if d_line >= 1.0 && d_off > px(0.) {
+                let sampled = d_off / d_line;
+                let current = if self.px_per_source_line > px(0.) {
+                    self.px_per_source_line
+                } else {
+                    sampled
+                };
+                // 指数平滑：单次异常值不至于把估算带偏
+                self.px_per_source_line = current * 0.8 + sampled * 0.2;
+            }
+        }
+
+        // 实时模式下的死区：亚像素级变化不推。同步不需要像素级精度，
+        // 反倒是这些微小抖动会让两端来回微调，看起来就是"抖"。
+        //
+        // 注意单位：行锚点用"行"（0.2 行），比例锚点是 0~1，
+        // 同一个 0.2 在这里等于 20% 的滚动范围——会把同步几乎完全掐死。
+        let dead_zone = match anchor {
+            ScrollAnchor::Line(_) => Self::DEAD_ZONE,
+            ScrollAnchor::Ratio(_) => 0.002,
+        };
+        if mode != ScrollSyncMode::OnStop
+            && let Some(prev) = self.last_pushed
+            && prev.same_kind(anchor)
+            && (prev.value() - anchor.value()).abs() < dead_zone
+        {
             return;
         }
-        // 真实用户滚动：与上一次推送一致则跳过
-        if (ratio - self.last_emitted_ratio).abs() <= EPS {
+        self.last_pushed = Some(anchor);
+
+        // 回显：我刚按对端的目标滚过 → 吸收，不再反向推。
+        // 阈值按锚点种类给：源码行用"行"为单位——探测会把锚点量化到整行边界，
+        // 加上块内插值误差，1.5 行内都认为是同一次同步的回显；比例沿用 0.002。
+        let tol = match anchor {
+            ScrollAnchor::Line(_) => 1.5,
+            ScrollAnchor::Ratio(_) => 0.002,
+        };
+        if self.guard.is_echo(anchor, tol) {
             return;
         }
-        self.last_emitted_ratio = ratio;
+        // 刚被对端写过：这一帧的变化很可能是对端写入的余波，别反推回去。
+        // 用户在滚时不拦（`scrolling` 为真说明确实是自己的手势）。
+        if !scrolling
+            && let Some(at) = self.last_write_at
+            && now.duration_since(at) < Self::PUSH_SUPPRESS
+        {
+            return;
+        }
+        // 对端正持有方向锁 → 这次变化是对端同步的余波
+        if !self.guard.claim(Side::Editor, Instant::now()) {
+            return;
+        }
+        if let ScrollAnchor::Line(line) = anchor {
+            self.last_top_line = line;
+        }
+
+        let debug = crate::app::config(cx).preview.debug_scroll_sync;
         cx.update_global::<AppState, _>(|state, cx| {
-            state.preview.update(cx, |_, cx| {
-                cx.emit(EditorScrolled(ratio));
+            state.preview.update(cx, |preview, cx| {
+                if debug {
+                    let mut pair = preview.debug_anchors.unwrap_or((0.0, 0.0));
+                    pair.0 = anchor.value();
+                    preview.debug_anchors = Some(pair);
+                }
+                cx.emit(EditorScrolled(anchor));
             });
         });
     }
 
-    /// 应用预览推送过来的滚动比例到本编辑器。
-    fn apply_preview_ratio(&mut self, ratio: f32, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(note) = &self.note else {
+    /// 编辑区内容高度的估算值
+    ///
+    /// 软换行下"源码行数 × 行高"会系统性低估（一个源码行可能占几个显示行），
+    /// 低估的直接后果是比例换算失真 → 看着就是"不同步"。这里改用滚动中实测的
+    /// `px_per_source_line`（见 `tick_scroll_sync` 的学习逻辑）来估，
+    /// 没有实测值时退回行高。
+    ///
+    /// **读和写必须用同一个函数**：比例方案的稳定性来自两端各自对称，
+    /// 只要读写同式，回显就一定落在容差内，不会互推。
+    fn content_height(&self, cx: &App) -> Option<Pixels> {
+        let st = self.editor.read(cx);
+        let line_h = st.line_height()?;
+        let viewport_h = st.input_bounds().size.height;
+        let total = self.note.as_ref()?.line_count() as f32;
+        let px_per_line = if self.px_per_source_line > px(0.) {
+            self.px_per_source_line.max(line_h)
+        } else {
+            line_h
+        };
+        // 至少比视口高一像素，避免短文档下分母为 0 导致比例恒为 0
+        Some((px_per_line * total).max(viewport_h + px(1.)))
+    }
+
+    /// 当前滚动位置在编辑区可滚动范围内的比例（0~1）
+    fn ratio_now(&self, cx: &App) -> Option<f32> {
+        let st = self.editor.read(cx);
+        let viewport_h = st.input_bounds().size.height;
+        let off = st.scroll_offset().y;
+        if viewport_h <= px(0.) {
+            return None;
+        }
+        let max = (self.content_height(cx)? - viewport_h).max(px(1.));
+        Some((-off / max).clamp(0.0, 1.0))
+    }
+
+    /// 当前滚动位置对应的锚点
+    fn current_anchor(&mut self, cx: &mut Context<Self>) -> Option<ScrollAnchor> {
+        let note = self.note.as_ref()?;
+        let total = note.line_count();
+        let is_md = is_markdown(note.path());
+
+        let (line_h, viewport_h, viewport_top, off) = {
+            let st = self.editor.read(cx);
+            (
+                st.line_height()?,
+                st.input_bounds().size.height,
+                st.input_bounds().origin.y,
+                st.scroll_offset().y,
+            )
+        };
+        if line_h <= px(0.) || viewport_h <= px(0.) {
+            return None;
+        }
+
+        // 数据文件：预览是格式化后的文本，源码行号与预览块对不上 → 只能用比例
+        let by_ratio = !is_md || crate::app::config(cx).preview.sync_mode != ScrollSyncMode::Anchor;
+        if by_ratio {
+            return Some(ScrollAnchor::Ratio(self.ratio_now(cx)?));
+        }
+
+        // 估算值：不换行时它就是精确值，软换行时作为探测失败后的兜底
+        let estimated = (-off / line_h).clamp(0.0, (total.saturating_sub(1)) as f32);
+        let line = if self.applied_soft_wrap {
+            // 软换行：一个源码行可能占多个显示行，只能靠真实布局探测
+            self.probe_top_line(cx, viewport_top, estimated)
+                .unwrap_or(estimated)
+        } else {
+            estimated
+        };
+        Some(ScrollAnchor::Line(line))
+    }
+
+    /// 这一帧的位置变化，是不是"我们自己刚写入的余波"
+    ///
+    /// `set_scroll_offset` 是 deferred 的，落点还会被 clamp、被软换行重排、
+    /// 被精调修正，所以"写入目标"和"下一帧读到的位置"经常差几像素。
+    /// 只按像素判定就会把自己写的结果当成用户手势 → 开静默窗口 →
+    /// 窗口结束后再推一次 → 对端又写回来 → **两端互推 = 持续抖动**。
+    /// 这也是"停止后对齐"仍然抖的原因：那个模式下只写一次，但这一次
+    /// 足以启动一轮互推。
+    fn is_own_write(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(anchor) = self.current_anchor(cx) else {
+            return false;
+        };
+        // 阈值按锚点种类给，与下面推送前的回显判定保持一致
+        let tol = match anchor {
+            ScrollAnchor::Line(_) => 1.5,
+            ScrollAnchor::Ratio(_) => 0.002,
+        };
+        self.guard.is_echo(anchor, tol)
+    }
+
+    /// 采样"一个源码行大约占多少像素"（软换行下内容高度估算用）
+    ///
+    /// 比例方案的准确度全看内容高度估算：软换行下按"行数 × 行高"算会系统性
+    /// 低估，滚动到底部时两端比例对不上，表现就是"不同步"。这里用真实布局
+    /// 探两次顶部行，用位移 ÷ 行数得到实测值，再指数平滑。
+    fn learn_px_per_line(&mut self, cx: &mut Context<Self>) {
+        let Some(note) = self.note.as_ref() else {
             return;
         };
-        let (viewport, line_h) = {
+        let total = note.line_count();
+        let (line_h, viewport_top, off) = {
             let st = self.editor.read(cx);
-            (st.input_bounds().size.height, st.line_height())
+            let Some(line_h) = st.line_height() else {
+                return;
+            };
+            (line_h, st.input_bounds().origin.y, st.scroll_offset().y)
+        };
+        if line_h <= px(0.) {
+            return;
+        }
+        let estimated = (-off / line_h).clamp(0.0, total.saturating_sub(1) as f32);
+        let Some(line) = self.probe_top_line(cx, viewport_top, estimated) else {
+            return;
+        };
+        if let Some((prev_line, prev_off)) = self.last_probe {
+            let d_line = (line - prev_line).abs();
+            let d_off = (off - prev_off).abs();
+            // 只取跨了足够多行的样本，单行的测量噪声太大
+            if d_line >= 2.0 && d_off > px(0.) {
+                let sampled = d_off / d_line;
+                let current = if self.px_per_source_line > px(0.) {
+                    self.px_per_source_line
+                } else {
+                    sampled
+                };
+                self.px_per_source_line = current * 0.8 + sampled * 0.2;
+            }
+        }
+        self.last_probe = Some((line, off));
+        self.last_top_line = line;
+    }
+
+    /// 软换行下探测"视口顶部落在第几源码行"
+    ///
+    /// `range_to_bounds` 只对**已布局且可见**的区间返回 `Some`，所以不能二分全表，
+    /// 只能以 `last_top_line`（上一帧结果）为起点在附近探几个候选行。
+    fn probe_top_line(
+        &self,
+        cx: &mut Context<Self>,
+        viewport_top: Pixels,
+        estimated: f32,
+    ) -> Option<f32> {
+        // 候选行越少越省（每帧都要问一次布局），代价是跳转后收敛慢一帧。
+        // 滚动是连续的，上一帧的行号基本就在附近，2/4 足够。
+        const BACK: isize = 2;
+        const FORWARD: isize = 4;
+        /// 估算值与上一帧差距超过这么多行，说明是一次大跳转，探测中心改用估算值
+        const JUMP: f32 = 12.0;
+
+        let note = self.note.as_ref()?;
+        let st = self.editor.read(cx);
+        let center = if (estimated - self.last_top_line).abs() > JUMP {
+            estimated as isize
+        } else {
+            self.last_top_line as isize
+        };
+        // 视口顶上方最近的一行 / 下方最近的一行，优先取上方
+        let mut above: Option<(usize, Pixels, Pixels)> = None;
+        let mut below: Option<(usize, Pixels, Pixels)> = None;
+
+        for delta in -BACK..=FORWARD {
+            let line = center + delta;
+            if line < 0 {
+                continue;
+            }
+            let line = line as usize;
+            let Some((start, end)) = note.line_byte_range(line) else {
+                continue;
+            };
+            let Some(bounds) = st.range_to_bounds(&(start..end)) else {
+                continue;
+            };
+            let entry = (line, bounds.top(), bounds.size.height);
+            if bounds.top() <= viewport_top {
+                match above {
+                    Some((_, top, _)) if top >= bounds.top() => {}
+                    _ => above = Some(entry),
+                }
+            } else {
+                match below {
+                    Some((_, top, _)) if top <= bounds.top() => {}
+                    _ => below = Some(entry),
+                }
+            }
+        }
+
+        let (line, top, height) = above.or(below)?;
+        let frac = if height > px(0.) {
+            ((viewport_top - top) / height).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        Some(line as f32 + frac)
+    }
+
+    /// 应用预览推送过来的锚点
+    fn apply_anchor(&mut self, anchor: ScrollAnchor, _window: &mut Window, cx: &mut Context<Self>) {
+        // 用户正在滚（滚轮 / 触控板惯性 / 拖滚动条）：一律让位。
+        // 写滚动位置会覆盖同一帧的手势结果，表现就是"滚不动"或"被拉回"。
+        if self.is_user_scrolling(Instant::now()) {
+            return;
+        }
+
+        if !matches!(anchor, ScrollAnchor::Line(_)) {
+            // 比例锚点：一次到位
+            self.apply_ratio(anchor.value(), cx);
+            self.guard.expect(anchor);
+            return;
+        }
+        // 收到行号却不在块锚点模式（对端刚切过来）→ 忽略，
+        // 拿行号去粗调会让编辑区跳到不相干的位置
+        if crate::app::config(cx).preview.sync_mode != ScrollSyncMode::Anchor {
+            return;
+        }
+
+        let Some(note) = self.note.as_ref() else {
+            return;
+        };
+        let total = note.line_count();
+        let anchor = anchor.clamped(total.saturating_sub(1) as f32);
+        let ScrollAnchor::Line(line) = anchor else {
+            return;
+        };
+
+        let (line_h, viewport_h) = {
+            let st = self.editor.read(cx);
+            (st.line_height(), st.input_bounds().size.height)
         };
         let Some(line_h) = line_h else {
             return;
         };
-        if viewport <= px(0.) {
+        if viewport_h <= px(0.) {
             return;
         }
-        let content = line_h * note.line_count() as f32;
-        let max = (content - viewport).max(px(1.));
+
+        // 粗调：把目标行带进视口。软换行下用实测的"每行像素数"，
+        // 比"行号 × 行高"准得多（后者在折行时系统性偏上，会多花 1~2 帧精调，
+        // 肉眼可见地跳一下）。
+        let px_per_line = if self.px_per_source_line > px(0.) {
+            self.px_per_source_line.max(line_h)
+        } else {
+            line_h
+        };
+        let content = px_per_line * total as f32;
+        let max_scroll = (content - viewport_h).max(px(1.));
+        let target_y = -(px_per_line * line).clamp(px(0.), max_scroll);
+        self.editor.update(cx, |st, cx| {
+            st.set_scroll_offset(point(px(0.), target_y), cx);
+        });
+        // 我们刚写过：记为当前位置，免得下一帧被当成"用户在滚"
+        self.last_scroll_y = target_y;
+        self.last_write_at = Some(Instant::now());
+
+        if self.applied_soft_wrap {
+            // 等布局出来后再精调（下一帧 refine_pending）
+            self.pending_anchor = Some(anchor);
+            self.pending_tries = 0;
+        } else {
+            self.guard.expect(anchor);
+        }
+    }
+
+    /// 精调刚收到的锚点：用真实布局把目标行精确对齐到视口顶部
+    fn refine_pending(&mut self, cx: &mut Context<Self>) {
+        const MAX_TRIES: u8 = 3;
+
+        // 用户在滚：放弃精调，把手势让给用户（tick 里已清过一次，这里再兜一道，
+        // 因为手势可能在两次 tick 之间开始）
+        if self.is_user_scrolling(Instant::now()) {
+            self.pending_anchor = None;
+            self.pending_tries = 0;
+            return;
+        }
+
+        let Some(ScrollAnchor::Line(line)) = self.pending_anchor else {
+            self.pending_anchor = None;
+            return;
+        };
+
+        // 目标行的实时 bounds（只有它已经可见时才拿得到）
+        let measured = {
+            let Some(note) = self.note.as_ref() else {
+                self.pending_anchor = None;
+                return;
+            };
+            let st = self.editor.read(cx);
+            let Some((start, end)) = note.line_byte_range(line as usize) else {
+                self.pending_anchor = None;
+                return;
+            };
+            st.range_to_bounds(&(start..end))
+                .map(|bounds| (bounds.top(), bounds.size.height))
+                .map(|(top, height)| {
+                    (
+                        top,
+                        height,
+                        st.input_bounds().origin.y,
+                        st.scroll_offset().y,
+                    )
+                })
+        };
+
+        let Some((top, height, viewport_top, off)) = measured else {
+            // 粗调的滚动还没生效：再等一帧，别无限等
+            self.pending_tries += 1;
+            if self.pending_tries >= MAX_TRIES {
+                self.pending_anchor = None;
+            }
+            return;
+        };
+
+        // 目标行的顶边 + 行内比例 × 该行实际显示高度
+        let target_y = top + (line - line as usize as f32) * height;
+        let delta = target_y - viewport_top;
+        if delta.abs() <= px(1.) {
+            self.settle_pending(cx);
+            return;
+        }
+
+        self.editor.update(cx, |st, cx| {
+            st.set_scroll_offset(point(px(0.), off - delta), cx);
+        });
+        self.last_scroll_y = off - delta;
+        self.last_write_at = Some(Instant::now());
+        self.pending_tries += 1;
+        if self.pending_tries >= MAX_TRIES {
+            self.settle_pending(cx);
+        }
+    }
+
+    /// 精调结束：以**实际落点**作为回显基准，下一帧读到它就吸收，不反向推
+    fn settle_pending(&mut self, cx: &mut Context<Self>) {
+        self.pending_anchor = None;
+        self.pending_tries = 0;
+        if let Some(actual) = self.current_anchor(cx) {
+            self.guard.expect(actual);
+        }
+        // 精调是我们自己写的位置：记下来，免得被误判成用户在滚
+        self.last_scroll_y = self.editor.read(cx).scroll_offset().y;
+    }
+
+    /// 按比例设置滚动位置
+    ///
+    /// 与 [`Self::ratio_now`] 共用 [`Self::content_height`]：读到的比例再写回去
+    /// 一定回到同一个像素位置，回显天然落在容差内，不会互推。
+    fn apply_ratio(&mut self, ratio: f32, cx: &mut Context<Self>) {
+        let (viewport_h, content) = {
+            let st = self.editor.read(cx);
+            let viewport_h = st.input_bounds().size.height;
+            (viewport_h, self.content_height(cx))
+        };
+        if viewport_h <= px(0.) {
+            return;
+        }
+        let Some(content) = content else {
+            return;
+        };
+        let max = (content - viewport_h).max(px(1.));
         let target_y = -(ratio.clamp(0.0, 1.0) * max);
         self.editor.update(cx, |st, cx| {
             st.set_scroll_offset(point(px(0.), target_y), cx);
         });
-        // 记录"我刚按预览目标滚到的位置"，供后续回显吸收
-        self.last_received_ratio = ratio;
+        self.last_scroll_y = target_y;
+        self.last_write_at = Some(Instant::now());
     }
 
     /// 调度下一帧滚动同步轮询。框架在实体被移除后不再回调，循环自动停止。
@@ -1157,6 +1735,18 @@ impl Render for EditorPanel {
             self.editor.update(cx, |state, cx| {
                 state.set_line_number(show_line_numbers, window, cx);
             });
+        }
+
+        // 软换行开关变更时增量下发。关掉后"源码行 ↔ 滚动位置"是一次乘除就能算准的，
+        // 滚动同步也随之更精确；开启后改走"按真实布局探测"的路径。
+        let soft_wrap = crate::app::config(cx).editor.soft_wrap;
+        if soft_wrap != self.applied_soft_wrap {
+            self.applied_soft_wrap = soft_wrap;
+            self.editor.update(cx, |state, cx| {
+                state.set_soft_wrap(soft_wrap, window, cx);
+            });
+            // 换算口径变了，把同步状态清掉重新对齐
+            self.reset_scroll_sync();
         }
 
         // 图片显示方式 / 宽度变化时请求重算预览源文。

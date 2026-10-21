@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui_kit::base::TextViewState;
 use gpui_kit::component::dock::{
@@ -15,6 +16,7 @@ use std::path::Path;
 
 use crate::core::config::{AppConfig, ThemeMode};
 use crate::core::index::{IndexChanged, NoteIndex};
+use crate::core::sync::{AnchorTable, ScrollAnchor};
 use crate::core::vault::VaultRegistry;
 use crate::core::{resolve_active, tab_key};
 use crate::state::workspace;
@@ -34,6 +36,13 @@ pub struct PreviewState {
     /// 这里是"复用同一个预览面板"而不是新开窗口：预览位置一致、不产生窗口冗余。
     /// 切换/编辑笔记时会被清空，自动回到 Markdown。
     pub image: Option<PathBuf>,
+    /// 当前活动文档的**滚动锚点表**：顶层块 ↔ 源码行。
+    ///
+    /// 由活动编辑器在刷新预览时写入（预览面板拿不到源文本，只能从这里取）。
+    /// 为 `None` 表示当前文档无法按行映射（数据文件），两端退回比例同步。
+    pub anchors: Option<Arc<AnchorTable>>,
+    /// 调试用：两端最近一次读到的锚点数值（编辑区, 预览区），供标题栏显示
+    pub debug_anchors: Option<(f32, f32)>,
 }
 
 /// 活动预览文档发生变化（切换笔记标签）
@@ -42,13 +51,13 @@ pub struct ActiveDocChanged(pub Entity<TextViewState>);
 /// 预览面板要显示的图片发生变化；`None` 表示回到 Markdown 预览
 pub struct PreviewImageChanged(pub Option<PathBuf>);
 
-/// 编辑器滚动位置变化，参数为滚动比例（0~1）。
+/// 编辑器滚动位置变化，参数是滚动锚点（Markdown 为源码行号，否则为比例）。
 /// 由 EditorPanel 发出，PreviewPanel 据此同步预览滚动。
-pub struct EditorScrolled(pub f32);
+pub struct EditorScrolled(pub ScrollAnchor);
 
-/// 预览滚动位置变化，参数为滚动比例（0~1）。
+/// 预览滚动位置变化，参数是滚动锚点（Markdown 为源码行号，否则为比例）。
 /// 由 PreviewPanel 发出，EditorPanel 据此同步编辑器滚动。
-pub struct PreviewScrolled(pub f32);
+pub struct PreviewScrolled(pub ScrollAnchor);
 
 impl EventEmitter<ActiveDocChanged> for PreviewState {}
 impl EventEmitter<EditorScrolled> for PreviewState {}
@@ -447,6 +456,8 @@ impl Workspace {
         let preview = cx.new(|_| PreviewState {
             active_doc: None,
             image: None,
+            anchors: None,
+            debug_anchors: None,
         });
         let notes = cx.new(|_| NoteIndex::new());
         let outline = cx.new(|_| OutlineState::new());

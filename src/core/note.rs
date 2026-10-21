@@ -64,6 +64,26 @@ impl Note {
         self.rope.len_lines(LineType::LF).max(1)
     }
 
+    /// 第 `line` 行（0-based）的字节区间 `[start, end)`
+    ///
+    /// 滚动同步要用它去问编辑控件"这一行现在画在哪"（`range_to_bounds` 只认字节区间）。
+    pub fn line_byte_range(&self, line: usize) -> Option<(usize, usize)> {
+        if line >= self.rope.len_lines(LineType::LF) {
+            return None;
+        }
+        let start = self.rope.line_to_byte_idx(line, LineType::LF);
+        // 末行没有"下一行行首"可取，退到文本末尾
+        let end = if line + 1 < self.rope.len_lines(LineType::LF) {
+            self.rope.line_to_byte_idx(line + 1, LineType::LF)
+        } else {
+            self.rope.len()
+        };
+        if start > end {
+            return None;
+        }
+        Some((start, end))
+    }
+
     /// 编辑器内容变更时调用。内容未变则不置脏，避免无意义的写盘。
     pub fn set_text(&mut self, text: &str) {
         if self.text() == text {

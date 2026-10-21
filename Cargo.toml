@@ -1,6 +1,6 @@
 [package]
 name = "xink"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 rust-version = "1.98"
 description = "Local-first Markdown notes desktop app built with GPUI"
@@ -43,6 +43,10 @@ anyhow = "1"
 dirs = "5"
 notify = "7"
 regex = "1"
+# 滚动同步：预览区按"顶层块"划分，锚点解析必须与预览解析同源，
+# 因此用 gpui-base 内部同一个 markdown（1.0）来取每个块的源行区间。
+# 版本一致，Cargo 会合并成一份，不会引入第二份解析库。
+markdown = "1.0"
 # 文件监听事件通过 flume 传给 UI，避免定时轮询（gpui 内部已使用同一版本）
 flume = "0.11"
 libc = "0.2"
@@ -74,8 +78,6 @@ toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3"
-# 仅用于测试：复现预览解析（gpui-base 内部使用同一版本）对畸形 Markdown 的行为
-markdown = "1.0"
 
 [profile.dev]
 debug = "limited"

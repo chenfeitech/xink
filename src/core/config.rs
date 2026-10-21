@@ -92,6 +92,30 @@ pub enum ImageDisplay {
     Legacy,
 }
 
+/// 滚动同步的方式
+///
+/// 两种坐标都可以对齐两端，取舍不同：
+///
+/// - **比例**：两端各在自己的可滚动范围内取百分比。换算**连续**（滚动全程平滑），
+///   且读写用同一个公式，天然对称，不会互推；代价是"同一百分比"在两端对应的
+///   内容不完全一致（长代码块处会偏）——但不会跳，也不会来回抖。
+/// - **块锚点**：把源码行映射到预览的顶层块，位置更准；但"块内行比例 → 块内
+///   像素"是分段线性的，块边界处必然跳，且依赖虚拟列表已测量该块。
+///
+/// 默认取**比例**（与旧版观感一致）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollSyncMode {
+    /// 比例跟随：滚动中连续同步（默认，平滑；长代码块处可能略有偏差）
+    #[default]
+    #[serde(alias = "realtime")]
+    Ratio,
+    /// 块锚点：按 Markdown 顶层块对齐（位置更准，块边界处会跳）
+    Anchor,
+    /// 停止后对齐：滚动中完全不动对端，停下约 0.25 秒后对齐一次（绝对不抖）
+    OnStop,
+}
+
 /// 预览区链接打开行为
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -151,6 +175,12 @@ pub struct EditorConfig {
     pub auto_save_delay_ms: u64,
     pub indent: IndentConfig,
     pub show_line_numbers: bool,
+    /// 软换行：长行折行显示，不出现横向滚动条
+    ///
+    /// 关掉后"源码行号 ↔ 滚动位置"是一次乘除就能算准的（每个逻辑行正好一个显示行），
+    /// 编辑区与预览区的滚动同步也随之更精确；代价是长行要横向滚动。
+    /// 见 `docs/preview/scroll-sync-design.md` §8 D1。
+    pub soft_wrap: bool,
     pub font: FontConfig,
     pub color_scheme: ColorScheme,
     /// 快捷键映射：动作名 → 按键串（如 "cmd-b"），留空则用内置默认
@@ -209,10 +239,16 @@ pub struct PreviewConfig {
     pub link_open: LinkOpen,
     /// 编辑器与预览双向同步滚动
     pub sync_scroll: bool,
+    /// 同步时机：实时跟随 / 停止后对齐
+    pub sync_mode: ScrollSyncMode,
     /// 正文最大宽度（像素），0 表示不限制
     pub max_width: u32,
     /// 版面密度：留白与段间距的整体松紧
     pub density: PreviewDensity,
+    /// 调试用：在预览面板标题显示两端当前的源码行号与偏差
+    ///
+    /// 把"滚动同步对不对得上"从肉眼感觉变成可读的数字，便于验收与回归。
+    pub debug_scroll_sync: bool,
 }
 
 /// 预览版面密度
@@ -407,6 +443,9 @@ impl Default for EditorConfig {
             auto_save_delay_ms: 300,
             indent: IndentConfig::default(),
             show_line_numbers: false,
+            // 与框架默认一致（gpui-base 的 soft_wrap 默认 true）：改的是编辑习惯，
+            // 默认不动；想要最精确的滚动同步可以在设置里关掉。
+            soft_wrap: true,
             font: FontConfig::mono(),
             color_scheme: ColorScheme::default(),
             keymap: BTreeMap::new(),
@@ -426,7 +465,9 @@ impl Default for PreviewConfig {
             image_width_percent: 100,
             link_open: LinkOpen::default(),
             sync_scroll: true,
+            sync_mode: ScrollSyncMode::default(),
             max_width: 0,
+            debug_scroll_sync: false,
         }
     }
 }

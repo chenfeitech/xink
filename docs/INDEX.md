@@ -46,6 +46,7 @@
 | [tab-close-button-design.md](./editor/tab-close-button-design.md) | 标签关闭按钮的样式收敛 | `ui/editor.rs` | ✅（第三轮取值） |
 | [editor-syntax-highlight-eval.md](./editor/editor-syntax-highlight-eval.md) | 编辑区语法高亮的调研与实施（markdown / json / yaml / toml） | `ui/editor.rs`、`core/media.rs` | ⚠️ **已实施，待人工验收**；开放问题见该文档 §6 |
 | [unified-highlight-config-design.md](./editor/unified-highlight-config-design.md) | 统一编辑区与预览区的高亮配置（单一配色源 + 两端适配） | `core/theme.rs`、`core/highlight.rs`、`ui/theme.rs`、`ui/preview.rs` | ⚠️ **M1–M4 已实施完毕，待人工验收**（3 套预置主题：xink / ocean / solarized，2026-10-20） |
+| [editor-scroll-wheel.md](./editor/editor-scroll-wheel.md) | 编辑区鼠标滚轮 / 触控板滚动异常的排查与修复（同步写入与手势竞争） | `ui/editor.rs`、`ui/preview.rs`、`core/sync.rs` | ⚠️ **已实施，待人工验收**（2026-10-20）；含分诊步骤与验收清单 |
 
 ## 4. 索引与导航（P1）— `docs/navigation/`
 
@@ -66,6 +67,8 @@
 | [preview-layout-design.md](./preview/preview-layout-design.md) | 预览排版与布局密度三档 | `ui/preview.rs`、`core/config.rs` | ✅ |
 | [image-preview.md](./preview/image-preview.md) | 本地图片显示（data URL 化）与点击预览 | `core/markdown.rs`、`ui/preview.rs` | ✅ |
 | [right-rail-drawer-design.md](./preview/right-rail-drawer-design.md) | 最右侧按钮条 + 半透明抽屉（大纲/反链/标签） | `ui/rail.rs`、`ui/drawer.rs` | ✅ |
+| [scroll-sync-design.md](./preview/scroll-sync-design.md) | 编辑区 ↔ 预览区滚动同步重构（源行锚点取代百分比） | `ui/editor.rs`、`ui/preview.rs`、`core/sync.rs` | ⚠️ **已实施完毕，待人工验收**（2026-10-20）；含 7 条根因、M1–M5 与验收清单 |
+| [preview-scroll-jitter.md](./preview/preview-scroll-jitter.md) | 预览区滚动抖动的排查与修复（同步时机可切换：默认实时跟随 / 停止后对齐） | `ui/preview.rs`、`ui/editor.rs`、`core/config.rs`、`ui/settings.rs` | ⚠️ **已实施，待人工验收**（2026-10-21）；含与"高亮版本"的 git 对比结论 |
 
 ## 6. 配置 — `docs/config/`
 

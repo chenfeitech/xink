@@ -15,8 +15,8 @@
 
 | 指标 | 数量 | 说明 |
 |---|---|---|
-| 叶子配置项（顶层字段展开后） | **28** | 18 个顶层字段（`default_mode` 已于 2026-09-24 移除），其中 `tree_font` / `editor.font` / `preview.font` / `indent` 为结构体 |
-| 已真正作用于软件功能 | **22** | 含 Spike 后接线的 `indent.*` 两项、内核升级后的 `show_line_numbers`、P1 补接线的 `font.weight` ×2 |
+| 叶子配置项（顶层字段展开后） | **31** | 18 个顶层字段（`default_mode` 已于 2026-09-24 移除，`code_theme` 已于 2026-10-20 下线，新增 `editor.soft_wrap` / `preview.debug_scroll_sync` / `preview.sync_mode`），其中 `tree_font` / `editor.font` / `preview.font` / `indent` 为结构体 |
+| 已真正作用于软件功能 | **25** | 含 Spike 后接线的 `indent.*` 两项、内核升级后的 `show_line_numbers`、P1 补接线的 `font.weight` ×2、滚动同步重构新增的 `soft_wrap` / `debug_scroll_sync` / `sync_mode` |
 | **死配置（存了不生效）** | **3** | 值能保存、能导出，但不影响任何行为：`language`、`color_scheme`、`keymap`（`spell_check` 已于 2026-10-20 **移除**） |
 | 其中：设置界面已标注 ⚠ | 2 | `language`、`color_scheme`（`link_open` 已接线，仅剩标记待清理） |
 | 其中：界面有入口但未标注 | 0 | P1 已为两个 `font.weight` 补上设置界面入口并接线 |
@@ -117,6 +117,7 @@
 | `indent.tab_size` | `u32` 1–16 / `4` | 编辑行为 → 缩进宽度 | 无 | ❌ |
 | `show_line_numbers` | `bool` / `false` | 编辑行为 → 行号 | `editor.rs`（构造 + `render` 增量下发） | ✅ 已接线（2026-09-24，随内核升级为 `EditorState`） |
 | ~~`spell_check`~~ | — | — | — | ✅ **已于 2026-10-20 移除**：数据模型与设置界面均无此项 |
+| `soft_wrap` | `bool` / `true` | 编辑行为 → 软换行 | `editor.rs`（载入时下发 + `render` 增量下发） | ✅ 已接线（2026-10-20）：关闭后"源码行 ↔ 滚动位置"为 O(1) 精确换算，滚动同步更准 |
 | `font.family` | `String` / 等宽 | 字体与排版 → 字体 | `editor.rs:664,669` | ✅ |
 | `font.size` | `f32` / `14` | 字体与排版 → 字号 | `editor.rs:670` | ✅ |
 | `font.line_height` | `f32` / `1.6` | 字体与排版 → 行高 | `editor.rs:671` | ✅ |
@@ -138,6 +139,8 @@
 | `link_open` | `LinkOpen` / `InApp` | 渲染 → 链接打开 | `preview.rs`（`on_link_click`） | ✅ 已接线（含点击图片打开预览） |
 | `sync_scroll` | `bool` / `true` | 同步 → 同步滚动 | `preview.rs`、`editor.rs`（`tick_scroll_sync` 开头判断） | ✅ 已接线（2026-10-09 P1）：编辑器侧也判断开关，关闭后不再推送滚动比例 |
 | `max_width` | `u32` 0–4096 / `0` | 排版 → 正文最大宽度 | `preview.rs:187-188` | ✅ |
+| `debug_scroll_sync` | `bool` / `false` | 同步 → 调试信息 | `preview.rs`（面板标题显示两端行号与偏差） | ✅ 已接线（2026-10-20）：排查滚动同步用，默认关闭 |
+| `sync_mode` | `ScrollSyncMode` / `ratio` | 同步 → 同步方式 | `preview.rs`、`editor.rs`（`tick_scroll_sync` / `current_anchor` / `apply_*` 分支） | ✅ 已接线（2026-10-21）：`ratio` 比例跟随（默认，连续平滑）/ `anchor` 块锚点（位置更准、块边界会跳）/ `on_stop` 停下 250ms 后对齐一次（绝对不抖） |
 
 ---
 

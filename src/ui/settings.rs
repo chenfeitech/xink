@@ -21,7 +21,8 @@ use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::*;
 
 use crate::core::config::{
-    AppConfig, ColorScheme, FontWeight, ImageDisplay, Language, LinkOpen, PreviewDensity, ThemeMode,
+    AppConfig, ColorScheme, FontWeight, ImageDisplay, Language, LinkOpen, PreviewDensity,
+    ScrollSyncMode, ThemeMode,
 };
 use crate::core::theme::PRESET_THEMES;
 
@@ -493,6 +494,16 @@ fn all_fields() -> Vec<SettingField> {
             None,
             None,
         ),
+        bool_field(
+            "editor.soft_wrap",
+            "软换行",
+            "长行折行显示（关闭后长行需横向滚动，但滚动同步更精确：一个源码行正好一个显示行）",
+            Editor,
+            "编辑行为",
+            None,
+            |c| c.editor.soft_wrap,
+            |c, v| c.editor.soft_wrap = v,
+        ),
         // ── 编辑器 · 字体与排版 ──
         choice_field(
             "editor.font.family",
@@ -780,12 +791,50 @@ fn all_fields() -> Vec<SettingField> {
         bool_field(
             "preview.sync_scroll",
             "同步滚动",
-            "编辑区与预览区滚动位置互相同步",
+            "编辑区与预览区滚动位置互相同步（停止滚动约 0.25 秒后对齐一次；滚动过程中不动对端，避免抖动）",
             Preview,
             "同步",
             None,
             |c| c.preview.sync_scroll,
             |c, v| c.preview.sync_scroll = v,
+        ),
+        choice_field(
+            "preview.sync_mode",
+            "同步方式",
+            "比例跟随：两端按各自滚动百分比对齐，连续平滑（默认）；块锚点：按 Markdown 顶层块对齐，位置更准但块边界会跳；停止后对齐：滚动中不动对端，停下约 0.25 秒后对齐一次",
+            Preview,
+            "同步",
+            None,
+            FieldKind::Choice,
+            || {
+                vec![
+                    ("ratio".to_string(), "比例跟随".to_string()),
+                    ("anchor".to_string(), "块锚点".to_string()),
+                    ("on_stop".to_string(), "停止后对齐".to_string()),
+                ]
+            },
+            |c| match c.preview.sync_mode {
+                ScrollSyncMode::Ratio => "ratio".to_string(),
+                ScrollSyncMode::Anchor => "anchor".to_string(),
+                ScrollSyncMode::OnStop => "on_stop".to_string(),
+            },
+            |c, v| {
+                c.preview.sync_mode = match v.as_str() {
+                    "anchor" => ScrollSyncMode::Anchor,
+                    "on_stop" => ScrollSyncMode::OnStop,
+                    _ => ScrollSyncMode::Ratio,
+                };
+            },
+        ),
+        bool_field(
+            "preview.debug_scroll_sync",
+            "显示同步调试信息",
+            "在预览面板标题显示两端当前的源码行号与偏差（排查滚动同步用）",
+            Preview,
+            "同步",
+            None,
+            |c| c.preview.debug_scroll_sync,
+            |c, v| c.preview.debug_scroll_sync = v,
         ),
     ]
 }
