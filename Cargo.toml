@@ -35,20 +35,24 @@ gpui-kit = { version = "0.8", features = [
     "tree-sitter-markdown",
 ] }
 
-# 版本与 gpui-component 内部保持一致，避免同一 crate 多版本共存
+# 版本与 gpui-base 内部保持一致，避免同一 crate 多版本共存
 ropey = "=2.0.0-beta.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
-dirs = "5"
-notify = "7"
+# dirs 6 / notify 8：与 gpui-kit 0.8 依赖树里的版本一致（rust-embed→shellexpand
+# 用 dirs 6、gpui-component 用 notify 8.2），升级后各自合并成一份。
+# 注意不要跟着升到 dirs 7 / notify 9：那会重新多出一份。
+dirs = "6"
+notify = "8"
 regex = "1"
 # 滚动同步：预览区按"顶层块"划分，锚点解析必须与预览解析同源，
 # 因此用 gpui-base 内部同一个 markdown（1.0）来取每个块的源行区间。
 # 版本一致，Cargo 会合并成一份，不会引入第二份解析库。
 markdown = "1.0"
-# 文件监听事件通过 flume 传给 UI，避免定时轮询（gpui 内部已使用同一版本）
-flume = "0.11"
+# 文件监听事件通过 flume 传给 UI，避免定时轮询。
+# 0.12 与 gpui-pre-scheduler 内部版本一致，只解析出一份。
+flume = "0.12"
 libc = "0.2"
 
 # 强制图标资源内嵌到二进制（含 debug 构建）。
@@ -57,8 +61,8 @@ libc = "0.2"
 # **release** 内嵌，debug 构建会按编译期记录的绝对路径（…/gpui-kit-assets-x.y.z/assets）
 # 在运行时读盘——把 debug 产物的 .app 拷到别的机器就会因路径不存在而图标全丢。
 # Cargo 会对同一版本的 rust-embed 做特性合并，因此这里开启 debug-embed 即可让
-# 依赖方的图标在任何构建模式下都内嵌。版本需与 Cargo.lock 中的 8.x 保持一致。
-rust-embed = { version = "8.12", features = ["debug-embed"] }
+# 依赖方的图标在任何构建模式下都内嵌。版本需与 gpui-kit-assets 内部一致（8.x）。
+rust-embed = { version = "8.13", features = ["debug-embed"] }
 
 # Markdown 代码块语法高亮。版本与 gpui-component 内部保持一致。
 syntect = { version = "5.3.0", default-features = false, features = [
@@ -72,7 +76,7 @@ syntect = { version = "5.3.0", default-features = false, features = [
 # YAML 选 `noyalib`：`serde_yaml`（0.9.34+deprecated）与 `serde_yml`
 # （0.0.13 起只是转发到 noyalib 的兼容壳）均已废弃。noyalib 是纯 Rust、
 # `#![forbid(unsafe_code)]` 的接替者，API 与 serde_yaml 同形。
-noyalib = "0.0.57"
+noyalib = "0.0.58"
 # 与 Cargo.lock 中已有的 0.8.23 对齐，避免解析出第二份 toml
 toml = "0.8"
 

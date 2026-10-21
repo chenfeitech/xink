@@ -47,6 +47,21 @@ ropey = "2"                # 错误：会解析出第二份，类型不兼容，
 
 判断方法：改动依赖后运行 `cargo tree -d`，检查是否有重复版本。
 
+当前已对齐的共享依赖（gpui-kit 0.8 依赖树实测，**不要**超过这些版本，
+否则会重新多出一份）：
+
+| 依赖 | 本项目 | 谁在用同一份 |
+|---|---|---|
+| `ropey` | `=2.0.0-beta.1` | gpui-base（精确锁定） |
+| `markdown` | `1.0` | gpui-base（滚动同步依赖同源解析） |
+| `notify` | `8` | gpui-component 8.2（`9.0.0-rc` 是预发布，别升） |
+| `flume` | `0.12` | gpui-pre-scheduler |
+| `dirs` | `6` | rust-embed → shellexpand（`dirs 7` 会多一份） |
+| `rust-embed` | `8.13`（+ `debug-embed`） | gpui-kit-assets |
+
+`toml` 的例外：Cargo.lock 里的 `toml 1.x` 来自 `embed-resource` 的**构建依赖**，
+与本项目运行时的 `toml 0.8` 不属于同一份，升级合并不了，别为此动它。
+
 ## 3. 应用启动骨架（固定写法）
 
 ```rust

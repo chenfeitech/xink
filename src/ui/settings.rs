@@ -14,6 +14,7 @@ use std::sync::OnceLock;
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
+use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -1511,6 +1512,10 @@ pub fn open_settings(window: &mut Window, cx: &mut App) {
             .w(width.min(window.viewport_size().width - px(32.)))
             .h(h)
             .margin_top(margin_top)
+            // 设置面板是"原地出现"的，从窗口顶部滑下来（默认 SlideDown）会让人
+            // 误以为它跟窗口有关系；淡入更贴合"浮在主界面上方"的定位。
+            // 关闭仍是即时的，且尊重系统的"减弱动态效果"设置。
+            .entrance(DialogEntrance::Fade)
             .close_button(true)
             .overlay(true)
             .overlay_closable(true)
