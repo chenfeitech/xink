@@ -1,6 +1,6 @@
 # 文档索引
 
-> `docs/` 共 35 份 Markdown，按领域分组如下。
+> `docs/` 共 37 份 Markdown，按领域分组如下。
 > **状态以当前 `src/` 代码为准**（核对日期 2026-10-20），不是文档自述。
 > 新增文档请按 §7 的命名约定命名，并回到本文件登记一行。
 
@@ -32,6 +32,8 @@
 | [file-tree-hidden-files-design.md](./file-tree/file-tree-hidden-files-design.md) | 显示隐藏文件与引用其他文件 | `core/vault.rs`、`core/config.rs` | ✅ |
 | [file-tree-layout-design.md](./file-tree/file-tree-layout-design.md) | 长文件名下的缩进 / 图标列 / 截断 | `ui/file_tree.rs` | ✅ |
 | [file-tree-icons-design.md](./file-tree/file-tree-icons-design.md) | 按文件类型给不同图标 | `core/media.rs`、`ui/file_tree.rs` | ✅（音频/视频已补齐） |
+| [file-tree-reveal-active-note-requirements.md](./file-tree/file-tree-reveal-active-note-requirements.md) | 切换活动笔记时目录树自动定位（展开 / 选中 / 滚动）的需求 | `ui/file_tree.rs`、`ui/editor.rs` | 📝 **待实现** |
+| [file-tree-reveal-active-note-design.md](./file-tree/file-tree-reveal-active-note-design.md) | 同上：钩子挂在 `EditorPanel::set_active`，复用框架 `TreeState::reveal_item` | `ui/file_tree.rs`、`ui/editor.rs` | 📝 **待实现** |
 
 ## 3. 编辑器 — `docs/editor/`
 

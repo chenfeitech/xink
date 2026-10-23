@@ -22,7 +22,7 @@ use ui::{BacklinkPanel, EditorPanel, FilesPanel, OutlinePanel, PreviewPanel, Tag
 /// 未注册的面板无法恢复，会得到空白面板。新增面板时务必在此登记。
 fn register_panels(cx: &mut App) {
     register_panel(cx, "FilesPanel", |_, _, cx| {
-        panel_handle(cx.new(|cx| FilesPanel::new(cx)))
+        panel_handle(cx.new(FilesPanel::new))
     });
     register_panel(cx, "EditorPanel", |_, window, cx| {
         panel_handle(cx.new(|cx| EditorPanel::new(window, cx)))

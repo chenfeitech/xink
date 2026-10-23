@@ -97,6 +97,13 @@ pub struct AppState {
     /// 由 [`apply_theme`] 维护：框架没有"查询当前明暗"的 API，
     /// 而代码块高亮主题需要据此选择，因此在这里记录一次供各处读取。
     pub dark: bool,
+    /// 文件树面板的弱引用，供"活动笔记变化时把树定位过去"使用。
+    ///
+    /// 文件树是 dock 面板、由两处创建（默认布局与布局恢复的面板工厂），
+    /// 不像 `outline` / `rail` 那样能在 `set_global` 时直接持有，
+    /// 因此由 `FilesPanel::new` 自注册——与 `EditorPanel` 登记 `empty_panels`
+    /// 同一套做法。未创建 / 已释放时为 `None`，调用方按"没有就算了"处理。
+    pub files: Option<WeakEntity<FilesPanel>>,
     /// 已注册的库与当前选择（多库机制，见 `docs/multi-vault-design.md`）。
     ///
     /// 库的当前路径统一由 `vaults.active_root()` 派生，避免两处状态不一致。
@@ -487,6 +494,7 @@ impl Workspace {
             outline,
             notes,
             rail,
+            files: None,
         });
 
         // 主题等外观类配置在启动时先应用一次
@@ -668,7 +676,7 @@ impl Workspace {
     }
 
     fn reset_default_layout(dock_area: &Entity<DockArea>, window: &mut Window, cx: &mut App) {
-        let files = cx.new(|cx| FilesPanel::new(cx));
+        let files = cx.new(FilesPanel::new);
         let editor = cx.new(|cx| EditorPanel::new(window, cx));
         let preview = cx.new(|cx| PreviewPanel::new(window, cx));
 

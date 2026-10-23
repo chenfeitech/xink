@@ -1879,6 +1879,9 @@ impl BasePanel for EditorPanel {
         }
         let key = tab_key(&path);
         cx.update_global::<AppState, _>(|state, _| state.tabs.activate(&key));
+        // 目录树跟随：切到这篇笔记时把树定位过去（展开祖先 + 选中 + 滚动）。
+        // 需求见 `docs/file-tree/file-tree-reveal-active-note-requirements.md`。
+        crate::ui::file_tree::reveal_note(&path, cx);
         crate::ui::tabs::persist_open_notes(cx);
     }
 

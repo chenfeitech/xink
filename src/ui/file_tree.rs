@@ -57,11 +57,26 @@ pub struct FilesPanel {
     /// 而"有没有子节点"并不能代表类型（空文件夹没有子节点）。
     /// 这里在刷新树时顺带缓存一份，渲染时 O(1) 查表，避免逐行访问磁盘。
     dir_flags: Rc<HashMap<PathBuf, bool>>,
+
+    /// 待揭示的笔记路径：切标签时树里可能还没有这个节点（多半还在后台扫描），
+    /// 先记下来，扫描完成后补一次。揭示成功或扫描完成都会清空，
+    /// 不会留着反复抢选中（见 `docs/file-tree/file-tree-reveal-active-note-design.md` §6）。
+    pending_reveal: Option<PathBuf>,
 }
 
 impl FilesPanel {
-    pub fn new(cx: &mut App) -> Self {
+    /// 构造：自注册到 `AppState.files`，供切标签时定位树节点。
+    ///
+    /// 签名是 `&mut Context<Self>` 而不是 `&mut App`，因为自注册需要
+    /// `cx.weak_entity()`。两处调用点（`app.rs` 的默认布局、`main.rs` 的
+    /// 布局恢复工厂）传入的闭包参数本就是 `&mut Context<FilesPanel>`，无需改动。
+    pub fn new(cx: &mut Context<Self>) -> Self {
         println!("[xink] FilesPanel::new");
+        // `AppState` 尚未注册时（理论上不会）跳过，绝不 panic
+        if cx.try_global::<AppState>().is_some() {
+            let weak = cx.weak_entity();
+            cx.update_global::<AppState, _>(|state, _| state.files = Some(weak));
+        }
         Self {
             focus_handle: cx.focus_handle(),
             tree_state: cx.new(|cx| TreeState::new(cx)),
@@ -76,7 +91,43 @@ impl FilesPanel {
             tree_items: Vec::new(),
 
             dir_flags: Rc::new(HashMap::new()),
+            pending_reveal: None,
         }
+    }
+
+    /// 把树定位到某篇笔记：展开祖先 + 选中 + 滚动到可见（FR1–FR3）
+    ///
+    /// 路径不在当前库里直接放弃，且**不登记** `pending_reveal`——
+    /// 否则这条待揭示会一直留着，每次刷新都抢一次选中。
+    /// 树里暂时没有该节点时记下，等扫描完成后补（FR7）。
+    fn reveal(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let Some(root) = self.vault.as_ref().map(|vault| vault.root().to_path_buf()) else {
+            return;
+        };
+        if !path.starts_with(&root) {
+            return;
+        }
+        if self.try_reveal(path, cx) {
+            self.pending_reveal = None;
+        } else {
+            self.pending_reveal = Some(path.to_path_buf());
+        }
+    }
+
+    /// 尝试定位；返回树里是否已有该节点
+    fn try_reveal(&mut self, path: &Path, cx: &mut Context<Self>) -> bool {
+        let id: SharedString = path.to_string_lossy().to_string().into();
+        let mut hit = false;
+        self.tree_state.update(cx, |state, cx| {
+            // 顺序要紧：`reveal_item` 内部会 expand_ancestors → rebuild_entries，
+            // 展开前后条目下标会变，所以必须先展开、再取下标、再选中。
+            state.reveal_item(&id, ScrollStrategy::Center, cx);
+            if let Some(ix) = state.index_of(&id) {
+                state.set_selected_index(Some(ix), cx);
+                hit = true;
+            }
+        });
+        hit
     }
 
     // ---- 查询 ----
@@ -771,6 +822,14 @@ impl FilesPanel {
 
         println!("[xink] 文件树已更新: {notes} 篇笔记");
         self.status = format!("{notes} 篇笔记").into();
+
+        // 扫描完成：补一次"待揭示"（冷启动恢复标签时树还没就绪，FR7）。
+        // 必须放在上面恢复选中与滚动偏移**之后**，否则揭示的滚动会被旧偏移覆盖。
+        // 取走即清空：命中与否都不再重试，避免每次刷新都抢一次选中。
+        if let Some(path) = self.pending_reveal.take() {
+            self.try_reveal(&path, cx);
+        }
+
         cx.notify();
     }
 }
@@ -858,6 +917,23 @@ fn image_extension(format: ImageFormat) -> &'static str {
 fn refresh_icon() -> Icon {
     const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>"#;
     Icon::default().data(SVG.as_bytes())
+}
+
+/// 让目录树定位到指定笔记（编辑区切标签时调用）
+///
+/// 面板尚未创建、路径不在当前库、或树里还没有这个节点时静默返回 `false`，
+/// 绝不打断调用方——切标签本身的流程不受这条链路影响。
+/// 设计见 `docs/file-tree/file-tree-reveal-active-note-design.md`。
+pub fn reveal_note(path: &Path, cx: &mut App) -> bool {
+    let Some(panel) = cx
+        .try_global::<AppState>()
+        .and_then(|state| state.files.as_ref())
+        .and_then(|weak| weak.upgrade())
+    else {
+        return false;
+    };
+    panel.update(cx, |panel, cx| panel.reveal(path, cx));
+    true
 }
 
 /// 在后台线程执行：构造 Vault 并扫描
