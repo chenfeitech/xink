@@ -24,9 +24,6 @@ use crate::core::sync::{AnchorTable, GestureGuard, ScrollAnchor, Side, SyncGuard
 use std::sync::Arc;
 use std::time::Duration;
 
-/// 预览区代码块的最大高度：超过就在块内自己滚（配 `Overflow::Scroll`）
-const CODE_BLOCK_MAX_H: f32 = 420.;
-
 /// 源码行 → 滚动比例（锚点不可用时的降级换算）
 fn ratio_of_line(line: f32, table: &AnchorTable) -> f32 {
     let last = table.total_lines().saturating_sub(1).max(1) as f32;
@@ -608,21 +605,13 @@ impl Render for PreviewPanel {
                     _ => 0.58,
                 };
                 StyleRefinement::default().text_size(px(heading_base * factor))
-            })
-            // 长代码块自带滚动条（gpui-kit 0.7.3 起）：超过 CODE_BLOCK_MAX_H 的
-            // 代码块在自己的框里滚，不再把预览整体撑得极高；而且鼠标在块上滚动
-            // 时会先滚块内、到边界才把滚轮交给外层的虚拟列表——顺带缓解了
-            // "编辑区 ↔ 预览区"滚动时互相抢滚动的问题。
-            .with_code_block({
-                // `StyleRefinement` 没有 `overflow_y()` 之类的链式方法，
-                // 而且 `PointRefinement` / `SizeRefinement` 也不接受 `Point` / `Size`
-                // 直接转换，所以按字段填（框架自己也是这么用的，见
-                // `gpui-component/src/text/mod.rs` 的 `base_text_view_style`）
-                let mut code_block = StyleRefinement::default();
-                code_block.overflow.y = Some(Overflow::Scroll);
-                code_block.max_size.height = Some(px(CODE_BLOCK_MAX_H).into());
-                code_block
             });
+
+        // 代码块**不设**最大高度、也不开块内滚动：套一层可滚动的框等于把内容
+        // "收起来"。数据文件预览（JSON / YAML / TOML 整体就是一个围栏代码块）
+        // 与大段注释代码都会被截断成 420px 的小窗，要看全得在框里上下滚——
+        // 这不是预览该有的行为。长就让它长，外层虚拟列表本来就能滚。
+        // （这里曾加过 max_size + Overflow::Scroll，见 806a5b8，已回退）
 
         let view = div()
             .id("preview-panel")
