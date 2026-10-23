@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use regex::Regex;
@@ -68,7 +68,10 @@ pub fn sanitize_for_preview(md: &str) -> String {
 /// 图片缓存条目：`(修改时间, 文件长度, data URL)`。
 ///
 /// 抽成别名是为了让下面的缓存类型不必写成一长串嵌套泛型。
-type ImageCacheEntry = (SystemTime, u64, String);
+///
+/// data URL 用 `Arc<str>` 共享：一张 5MB 的图编码后约 6.7MB，
+/// 命中时若按 `String` 克隆就是每次预览刷新都搬几 MB。
+type ImageCacheEntry = (SystemTime, u64, Arc<str>);
 
 /// 图片转 data URL 的缓存：避免每次刷新预览都重新读盘与编码。
 ///
@@ -137,7 +140,7 @@ fn encode_base64(bytes: &[u8]) -> String {
 /// `NullHttpClient`（gpui-pre `app.rs:175-181`），于是 `file://` 与裸路径
 /// **都加载不出来**——这正是笔记里图片显示为空白 / 破损的原因。
 /// 框架唯一内联支持的来源是 `data:` URL（gpui-base text/utils.rs）。
-fn image_data_url(path: &Path) -> Option<String> {
+fn image_data_url(path: &Path) -> Option<Arc<str>> {
     let meta = std::fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() > MAX_IMAGE_BYTES {
         return None;
@@ -157,7 +160,8 @@ fn image_data_url(path: &Path) -> Option<String> {
     }
 
     let bytes = std::fs::read(path).ok()?;
-    let url = format!("data:{};base64,{}", mime_for(path)?, encode_base64(&bytes));
+    let url: Arc<str> =
+        Arc::from(format!("data:{};base64,{}", mime_for(path)?, encode_base64(&bytes)).as_str());
 
     if let Ok(mut cache) = IMAGE_DATA_URLS.get_or_init(Default::default).lock() {
         cache.insert(key, (mtime, meta.len(), url.clone()));
@@ -230,8 +234,12 @@ pub fn resolve_image_urls(md: &str, note_dir: &Path, opts: ImageOptions) -> Stri
             return replace_last(link_only, url, &file_url);
         }
 
-        // 读不到 / 格式不支持 / 超限时退回 file://，至少链接指向正确位置
-        let src = image_data_url(&path).unwrap_or_else(|| file_url.clone());
+        // 读不到 / 格式不支持 / 超限时退回 file://，至少链接指向正确位置。
+        // 命中缓存时拿到的是共享的 Arc：整段 data URL 不再逐次拷贝
+        let src: Arc<str> = match image_data_url(&path) {
+            Some(url) => url,
+            None => Arc::from(file_url.as_str()),
+        };
         let width = opts.width_percent.clamp(20, 100);
         let alt = alt_of(&whole);
         let img_tag = format!("<img src=\"{src}\" alt=\"{alt}\" style=\"width: {width}%\">");

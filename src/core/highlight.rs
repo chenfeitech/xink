@@ -49,12 +49,18 @@ pub struct SpanStyle {
 
 type Span = (Range<usize>, SpanStyle);
 
-/// (语言, 代码哈希, 主题名+明暗)。用哈希而非整个代码块，避免缓存撑大内存。
-type CacheKey = (String, u64, String);
+/// (语言, 代码哈希, 主题名, 明暗)。用哈希而非整个代码块，避免缓存撑大内存。
+///
+/// 主题名是 `&'static str`（`normalize_theme_name` 的返回值），明暗单独成位，
+/// 因此构造 key 不再需要 `format!` 出一个字符串——这个回调每帧对每个可见
+/// 代码块都会跑一次。
+type CacheKey = (String, u64, &'static str, bool);
+/// 高亮结果共享：命中缓存时只克隆一次 `Arc`，不搬整个 `Vec<Span>`
+type CachedSpans = Arc<Vec<Span>>;
 
 /// SyntaxSet 构建开销大，全局共享一份
 static HIGHLIGHTER: OnceLock<Highlighter> = OnceLock::new();
-static CACHE: OnceLock<Mutex<HashMap<CacheKey, Vec<Span>>>> = OnceLock::new();
+static CACHE: OnceLock<Mutex<HashMap<CacheKey, CachedSpans>>> = OnceLock::new();
 /// 由预置主题构造出的 syntect 主题；按 (主题名, 明暗) 缓存，避免每次渲染都解析 JSON
 type ThemeCache = Mutex<HashMap<(String, bool), Arc<Theme>>>;
 
@@ -153,7 +159,7 @@ pub fn highlighter() -> &'static Highlighter {
     HIGHLIGHTER.get_or_init(Highlighter::new)
 }
 
-fn cache() -> &'static Mutex<HashMap<CacheKey, Vec<Span>>> {
+fn cache() -> &'static Mutex<HashMap<CacheKey, CachedSpans>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -304,11 +310,12 @@ struct PresetThemeStyle {
 ///
 /// `theme` 是**统一预置主题名**（见 [`theme::PRESET_THEMES`]），不是 syntect 主题名；
 /// `dark` 决定取该主题的深色还是浅色变体。
-pub fn highlight(lang: &str, code: &str, theme: &str, dark: bool) -> Vec<Span> {
+pub fn highlight(lang: &str, code: &str, theme: &str, dark: bool) -> CachedSpans {
     let key: CacheKey = (
         lang.to_string(),
         hash_code(code),
-        theme_key(theme::normalize_theme_name(theme), dark),
+        theme::normalize_theme_name(theme),
+        dark,
     );
 
     if let Ok(cache) = cache().lock()
@@ -317,7 +324,7 @@ pub fn highlight(lang: &str, code: &str, theme: &str, dark: bool) -> Vec<Span> {
         return hit.clone();
     }
 
-    let spans = compute(lang, code, theme, dark);
+    let spans: CachedSpans = Arc::new(compute(lang, code, theme, dark));
 
     if let Ok(mut cache) = cache().lock() {
         if cache.len() >= MAX_CACHE_ENTRIES {

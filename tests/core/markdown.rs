@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 
 #[test]
 fn rewrites_relative_image_to_file_url() {
@@ -629,4 +630,35 @@ fn decoration_ranges_are_byte_offsets_of_the_whole_document() {
         .find(|span| span.kind == SpanKind::LinkText)
         .expect("应有链接");
     assert_eq!(&md[link.range.clone()], "链接");
+}
+
+/// 图片很多时 data URL 单张可达数 MB，命中缓存必须共享而不是拷贝
+#[test]
+fn image_data_url_shares_one_allocation_across_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("a.png");
+    fs::write(&png, [137u8, 80, 78, 71, 13, 10, 26, 10]).unwrap();
+
+    let first = image_data_url(&png).expect("PNG 应能编码成 data URL");
+    let second = image_data_url(&png).expect("第二次应命中缓存");
+
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "命中缓存应复用同一份 data URL，而不是整段拷贝"
+    );
+    assert!(first.starts_with("data:image/png;base64,"), "实际: {first}");
+}
+
+/// 文件被改写后指纹（mtime + 长度）变了，必须重新编码而不是拿旧图
+#[test]
+fn image_data_url_re_encodes_when_file_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("a.png");
+    fs::write(&png, [1u8, 2, 3]).unwrap();
+    let before = image_data_url(&png).expect("应能编码");
+
+    fs::write(&png, [9u8, 9, 9, 9, 9]).unwrap();
+    let after = image_data_url(&png).expect("应能重新编码");
+
+    assert_ne!(before, after, "内容变了不该复用旧的 data URL");
 }

@@ -1,13 +1,16 @@
 //! 全库索引：把库内每篇笔记的事实（标题 / 链接 / 双链 / 标签）集中解析一次，
 //! 供双链、反向链接、标签与全文搜索复用。
 //!
-//! 设计见 `docs/note-index-design.md`。三条原则：
+//! 设计见 `docs/note-index-design.md`，派生表部分见
+//! `docs/navigation/index-derived-tables-design.md`。三条原则：
 //! 1. **磁盘是真值**：索引只存派生数据，不落盘，启动后台重建（规则 04）；
-//! 2. **主表 + 实时派生**：只维护 `notes`，反链 / 标签在查询时反查，
-//!    避免增量更新时把派生表写错（详见设计 §3）；
+//! 2. **主表 + 增量维护的派生表**：`notes` 是唯一真值，反链 / 标签 / 标题
+//!    另建派生表，所有写操作统一走 `detach` + `attach` 一对方法。
+//!    原设计是"查询时实时反查"（`note-index-design.md` §3），实测 `tags()`
+//!    在 3000 篇库上单次 345ms、且每次自动保存都会触发，故改为派生表；
 //! 3. **只收笔记**：`.md` 才参与双链与标签，数据文件不进索引。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use gpui_kit::EventEmitter;
@@ -76,6 +79,20 @@ pub struct NoteIndex {
     by_name: HashMap<String, Vec<PathBuf>>,
     /// 相对库根的路径（小写）→ 绝对路径，同上
     by_rel_path: HashMap<String, PathBuf>,
+
+    // ── 派生表：由 detach / attach 维护，查询时只读 ──────────
+    /// 笔记标题（小写）→ 路径。`resolve_wikilink` 第 3 步（按标题匹配）用
+    by_title: HashMap<String, Vec<PathBuf>>,
+    /// 标签（小写）→ 带该标签的笔记。用 `HashSet` 而非 `Vec`：
+    /// 旧实现用 `Vec` + `contains` 去重，是 O(标签下的笔记数²)
+    by_tag: HashMap<String, HashSet<PathBuf>>,
+    /// 双链引用的**未解析**桶：归一化后的双链目标 → 写过它的条目（含来源与行号）
+    ///
+    /// 存"写了什么"而不是"指向谁"，因为后者取决于建表那一刻库里有哪些笔记：
+    /// 先写的笔记引用了一篇后建的笔记，那份引用就永远补不回来（除非每次
+    /// 新增都全库重解析一遍）。改成按目标文本分桶后，`backlinks` 在查询时
+    /// 才用目标的 [`link_targets_of`] 取桶，谁先建谁后建都不影响。
+    link_refs: HashMap<String, Vec<LinkRef>>,
 }
 
 // 索引的消费者在后续任务里：T8 大纲（headings）、T9 双链（resolve_wikilink）、
@@ -114,6 +131,9 @@ impl NoteIndex {
             notes: HashMap::new(),
             by_name: HashMap::new(),
             by_rel_path: HashMap::new(),
+            by_title: HashMap::new(),
+            by_tag: HashMap::new(),
+            link_refs: HashMap::new(),
         };
 
         let mut files = Vec::new();
@@ -124,45 +144,35 @@ impl NoteIndex {
         Ok(index)
     }
 
-    /// 重新解析单个文件（新增与更新都走这里，幂等）。
+    /// 重新解析单个文件（新增、更新、改名都走这里，幂等）。
     ///
     /// 非笔记文件（数据文件等）与读取失败的文件都会被跳过：
     /// 索引里不该出现打不开的条目。
+    ///
+    /// **例外：文件已经不在磁盘上时要把旧条目摘掉。** 改名事件给的是
+    /// `[旧路径, 新路径]`，旧路径读不到，若照旧早退，索引里会永久留下一篇
+    /// 并不存在的笔记——它还会继续参与标签计数与双链解析。
+    /// 只按"文件不存在"判定：权限不足、非 UTF-8 等情况下文件仍在，
+    /// 这时保留旧条目比摘掉更稳妥。
     pub fn reindex_file(&mut self, path: &Path) {
         if !is_note(path) {
             return;
         }
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Some(note) = read_note(path) else {
+            if !path.exists() {
+                self.detach(path);
+            }
             return;
         };
-        let facts = parse_facts(&text);
-        let title = title_of(&facts, path);
-        self.insert(IndexedNote {
-            path: path.to_path_buf(),
-            title,
-            facts,
-        });
+        // 先摘干净再重新登记：派生表因此不会留下这一篇的旧事实
+        self.detach(path);
+        self.attach_keys(note);
+        self.attach_links(path);
     }
 
     /// 从索引里移除一个路径
     pub fn remove_file(&mut self, path: &Path) {
-        if self.notes.remove(path).is_none() {
-            return;
-        }
-        if let Some(stem) = file_stem(path)
-            && let Some(list) = self.by_name.get_mut(&stem.to_lowercase())
-        {
-            list.retain(|p| p != path);
-            if list.is_empty() {
-                self.by_name.remove(&stem.to_lowercase());
-            }
-        }
-        if let Some(root) = &self.root
-            && let Ok(rel) = path.strip_prefix(root)
-        {
-            self.by_rel_path
-                .remove(&rel.to_string_lossy().to_lowercase());
-        }
+        self.detach(path);
     }
 
     /// 反向链接：哪些笔记引用了 `path`
@@ -170,23 +180,19 @@ impl NoteIndex {
         let Some(root) = &self.root else {
             return Vec::new();
         };
-        let targets = link_targets_of(path, root);
+        // 这篇笔记能被写成哪几种形式（`a` / `sub/a.md` / `sub/a`），
+        // 桶里就是别人写下的对应引用。桶的大小等于命中数，与库规模无关。
+        let mut keys = link_targets_of(path, root);
+        keys.sort();
+        keys.dedup();
 
         let mut refs = Vec::new();
-        for note in self.notes.values() {
-            if note.path == path {
+        for key in keys {
+            let Some(bucket) = self.link_refs.get(&key) else {
                 continue;
-            }
-            for link in &note.facts.wiki_links {
-                let key = link.target.trim().trim_end_matches(".md").to_lowercase();
-                if targets.contains(&key) {
-                    refs.push(LinkRef {
-                        from: note.path.clone(),
-                        line: link.line,
-                        target: link.target.clone(),
-                    });
-                }
-            }
+            };
+            // 自引不算反链
+            refs.extend(bucket.iter().filter(|link| link.from != path).cloned());
         }
         refs.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.line.cmp(&b.line)));
         refs
@@ -194,19 +200,10 @@ impl NoteIndex {
 
     /// 标签聚合：`(标签名, 笔记数)`，按数量降序、同数量按字典序
     pub fn tags(&self) -> Vec<(String, usize)> {
-        let mut counts: HashMap<String, Vec<PathBuf>> = HashMap::new();
-        for note in self.notes.values() {
-            for tag in &note.facts.tags {
-                // 大小写归一：`#Rust` 与 `#rust` 是同一个标签
-                let list = counts.entry(tag.name.to_lowercase()).or_default();
-                if !list.contains(&note.path) {
-                    list.push(note.path.clone());
-                }
-            }
-        }
-        let mut tags: Vec<(String, usize)> = counts
-            .into_iter()
-            .map(|(name, paths)| (name, paths.len()))
+        let mut tags: Vec<(String, usize)> = self
+            .by_tag
+            .iter()
+            .map(|(name, paths)| (name.clone(), paths.len()))
             .collect();
         tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         tags
@@ -216,11 +213,10 @@ impl NoteIndex {
     pub fn notes_with_tag(&self, tag: &str) -> Vec<PathBuf> {
         let tag = tag.trim_start_matches('#').to_lowercase();
         let mut paths: Vec<PathBuf> = self
-            .notes
-            .values()
-            .filter(|note| note.facts.tags.iter().any(|t| t.name.to_lowercase() == tag))
-            .map(|note| note.path.clone())
-            .collect();
+            .by_tag
+            .get(&tag)
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default();
         paths.sort();
         paths
     }
@@ -245,14 +241,9 @@ impl NoteIndex {
         let stem = raw.trim_end_matches(".md").to_lowercase();
         let mut hits: Vec<PathBuf> = self.by_name.get(&stem).cloned().unwrap_or_default();
 
-        // 3) 标题
+        // 3) 标题（走派生表，不再全表扫）
         if hits.is_empty() {
-            hits = self
-                .notes
-                .values()
-                .filter(|note| note.title.to_lowercase() == stem)
-                .map(|note| note.path.clone())
-                .collect();
+            hits = self.by_title.get(&stem).cloned().unwrap_or_default();
         }
 
         hits.sort();
@@ -284,20 +275,151 @@ impl NoteIndex {
         self.notes.get(path)
     }
 
-    fn insert(&mut self, note: IndexedNote) {
-        if let Some(stem) = file_stem(&note.path) {
-            let list = self.by_name.entry(stem.to_lowercase()).or_default();
-            if !list.contains(&note.path) {
-                list.push(note.path.clone());
-            }
+    /// 把一个路径从**所有**表里摘干净（主表 + 五张派生表）
+    ///
+    /// 与 [`Self::attach_keys`] / [`Self::attach_links`] 成对使用：新增、
+    /// 重解析、删除三种写操作都是"先 detach 再 attach"，因此派生表写错的
+    /// 可能只集中在这一对方法里——由 `incremental_updates_match_full_build`
+    /// 那条差异测试兜住（全量构建与逐篇增量的结果必须逐项相等）。
+    fn detach(&mut self, path: &Path) {
+        let Some(note) = self.notes.remove(path) else {
+            return;
+        };
+        let root = self.root.clone();
+
+        if let Some(stem) = file_stem(path) {
+            remove_from_list(&mut self.by_name, &stem.to_lowercase(), path);
         }
-        if let Some(root) = &self.root
-            && let Ok(rel) = note.path.strip_prefix(root)
+        if let Some(root) = &root
+            && let Ok(rel) = path.strip_prefix(root)
         {
             self.by_rel_path
-                .insert(rel.to_string_lossy().to_lowercase(), note.path.clone());
+                .remove(&rel.to_string_lossy().to_lowercase());
         }
-        self.notes.insert(note.path.clone(), note);
+        remove_from_list(&mut self.by_title, &note.title.to_lowercase(), path);
+
+        for tag in &note.facts.tags {
+            let key = tag.name.to_lowercase();
+            let mut empty = false;
+            if let Some(set) = self.by_tag.get_mut(&key) {
+                set.remove(path);
+                empty = set.is_empty();
+            }
+            if empty {
+                self.by_tag.remove(&key);
+            }
+        }
+
+        // 摘掉它写下的双链引用。分桶键由**旧事实**算出，
+        // 因此内容改了也不会漏摘旧桶。
+        for link in &note.facts.wiki_links {
+            let key = link_key(&link.target);
+            let mut empty = false;
+            if let Some(bucket) = self.link_refs.get_mut(&key) {
+                bucket.retain(|entry| entry.from != path);
+                empty = bucket.is_empty();
+            }
+            if empty {
+                self.link_refs.remove(&key);
+            }
+        }
+    }
+
+    /// 登记主表与 `by_title` / `by_tag`（不含它写下的双链引用）
+    fn attach_keys(&mut self, note: IndexedNote) {
+        let path = note.path.clone();
+        let root = self.root.clone();
+
+        if let Some(stem) = file_stem(&path) {
+            push_unique(&mut self.by_name, stem.to_lowercase(), path.clone());
+        }
+        if let Some(root) = &root
+            && let Ok(rel) = path.strip_prefix(root)
+        {
+            self.by_rel_path
+                .insert(rel.to_string_lossy().to_lowercase(), path.clone());
+        }
+        push_unique(&mut self.by_title, note.title.to_lowercase(), path.clone());
+
+        for tag in &note.facts.tags {
+            // 大小写归一：`#Rust` 与 `#rust` 是同一个标签
+            self.by_tag
+                .entry(tag.name.to_lowercase())
+                .or_default()
+                .insert(path.clone());
+        }
+
+        self.notes.insert(path, note);
+    }
+
+    /// 把这篇笔记写下的双链引用登记进 `link_refs`
+    ///
+    /// 只记"它写了什么"，**不解析指向谁**：解析发生在 `backlinks` 查询时
+    /// （见该字段的注释）。因此这一步不依赖其它笔记是否已入库，
+    /// 新增、重解析、删除三种写操作可以走完全相同的代码路径。
+    fn attach_links(&mut self, path: &Path) {
+        let Some(note) = self.notes.get(path) else {
+            return;
+        };
+        let links = note.facts.wiki_links.clone();
+        for link in links {
+            self.link_refs
+                .entry(link_key(&link.target))
+                .or_default()
+                .push(LinkRef {
+                    from: path.to_path_buf(),
+                    line: link.line,
+                    target: link.target,
+                });
+        }
+    }
+}
+
+/// 读一篇笔记并解析出事实；非笔记文件与读失败的文件返回 `None`
+///
+/// 索引里不该出现打不开的条目（与主表口径一致）。
+fn read_note(path: &Path) -> Option<IndexedNote> {
+    if !is_note(path) {
+        return None;
+    }
+    let text = std::fs::read_to_string(path).ok()?;
+    let facts = parse_facts(&text);
+    let title = title_of(&facts, path);
+    Some(IndexedNote {
+        path: path.to_path_buf(),
+        title,
+        facts,
+    })
+}
+
+/// 双链目标在索引里的归一化形式
+///
+/// 必须与 [`link_targets_of`] 的口径一致（`trim` + 去 `.md` + 小写），
+/// 否则"这条双链指向谁"会查错——差异测试覆盖这一点。
+fn link_key(target: &str) -> String {
+    target.trim().trim_end_matches(".md").to_lowercase()
+}
+
+/// 往 `key` 里加一个路径；同一路径不重复登记
+///
+/// 同一篇笔记可能同时被多种写法命中（如根目录下的 `a.md`，stem 与
+/// "相对路径去扩展名"都是 `a`），不去重会算出重复的引用条目。
+fn push_unique(map: &mut HashMap<String, Vec<PathBuf>>, key: String, path: PathBuf) {
+    let list = map.entry(key).or_default();
+    if !list.contains(&path) {
+        list.push(path);
+    }
+}
+
+/// 从 `key` 里摘掉一个路径；摘空了连 key 一起删掉，避免留下空桶
+fn remove_from_list(map: &mut HashMap<String, Vec<PathBuf>>, key: &str, path: &Path) {
+    let mut empty = false;
+    if let Some(list) = map.get_mut(key) {
+        list.retain(|p| p.as_path() != path);
+        empty = list.is_empty();
+    }
+    if empty {
+        map.remove(key);
     }
 }
 

@@ -11,7 +11,7 @@ fn highlights_known_language() {
     assert!(!spans.is_empty(), "Rust 代码应产出高亮片段");
 
     let code = "fn main() { let x = 1; }";
-    for (range, _) in &spans {
+    for (range, _) in spans.iter() {
         assert!(range.start <= range.end);
         assert!(range.end <= code.len(), "范围越界: {range:?}");
     }
@@ -223,4 +223,28 @@ fn preset_color(name: &str, dark: bool, semantic: &str) -> Option<(u8, u8, u8)> 
         u8::from_str_radix(&hex[2..4], 16).ok()?,
         u8::from_str_radix(&hex[4..6], 16).ok()?,
     ))
+}
+
+/// 渲染时每个可见代码块每帧都会回调高亮器，命中缓存不能把整份片段列表克隆出来
+#[test]
+fn cache_hits_share_the_same_spans() {
+    let code = "fn shared() -> u32 { 42 }";
+    let a = highlight("rust", code, THEME, true);
+    let b = highlight("rust", code, THEME, true);
+
+    assert!(
+        Arc::ptr_eq(&a, &b),
+        "命中缓存应复用同一份片段列表，而不是克隆一份新的"
+    );
+    assert!(!a.is_empty(), "Rust 代码应有高亮片段");
+}
+
+/// 明暗是 key 的一部分：换了明暗必须重算，不能复用暗色结果的片段
+#[test]
+fn dark_and_light_do_not_share_cache_entries() {
+    let code = "let x = 1;";
+    let dark = highlight("rust", code, THEME, true);
+    let light = highlight("rust", code, THEME, false);
+
+    assert!(!Arc::ptr_eq(&dark, &light), "明暗不同不应命中同一条缓存");
 }

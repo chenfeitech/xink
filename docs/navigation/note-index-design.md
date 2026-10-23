@@ -93,7 +93,7 @@ pub enum Resolution { Hit(PathBuf), Ambiguous(Vec<PathBuf>), Missing }
 |---|---|---|
 | 启动 / 切库 | 后台全量构建 | `AppState` 初始化后、切库成功后 |
 | 笔记保存 | `reindex_file(该路径)` | `EditorPanel::save_now` 成功后 |
-| 监听：Created / Renamed | `reindex_file` | 目录树 `handle_watch_event` |
+| 监听：Created / Renamed | `reindex_file`（**旧路径若已不存在则摘除该条目**，改名事件会给 `[旧, 新]` 两个路径） | 目录树 `handle_watch_event` |
 | 监听：Removed | `remove_file` | 同上 |
 
 应用内的新建 / 删除 / 重命名最终都会落到 watcher 事件上（写的是真盘），
@@ -133,7 +133,7 @@ pub enum Resolution { Hit(PathBuf), Ambiguous(Vec<PathBuf>), Missing }
 | # | 问题 | 决定 |
 |---|---|---|
 | 1 | 是否索引数据文件（json/yaml） | 否：不参与双链与标签 |
-| 2 | 派生表（backlinks/tags 反向表）是否预建 | 否：查询时实时反查，见 §3 |
+| 2 | 派生表（backlinks/tags 反向表）是否预建 | 原决定"否：查询时实时反查，见 §3"。**2026-10-23 已修订**：实测 `tags()` 在 3000 篇库上单次 345ms，且每次自动保存都会触发，两条前提均不成立。改为增量维护派生表，见 [index-derived-tables-design.md](./index-derived-tables-design.md) |
 | 3 | 索引是否需要落盘加速启动 | 否：派生数据，启动后台重建 |
 
 ## 10. 实施步骤

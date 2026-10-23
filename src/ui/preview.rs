@@ -661,9 +661,11 @@ impl Render for PreviewPanel {
                             // 代码块可能没有标注语言
                             let lang = block.lang();
                             let lang = lang.as_ref().map(|s| s.as_ref()).unwrap_or("");
+                            // 命中缓存时拿到的是共享的 `Arc<Vec<Span>>`：
+                            // 遍历借用即可，不必把整份片段列表克隆出来
                             highlight(lang, block.code().as_ref(), &highlight_theme, dark)
-                                .into_iter()
-                                .map(|(range, style)| (range, to_highlight_style(style)))
+                                .iter()
+                                .map(|(range, style)| (range.clone(), to_highlight_style(*style)))
                                 .collect()
                         })
                         .on_link_click(|url, _event, window, cx| {

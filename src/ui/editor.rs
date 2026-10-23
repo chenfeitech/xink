@@ -113,6 +113,17 @@ pub struct EditorPanel {
     self_entity: WeakEntity<EditorPanel>,
     /// 双链补全浮层是否打开：避免每敲一个字符都重复弹一次
     completion_open: bool,
+    /// 已排了一次"稍后回填外部改动"的任务
+    ///
+    /// 打字期间（`EDIT_PROTECT`）收到外部改动只登记一次延后任务，
+    /// 否则每个监听事件都叠一个定时器，回填会被无限期推迟。
+    pending_external: bool,
+    /// 最近一次**重算预览源文**的时刻（[`Self::refresh_doc`] 真重算时）
+    ///
+    /// 重算必然让预览 `set_text` 重解析，而重解析会把预览打回顶部。
+    /// 那一瞬间预览的位置是假信号，跟"用户滚到了顶部"长得一模一样，
+    /// 推回编辑区就是"写完字被拽回文章开头"。这段时间内顶部锚点不采纳。
+    content_changed_at: Option<Instant>,
     /// Markdown 装饰集合。范围随编辑自动平移，但内容变了要由我们重设。
     decorations: Option<TextDecorationCollection>,
 }
@@ -244,6 +255,8 @@ impl EditorPanel {
             last_published_version: None,
             self_entity: self_entity.clone(),
             completion_open: false,
+            pending_external: false,
+            content_changed_at: None,
             decorations: None,
         };
 
@@ -323,6 +336,9 @@ impl EditorPanel {
         if let Some(doc) = &self.doc {
             doc.update(cx, |doc, cx| doc.set_text(source.as_str(), cx));
         }
+        // 预览刚被重解析：它此刻的滚动位置不可信（会被打回顶部）。
+        // 记下时刻，供 [`Self::is_fake_top`] 过滤随后推来的"顶部"锚点。
+        self.content_changed_at = Some(Instant::now());
 
         // 滚动同步的锚点表：预览面板拿不到源文本，只能由编辑区把"块 ↔ 源码行"
         // 的映射放进全局。数据文件预览是格式化后的文本，行号对不上 → 不发布，
@@ -610,6 +626,14 @@ impl EditorPanel {
     const EDIT_PROTECT: Duration = Duration::from_millis(800);
     /// 刚被对端写过之后，这段时间内不反向推（斩断互推）
     const PUSH_SUPPRESS: Duration = Duration::from_millis(400);
+    /// 内容重算后，这段时间内"来自预览的顶部锚点"视为假信号
+    ///
+    /// 时间线：最后一次输入 → 防抖 300ms → 预览 `set_text` 重解析（被
+    /// 打回顶部）→ 预览侧静默 800ms（`PreviewPanel::CONTENT_SETTLE`）
+    /// → 才把位置推过来。也就是说假信号要到 **1.1 秒之后**才到，
+    /// 光靠 800ms 的 `EDIT_PROTECT` 拦不住——这正是"写完一会儿被
+    /// 拽回文章开头"的成因。这里按整条往返给窗口。
+    const TOP_GUARD: Duration = Duration::from_millis(2000);
 
     /// 是否处于"用户正在滚编辑区"的静默窗口内
     fn is_user_scrolling(&self, now: Instant) -> bool {
@@ -657,6 +681,24 @@ impl EditorPanel {
         let prev_scroll_y = self.last_scroll_y;
         let prev_top_line = self.last_top_line;
         self.last_scroll_y = off_now;
+
+        // 探针（仅调试开关下）：位置突然跑到顶部，而我们这一帧既没写过、
+        // 也不像用户滚的——"被拽回文章开头"不管最后查出是谁干的，
+        // 都会在这里留下一条带时间关系的现场。
+        if crate::app::config(cx).preview.debug_scroll_sync
+            && off_now.abs() <= px(1.)
+            && prev_scroll_y < px(-50.)
+            && !self.is_own_write(cx)
+            && !self.is_user_scrolling(now)
+        {
+            eprintln!(
+                "[xink][jump] 编辑区被带到顶部：上一帧 {prev_scroll_y:?} → 现在 {off_now:?}；\
+                 距上次写入 {:?}，距上次输入 {:?}，距上次内容重算 {:?}",
+                self.last_write_at.map(|at| now.duration_since(at)),
+                self.last_edit_at.map(|at| now.duration_since(at)),
+                self.content_changed_at.map(|at| now.duration_since(at)),
+            );
+        }
 
         let mode = crate::app::config(cx).preview.sync_mode;
         let scrolling = self.is_user_scrolling(now);
@@ -989,6 +1031,31 @@ impl EditorPanel {
         Some(line as f32 + frac)
     }
 
+    /// 这是不是"预览重解析被打回顶部"冒出来的假顶部信号
+    ///
+    /// 三条同时成立才算：内容刚重算过（[`Self::TOP_GUARD`] 内）、锚点指向
+    /// 顶部、而编辑区此刻明显不在顶部。用户真把预览滚到顶部时编辑区通常
+    /// 也在附近，不会被误伤；万一误伤也只是少同步一次，比被拽回开头轻得多。
+    fn is_fake_top(&self, anchor: ScrollAnchor, now: Instant, cx: &App) -> bool {
+        let Some(at) = self.content_changed_at else {
+            return false;
+        };
+        if now.duration_since(at) > Self::TOP_GUARD {
+            return false;
+        }
+        let at_top = match anchor {
+            ScrollAnchor::Line(line) => line <= 0.5,
+            ScrollAnchor::Ratio(ratio) => ratio <= 0.002,
+        };
+        if !at_top {
+            return false;
+        }
+        match anchor {
+            ScrollAnchor::Line(_) => self.last_top_line > 2.0,
+            ScrollAnchor::Ratio(_) => self.ratio_now(cx).is_some_and(|r| r > 0.02),
+        }
+    }
+
     /// 应用预览推送过来的锚点
     fn apply_anchor(&mut self, anchor: ScrollAnchor, _window: &mut Window, cx: &mut Context<Self>) {
         let now = Instant::now();
@@ -1002,6 +1069,20 @@ impl EditorPanel {
         if let Some(at) = self.last_edit_at
             && now.duration_since(at) < Self::EDIT_PROTECT
         {
+            return;
+        }
+        // 打字保护只有 800ms，而预览的假顶部信号要等"重解析 + 自身静默
+        // 800ms"之后才推过来（约 1.1 秒）——正好落在保护窗口之外。
+        // 这条单独拦那种"写完一会儿被拽回开头"。
+        if self.is_fake_top(anchor, now, cx) {
+            if crate::app::config(cx).preview.debug_scroll_sync {
+                eprintln!(
+                    "[xink][jump] 忽略预览推来的顶部锚点 {anchor:?}：内容刚重算过，\
+                     编辑区顶部行 {:.1} / 比例 {:?}",
+                    self.last_top_line,
+                    self.ratio_now(cx)
+                );
+            }
             return;
         }
 
@@ -1200,16 +1281,22 @@ impl EditorPanel {
                 // 这一整段是"编辑操作之后"的全部副作用：写盘、重算预览、
                 // 重设装饰。其中任一步都可能让编辑控件重新布局并把滚动位置
                 // 打回顶部——用户看到的就是"打完字跳回文章开头"。
-                // 这里整段前后比对滚动位置，被动过就还原（同步块内不会有
-                // 用户滚动插进来，所以还原是安全的）。
-                let before = this.editor.read(cx).scroll_offset();
+                // 这里整段前后比对滚动位置与光标，被动过就还原（同步块内不会有
+                // 用户操作插进来，所以还原是安全的）。
+                let (before, before_cursor) = {
+                    let state = this.editor.read(cx);
+                    (state.scroll_offset(), state.cursor())
+                };
                 if auto_save {
                     this.save_now(cx);
                 }
                 // 保存、预览、装饰共用同一个防抖
                 this.refresh_doc(cx);
                 this.refresh_decorations(cx);
-                let after = this.editor.read(cx).scroll_offset();
+                let (after, after_cursor) = {
+                    let state = this.editor.read(cx);
+                    (state.scroll_offset(), state.cursor())
+                };
                 if (after.y - before.y).abs() > px(0.5) {
                     this.editor.update(cx, |state, cx| {
                         state.set_scroll_offset(before, cx);
@@ -1221,8 +1308,88 @@ impl EditorPanel {
                         );
                     }
                 }
+                // 光标同理：被副作用挪走（常见是挪到 0）就还原，
+                // 否则用户接着输入的字会落在文章开头。
+                if after_cursor != before_cursor {
+                    let at = before_cursor;
+                    this.editor.update(cx, |state, cx| {
+                        state.set_selected_range(at..at, cx);
+                    });
+                    if crate::app::config(cx).preview.debug_scroll_sync {
+                        eprintln!(
+                            "[xink][cursor] 编辑后的刷新把光标从 {before_cursor} 改成 \
+                             {after_cursor}，已还原"
+                        );
+                    }
+                }
+
+                // 隔一帧再复核一次：控件对滚动/光标的改写常常是**下一帧才
+                // 生效**的（布局在绘制阶段才落下去，落点还会被 clamp），
+                // 本帧的 before/after 比对根本看不见，于是"写完一会儿跳回
+                // 开头"就漏过去了。这里补一刀。
+                let entity = this.self_entity.clone();
+                let edit_at = this.last_edit_at;
+                let expect_scroll = before;
+                let expect_cursor = before_cursor;
+                _window.defer(cx, move |window, cx| {
+                    let Some(entity) = entity.upgrade() else {
+                        return;
+                    };
+                    entity.update(cx, |this, cx| {
+                        this.restore_view(expect_scroll, expect_cursor, edit_at, window, cx);
+                    });
+                });
             });
         }));
+    }
+
+    /// 隔一帧复核滚动与光标，被副作用挪动过就还原（[`Self::schedule_save`] 用）
+    ///
+    /// 两个前提不成立就直接放弃：期间用户又输入过（`edit_at` 变了，光标与
+    /// 滚动本来就会跟着变）、或者用户正在滚（手势优先，绝不跟他抢）。
+    fn restore_view(
+        &mut self,
+        scroll: Point<Pixels>,
+        cursor: usize,
+        edit_at: Option<Instant>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // 期间又有输入：不能再插手，否则会把用户的新光标拽回去
+        if self.last_edit_at != edit_at {
+            return;
+        }
+        if self.is_user_scrolling(Instant::now()) {
+            return;
+        }
+        let (now_scroll, now_cursor) = {
+            let state = self.editor.read(cx);
+            (state.scroll_offset(), state.cursor())
+        };
+        let debug = crate::app::config(cx).preview.debug_scroll_sync;
+
+        // 只纠"明显跳变"，几像素的重排误差不去碰，免得跟框架互相推
+        if (now_scroll.y - scroll.y).abs() > px(8.) || (now_scroll.x - scroll.x).abs() > px(8.) {
+            let at = scroll;
+            self.editor.update(cx, |state, cx| {
+                state.set_scroll_offset(at, cx);
+            });
+            self.last_scroll_y = scroll.y;
+            if debug {
+                eprintln!(
+                    "[xink][jump] 编辑后的刷新让滚动从 {scroll:?} 跳到 {now_scroll:?}，已还原"
+                );
+            }
+        }
+        if now_cursor != cursor {
+            let at = cursor;
+            self.editor.update(cx, |state, cx| {
+                state.set_selected_range(at..at, cx);
+            });
+            if debug {
+                eprintln!("[xink][jump] 编辑后的刷新让光标从 {cursor} 跳到 {now_cursor}，已还原");
+            }
+        }
     }
 
     /// 重算编辑区的 Markdown 装饰
@@ -1351,6 +1518,11 @@ impl EditorPanel {
     }
 
     /// 磁盘文件被外部改动：没有未保存修改就自动重载，有则保留用户内容并提示
+    ///
+    /// 两条约束来自"正打字却被甩回文章开头"：
+    /// 1. 内容没变就一个字节都不回填（见 [`Note::take_external_text`]）——
+    ///    自己的写盘也会被监听报成改动，而 `set_value` 必然把光标重置到 0；
+    /// 2. 用户正在打字时不打断，等停下（[`Self::EDIT_PROTECT`]）再回填。
     pub fn handle_external_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(note) = &mut self.note else {
             return;
@@ -1361,37 +1533,81 @@ impl EditorPanel {
 
         if note.is_dirty() {
             self.status = "文件已被外部修改，但你本地有未保存的更改".into();
-        } else {
-            match note.reload() {
-                Ok(()) => {
-                    let text = note.text();
-                    // `set_value` 会把滚动位置清零。外部改动通常只是几行差异，
-                    // 把用户甩回文章开头没有任何道理——前后比对后还原。
-                    let before = self.editor.read(cx).scroll_offset();
-                    self.editor.update(cx, |state, cx| {
-                        state.set_value(text, window, cx);
-                    });
-                    let after = self.editor.read(cx).scroll_offset();
-                    if (after.y - before.y).abs() > px(0.5) {
-                        self.editor.update(cx, |state, cx| {
-                            state.set_scroll_offset(before, cx);
-                        });
-                        self.last_scroll_y = before.y;
-                    }
-                    if crate::app::config(cx).preview.debug_scroll_sync {
-                        eprintln!(
-                            "[xink][scroll] 外部变更重载 set_value，滚动={:?}",
-                            self.editor.read(cx).scroll_offset()
-                        );
-                    }
-                    self.status = "已加载外部修改".into();
-                    self.refresh_doc(cx);
-                    self.activate_preview(cx);
-                }
-                Err(err) => self.status = format!("重新加载失败: {err}").into(),
+            cx.notify();
+            return;
+        }
+
+        // 打字期间回填必然打断输入：延后到停下之后。延后会再走一遍本函数，
+        // 因此外部改动不会丢，只是晚一点生效。
+        if self
+            .last_edit_at
+            .is_some_and(|at| at.elapsed() < Self::EDIT_PROTECT)
+        {
+            self.schedule_external_change(window, cx);
+            return;
+        }
+
+        match note.take_external_text() {
+            // 只有 mtime 变了（多为应用自己写盘的回声）：编辑控件无需改动
+            Ok(None) => {}
+            Ok(Some(text)) => {
+                self.set_value_keep_place(text, window, cx);
+                self.status = "已加载外部修改".into();
+                self.refresh_doc(cx);
+                self.activate_preview(cx);
             }
+            Err(err) => self.status = format!("重新加载失败: {err}").into(),
         }
         cx.notify();
+    }
+
+    /// 整体替换编辑控件的内容，但保住光标与滚动位置。
+    ///
+    /// 框架的 `set_value` 末尾是 `reset_selection()` + `reset_scroll_to_start()`
+    /// （gpui-base `input/base/state.rs::set_value`），多行输入的光标必然回到 0。
+    /// 任何"程序在后台回填文本"的场景都必须走这里，否则用户正在打字就会被
+    /// 甩回文章开头——字全打在第一行的开头。
+    fn set_value_keep_place(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        let (cursor, scroll) = {
+            let state = self.editor.read(cx);
+            (state.cursor(), state.scroll_offset())
+        };
+        let debug = crate::app::config(cx).preview.debug_scroll_sync;
+
+        self.editor
+            .update(cx, |state, cx| state.set_value(text, window, cx));
+        self.editor.update(cx, |state, cx| {
+            // 新文本可能更短：`set_selected_range` 内部会夹到文本范围内，
+            // 这里不重复夹，免得把光标挪到字符边界之外
+            state.set_selected_range(cursor..cursor, cx);
+            state.set_scroll_offset(scroll, cx);
+        });
+
+        if debug {
+            eprintln!(
+                "[xink][cursor] 回填外部改动：光标 {:?} 滚动 {:?}",
+                self.editor.read(cx).cursor(),
+                self.editor.read(cx).scroll_offset()
+            );
+        }
+        self.last_scroll_y = scroll.y;
+    }
+
+    /// 延后处理外部改动：等用户停下输入（`EDIT_PROTECT`）再回填
+    fn schedule_external_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_external {
+            return;
+        }
+        self.pending_external = true;
+        let delay = Self::EDIT_PROTECT;
+        cx.spawn_in(window, async move |this, window| {
+            window.background_executor().timer(delay).await;
+            _ = this.update_in(window, |this, window, cx| {
+                this.pending_external = false;
+                this.handle_external_change(window, cx);
+            });
+        })
+        .detach();
     }
 
     /// 渲染顶部辅助编辑工具栏。

@@ -1,6 +1,6 @@
 # 文档索引
 
-> `docs/` 共 34 份 Markdown，按领域分组如下。
+> `docs/` 共 35 份 Markdown，按领域分组如下。
 > **状态以当前 `src/` 代码为准**（核对日期 2026-10-20），不是文档自述。
 > 新增文档请按 §7 的命名约定命名，并回到本文件登记一行。
 
@@ -54,6 +54,7 @@
 |---|---|---|---|
 | [markdown-facts-design.md](./navigation/markdown-facts-design.md) | `parse_facts`：一次扫描提取标题/链接/双链/标签（带行号） | `core/markdown.rs` | ✅ |
 | [note-index-design.md](./navigation/note-index-design.md) | 全库索引 `NoteIndex`：双链图 / 标签表 / 增量更新 | `core/index.rs` | ✅ |
+| [index-derived-tables-design.md](./navigation/index-derived-tables-design.md) | 索引派生表：反向链接 / 标签 / 标题解析从"查询时全表反查"改为增量维护（修订前文档 §9 开放问题 2） | `core/index.rs` | ✅ 已实施，`tags()` 345ms → 0.22µs；实施中结构有简化，见该文档 §3.2 方案 D 与 §11 |
 | [wikilink-design.md](./navigation/wikilink-design.md) | `[[双链]]` 预览可点跳转 + 输入补全 | `core/markdown.rs`、`ui/completion.rs` | ✅ |
 | [command-palette-design.md](./navigation/command-palette-design.md) | `Cmd+P` 文件名模糊搜索面板 | `ui/command.rs`、`core/fuzzy.rs` | ✅（跨库搜索 ❌ 不做） |
 | [outline-design.md](./navigation/outline-design.md) | 大纲面板与点击跳转行 | `ui/outline.rs` | ✅ |
