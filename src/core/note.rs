@@ -84,26 +84,30 @@ impl Note {
         Some((start, end))
     }
 
-    /// 编辑器内容变更时调用。内容未变则不置脏，避免无意义的写盘。
+    /// 把编辑控件的 Rope 同步进来（增量，全程不物化整篇文本）
     ///
-    /// 只替换**真正变了的那一段**，不重建整棵 Rope。
-    /// 旧做法是 `self.text()`（Rope → String 全量拷贝）比对之后再 `Rope::from_str`
-    /// 重建：一次按键就是三次全文分配加一次建树，长笔记上直接表现为输入延迟。
-    /// 而编辑区每次 `Change` 都调这里，按字符输入时相邻两帧只差一两个字符。
-    pub fn set_text(&mut self, text: &str) {
-        let rope_len = self.rope.len();
-        let (prefix, suffix) = common_affixes(&self.rope, text);
+    /// 只替换**真正变了的那一段**，不重建整棵 Rope，也不物化整篇文本。
+    /// 内容未变则不动内容、不置脏、不递增版本。
+    ///
+    /// 编辑控件内部就是 Rope（`InputBaseState::text()` 借出，零成本），
+    /// 因此这里直接吃 `&Rope`；而 `value()` 的实现是
+    /// `SharedString::new(self.text.to_string())`——每次调用都物化整个字符串，
+    /// 长笔记上每次按键要多付两次全文拷贝。
+    pub fn sync_from_rope(&mut self, rope: &Rope) {
+        let mine_len = self.rope.len();
+        let (prefix, suffix) = rope_common_affixes(&self.rope, rope);
         // 整篇相同：一个字节都不动，也不置脏
-        if prefix == rope_len && prefix == text.len() {
+        if prefix == mine_len && prefix == rope.len() {
             return;
         }
-        let end = rope_len - suffix;
+        let end = mine_len - suffix;
         if end > prefix {
             self.rope.remove(prefix..end);
         }
-        let middle = &text[prefix..text.len() - suffix];
-        if !middle.is_empty() {
-            self.rope.insert(prefix, middle);
+        // 只物化"变了的那一段"：打字时是 1~2 个字符，不是整篇
+        if rope.len() - suffix > prefix {
+            let middle = rope.slice(prefix..rope.len() - suffix).to_string();
+            self.rope.insert(prefix, &middle);
         }
         self.dirty = true;
         self.version += 1;
@@ -166,67 +170,6 @@ impl Note {
     }
 }
 
-/// 求 Rope 与文本的公共前缀 / 后缀**字节**长度
-///
-/// 按**块**（`chunks()`）比较，不逐字符走：ropey 的 `chars()` 每前进一步都要
-/// 走一次树游标，实测在 200KB 文档上比 `Rope::from_str` 全量重建还慢三倍；
-/// 而按块做的是 memcmp，GB/s 级，成本可以忽略。
-///
-/// 返回值保证两件事，调用方可以直接拿去切中间段：
-/// - `prefix + suffix` 不超过任一侧长度（中间段不会算出负长度）；
-/// - 两端都落在 **UTF-8 字符边界**上——`Rope::remove` 对非边界区间会 panic。
-fn common_affixes(rope: &Rope, text: &str) -> (usize, usize) {
-    let limit = rope.len().min(text.len());
-
-    let prefix = snap_down_to_boundary(text, prefix_bytes(rope, text).min(limit));
-    // 后缀不能越过前缀，否则中间段长度变负
-    let room = limit - prefix;
-    let suffix = snap_down_to_tail_boundary(text, suffix_bytes(rope, text).min(room));
-
-    (prefix, suffix)
-}
-
-/// 从头开始，Rope 与文本相同的字节数
-fn prefix_bytes(rope: &Rope, text: &str) -> usize {
-    let mut prefix = 0usize;
-    let mut rest = text.as_bytes();
-    for chunk in rope.chunks() {
-        if rest.is_empty() {
-            break;
-        }
-        let bytes = chunk.as_bytes();
-        let same = first_mismatch(bytes, rest);
-        prefix += same;
-        // 这一段里就出现了差异：后面不必再看
-        if same < bytes.len().min(rest.len()) {
-            break;
-        }
-        rest = &rest[same..];
-    }
-    prefix
-}
-
-/// 从尾开始，Rope 与文本相同的字节数
-fn suffix_bytes(rope: &Rope, text: &str) -> usize {
-    let mut suffix = 0usize;
-    let mut rest = text.as_bytes();
-    // `chunks_at` 返回 `(迭代器, 首块内偏移)`；从末尾开始再翻转方向。
-    // 注意 ropey 的 `reversed()` 只翻转方向、不移动游标，所以必须先 `chunks_at(len)`。
-    for chunk in rope.chunks_at(rope.len()).0.reversed() {
-        if rest.is_empty() {
-            break;
-        }
-        let bytes = chunk.as_bytes();
-        let same = last_mismatch(bytes, rest);
-        suffix += same;
-        if same < bytes.len().min(rest.len()) {
-            break;
-        }
-        rest = &rest[..rest.len() - same];
-    }
-    suffix
-}
-
 /// 两个字节切片从头起相同的长度
 ///
 /// 8 字节步长快进（切片相等会编译成单条宽比较），末尾再逐字节收尾。
@@ -257,24 +200,94 @@ fn last_mismatch(a: &[u8], b: &[u8]) -> usize {
     i
 }
 
-/// 把字节下标往回挪到最近的字符边界（UTF-8 最多回退 3 字节）
+/// 把"待收敛的量"往回挪到最近的 UTF-8 字符边界（最多回退 3 字节）
 ///
-/// 前缀之前的字节两侧完全相同，因此在 `text` 上是边界，在 Rope 上同样是。
-fn snap_down_to_boundary(text: &str, ix: usize) -> usize {
-    let mut ix = ix.min(text.len());
-    while ix > 0 && !text.is_char_boundary(ix) {
-        ix -= 1;
+/// `is_boundary` 由调用方给出：前缀传"下标本身"，后缀传"总长 − 后缀"。
+/// 收敛只需判一侧——边界之前（之后）的字节两侧完全相同，
+/// 因此在 `text` 上是边界，在 Rope 上也同样是。
+fn snap_down_to_boundary(amount: usize, is_boundary: impl Fn(usize) -> bool) -> usize {
+    let mut n = amount;
+    while n > 0 && !is_boundary(n) {
+        n -= 1;
     }
-    ix
+    n
 }
 
-/// 把"公共后缀长度"往回挪，使切点落在字符边界上
-fn snap_down_to_tail_boundary(text: &str, suffix: usize) -> usize {
-    let mut suffix = suffix.min(text.len());
-    while suffix > 0 && !text.is_char_boundary(text.len() - suffix) {
-        suffix -= 1;
+/// 两个 Rope 从头起相同的字节数（按块 memcmp，两侧都不物化）
+fn rope_prefix_bytes(a: &Rope, b: &Rope) -> usize {
+    let mut prefix = 0usize;
+    let mut a_chunks = a.chunks();
+    let mut b_chunks = b.chunks();
+    let mut a_rest: &[u8] = b"";
+    let mut b_rest: &[u8] = b"";
+
+    loop {
+        // 跳过空块：ropey 可能给出空 chunk，不跳会死循环
+        while a_rest.is_empty() {
+            match a_chunks.next() {
+                Some(chunk) => a_rest = chunk.as_bytes(),
+                None => return prefix,
+            }
+        }
+        while b_rest.is_empty() {
+            match b_chunks.next() {
+                Some(chunk) => b_rest = chunk.as_bytes(),
+                None => return prefix,
+            }
+        }
+        let same = first_mismatch(a_rest, b_rest);
+        prefix += same;
+        if same < a_rest.len().min(b_rest.len()) {
+            return prefix;
+        }
+        a_rest = &a_rest[same..];
+        b_rest = &b_rest[same..];
     }
-    suffix
+}
+
+/// 两个 Rope 从尾起相同的字节数
+fn rope_suffix_bytes(a: &Rope, b: &Rope) -> usize {
+    let mut suffix = 0usize;
+    let mut a_chunks = a.chunks_at(a.len()).0.reversed();
+    let mut b_chunks = b.chunks_at(b.len()).0.reversed();
+    let mut a_rest: &[u8] = b"";
+    let mut b_rest: &[u8] = b"";
+
+    loop {
+        while a_rest.is_empty() {
+            match a_chunks.next() {
+                Some(chunk) => a_rest = chunk.as_bytes(),
+                None => return suffix,
+            }
+        }
+        while b_rest.is_empty() {
+            match b_chunks.next() {
+                Some(chunk) => b_rest = chunk.as_bytes(),
+                None => return suffix,
+            }
+        }
+        let same = last_mismatch(a_rest, b_rest);
+        suffix += same;
+        if same < a_rest.len().min(b_rest.len()) {
+            return suffix;
+        }
+        let a_keep = a_rest.len() - same;
+        let b_keep = b_rest.len() - same;
+        a_rest = &a_rest[..a_keep];
+        b_rest = &b_rest[..b_keep];
+    }
+}
+
+/// Rope 版的 [`common_affixes`]：语义与返回值保证完全一致
+fn rope_common_affixes(a: &Rope, b: &Rope) -> (usize, usize) {
+    let limit = a.len().min(b.len());
+    let prefix = rope_prefix_bytes(a, b).min(limit);
+    let prefix = snap_down_to_boundary(prefix, |ix| a.is_char_boundary(ix));
+    // 后缀不能越过前缀，否则中间段长度变负
+    let room = limit - prefix;
+    let suffix = rope_suffix_bytes(a, b).min(room);
+    let suffix = snap_down_to_boundary(suffix, |s| a.is_char_boundary(a.len() - s));
+    (prefix, suffix)
 }
 
 /// 原子写盘：同目录临时文件 + rename（同一文件系统内 rename 是原子的）

@@ -147,8 +147,9 @@ impl EditorPanel {
         let text = format!("[[{target}]]");
         self.editor.update(cx, |state, cx| {
             let end = state.cursor();
-            // 起点可能落在文本之外（例如期间删了字），夹一下避免 panic
-            let start = start.min(end).min(state.value().len());
+            // 起点可能落在文本之外（例如期间删了字），夹一下避免 panic。
+            // 用 `text().len()` 而不是 `value().len()`：后者会物化整篇字符串
+            let start = start.min(end).min(state.text().len());
             state.set_selected_range(start..end, cx);
             state.replace(&text, window, cx);
             state.focus(window, cx);
@@ -161,19 +162,23 @@ impl EditorPanel {
         if self.completion_open || self.note.is_none() {
             return;
         }
-        let (value, cursor) = {
+        // 判定只需要"光标前紧贴 `[[`"，因此只读光标前的两个字符。
+        // 旧做法 `value().to_string()` 会物化整篇文本——每次按键多付一次全文拷贝。
+        let (cursor, opens_here) = {
             let state = self.editor.read(cx);
-            (state.value().to_string(), state.cursor())
+            let text = state.text();
+            let at = state.cursor().min(text.len());
+            let opens = text.is_char_boundary(at) && at >= 2 && {
+                let mut before = text.chars_at(at).reversed();
+                matches!((before.next(), before.next()), (Some('['), Some('[')))
+            };
+            (at, opens)
         };
-        let cursor = cursor.min(value.len());
-        let before = &value[..cursor];
         // 只认"光标紧贴 `[[`"：中间已有其它字符说明用户在自己写，不打扰
-        let Some(start) = before.rfind("[[") else {
-            return;
-        };
-        if before[start..].len() != 2 {
+        if !opens_here {
             return;
         }
+        let start = cursor - 2;
         let Some(panel) = self.self_entity.upgrade() else {
             return;
         };
@@ -1253,11 +1258,21 @@ impl EditorPanel {
         });
     }
 
+    /// 把编辑控件当前的文本同步进 Note
+    ///
+    /// 走 `text()` 借出 `&Rope`，不走 `value()`：后者的实现是
+    /// `SharedString::new(self.text.to_string())`，每次调用都物化整个字符串，
+    /// 而它每次按键会被调两次（这里一次、`maybe_complete_wikilink` 一次）。
+    fn sync_note(&mut self, cx: &mut Context<Self>) {
+        let Some(note) = self.note.as_mut() else {
+            return;
+        };
+        let state = self.editor.read(cx);
+        note.sync_from_rope(state.text());
+    }
+
     fn on_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.editor.read(cx).value().to_string();
-        if let Some(note) = &mut self.note {
-            note.set_text(&text);
-        }
+        self.sync_note(cx);
         // 用户正在这篇笔记里打字：记为"编辑中"，期间不受对端的滚动指令
         // （见 [`Self::EDIT_PROTECT`]），否则一边打字一边被拽回开头。
         self.last_edit_at = Some(Instant::now());

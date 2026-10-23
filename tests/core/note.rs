@@ -4,6 +4,11 @@ fn tmp() -> tempfile::TempDir {
     tempfile::tempdir().expect("创建临时目录")
 }
 
+/// 用一段 `&str` 更新 Note（走 `sync_from_rope`，与生产路径同一个入口）
+fn set(note: &mut Note, text: &str) {
+    note.sync_from_rope(&Rope::from_str(text));
+}
+
 #[test]
 fn load_reads_content_and_clears_dirty() {
     let dir = tmp();
@@ -17,16 +22,16 @@ fn load_reads_content_and_clears_dirty() {
 }
 
 #[test]
-fn set_text_marks_dirty_only_on_real_change() {
+fn sync_from_rope_marks_dirty_only_on_real_change() {
     let dir = tmp();
     let path = dir.path().join("a.md");
     fs::write(&path, "same").unwrap();
 
     let mut note = Note::load(path).unwrap();
-    note.set_text("same");
+    set(&mut note, "same");
     assert!(!note.is_dirty(), "内容未变不应置脏");
 
-    note.set_text("changed");
+    set(&mut note, "changed");
     assert!(note.is_dirty());
     assert_eq!(note.text(), "changed");
 }
@@ -38,7 +43,7 @@ fn save_writes_disk_and_clears_dirty() {
     fs::write(&path, "old").unwrap();
 
     let mut note = Note::load(path.clone()).unwrap();
-    note.set_text("new content");
+    set(&mut note, "new content");
     note.save().unwrap();
 
     assert_eq!(fs::read_to_string(&path).unwrap(), "new content");
@@ -52,7 +57,7 @@ fn save_leaves_no_temp_file() {
     fs::write(&path, "x").unwrap();
 
     let mut note = Note::load(path.clone()).unwrap();
-    note.set_text("y");
+    set(&mut note, "y");
     note.save().unwrap();
 
     let leftovers: Vec<_> = fs::read_dir(dir.path())
@@ -71,7 +76,7 @@ fn save_does_not_report_self_as_external_change() {
     fs::write(&path, "x").unwrap();
 
     let mut note = Note::load(path).unwrap();
-    note.set_text("y");
+    set(&mut note, "y");
     note.save().unwrap();
 
     assert!(!note.disk_changed(), "自己的保存不应被判为外部修改");
@@ -174,11 +179,10 @@ fn line_byte_range_out_of_range_is_none() {
 
 /// 一串确定性伪随机编辑：把 `Note` 与 `String` 模型逐轮对齐
 ///
-/// 增量编辑的正确性全落在"前后缀切在哪"这一步，人肉挑几个例子盖不住
-/// （切在多字节字符中间会直接 panic）。这里用固定种子的 LCG 造出插入 /
-/// 删除 / 替换三种改动，逐次与 String 模型比对，任何一处切错都会立刻暴露。
+/// 增量编辑的正确性全在"前后缀切在哪"这一步，人肉挑几个例子盖不住
+/// （切在多字节字符中间会直接 panic）。
 #[test]
-fn set_text_matches_string_model_under_many_edits() {
+fn sync_from_rope_matches_string_model_under_many_edits() {
     let dir = tmp();
     let path = dir.path().join("a.md");
     fs::write(&path, "起始内容").unwrap();
@@ -234,7 +238,7 @@ fn set_text_matches_string_model_under_many_edits() {
         if model != before {
             expected_version += 1;
         }
-        note.set_text(&model);
+        set(&mut note, &model);
         assert_eq!(note.text(), model, "第 {round} 轮编辑后内容应与模型一致");
         assert_eq!(
             note.version(),
@@ -246,61 +250,79 @@ fn set_text_matches_string_model_under_many_edits() {
 }
 
 #[test]
-fn set_text_edits_only_the_changed_middle() {
+fn sync_from_rope_is_a_no_op_when_content_is_identical() {
+    let dir = tmp();
+    let path = dir.path().join("a.md");
+    fs::write(&path, "同一份内容\n第二行").unwrap();
+    let mut note = Note::load(path).unwrap();
+
+    let same = Rope::from_str("同一份内容\n第二行");
+    note.sync_from_rope(&same);
+    assert!(!note.is_dirty(), "内容未变不应置脏");
+    assert_eq!(note.version(), 0, "内容未变不应递增版本");
+
+    let changed = Rope::from_str("同一份内容\n第二行改了");
+    note.sync_from_rope(&changed);
+    assert!(note.is_dirty());
+    assert_eq!(note.version(), 1);
+    assert_eq!(note.text(), "同一份内容\n第二行改了");
+}
+
+#[test]
+fn sync_from_rope_handles_multibyte_and_emoji() {
+    let dir = tmp();
+    let path = dir.path().join("a.md");
+    fs::write(&path, "a\u{e9}\u{1f600}b").unwrap();
+    let mut note = Note::load(path).unwrap();
+
+    // 只换中间的 emoji：前后缀都跨越多字节字符
+    note.sync_from_rope(&Rope::from_str("a\u{e9}\u{1f980}b"));
+    assert_eq!(note.text(), "a\u{e9}\u{1f980}b");
+
+    // 在开头插中文
+    note.sync_from_rope(&Rope::from_str("中文a\u{e9}\u{1f980}b"));
+    assert_eq!(note.text(), "中文a\u{e9}\u{1f980}b");
+
+    // 清空
+    note.sync_from_rope(&Rope::from_str(""));
+    assert_eq!(note.text(), "");
+}
+
+#[test]
+fn sync_from_rope_edits_only_the_changed_middle() {
     let dir = tmp();
     let path = dir.path().join("a.md");
     fs::write(&path, "第一行\n第二行\n第三行").unwrap();
     let mut note = Note::load(path).unwrap();
 
     // 只动中间一行：前后缀都在，替换段应该只有"第二行"那几个字
-    note.set_text("第一行\n第二行改了\n第三行");
+    set(&mut note, "第一行\n第二行改了\n第三行");
     assert_eq!(note.text(), "第一行\n第二行改了\n第三行");
     assert_eq!(note.version(), 1, "一次真实改动只递增一次版本");
 
     // 内容没变：不动内容、不置脏、不递增
-    note.set_text("第一行\n第二行改了\n第三行");
+    set(&mut note, "第一行\n第二行改了\n第三行");
     assert_eq!(note.version(), 1, "内容未变不应递增版本");
 }
 
 #[test]
-fn set_text_handles_multibyte_and_emoji() {
-    let dir = tmp();
-    let path = dir.path().join("a.md");
-    fs::write(&path, "a\u{e9}\u{1f600}b").unwrap();
-    let mut note = Note::load(path).unwrap();
-
-    // 改中间的 emoji：前后缀都跨越多字节字符，
-    // 若按字节而不是按 char 求前后缀，这里会 panic
-    note.set_text("a\u{e9}\u{1f980}b");
-    assert_eq!(note.text(), "a\u{e9}\u{1f980}b");
-
-    // 在开头插中文：前缀为 0，后缀要一路跨过多字节字符
-    note.set_text("中文a\u{e9}\u{1f980}b");
-    assert_eq!(note.text(), "中文a\u{e9}\u{1f980}b");
-
-    // 清空
-    note.set_text("");
-    assert_eq!(note.text(), "");
-}
-
-#[test]
-fn common_affixes_stays_on_char_boundaries() {
+fn rope_common_affixes_stays_on_char_boundaries() {
     let rope = Rope::from_str("a\u{e9}\u{1f600}b");
 
     // 只换中间的 emoji：前缀 a(1)+é(2)=3，后缀 b(1)
-    let (prefix, suffix) = common_affixes(&rope, "a\u{e9}\u{1f980}b");
+    let (prefix, suffix) = rope_common_affixes(&rope, &Rope::from_str("a\u{e9}\u{1f980}b"));
     assert_eq!(prefix, 3, "前缀应停在字符边界上（a=1 字节, é=2 字节）");
     assert_eq!(suffix, 1, "后缀应含 b");
     assert!(prefix + suffix < rope.len(), "前后缀不交叉，中间才有得替换");
 
     // 整篇相同：前缀覆盖全文，后缀为 0（绝不能交叉成负长度）
-    let (prefix, suffix) = common_affixes(&rope, "a\u{e9}\u{1f600}b");
+    let (prefix, suffix) = rope_common_affixes(&rope, &Rope::from_str("a\u{e9}\u{1f600}b"));
     assert_eq!(prefix, rope.len());
     assert_eq!(suffix, 0);
 
     // 任一侧为空
-    let (prefix, suffix) = common_affixes(&Rope::from_str(""), "abc");
+    let (prefix, suffix) = rope_common_affixes(&Rope::from_str(""), &Rope::from_str("abc"));
     assert_eq!((prefix, suffix), (0, 0));
-    let (prefix, suffix) = common_affixes(&rope, "");
+    let (prefix, suffix) = rope_common_affixes(&rope, &Rope::from_str(""));
     assert_eq!((prefix, suffix), (0, 0));
 }
