@@ -15,6 +15,7 @@ use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::*;
 
 use crate::app::AppState;
+use crate::core::ai::prompt::{Action, all_actions};
 use crate::core::fuzzy::fuzzy_match;
 use crate::core::media::{ai_excluded, is_editable_text};
 use crate::core::vault::{FileNode, Vault};
@@ -29,13 +30,18 @@ const MARGIN_TOP: f32 = 80.;
 /// 列表最大高度
 const LIST_MAX_HEIGHT: f32 = 360.;
 
-/// 一个候选文件
+/// 一个候选
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
-    /// 用于匹配与展示的文本：相对库根的路径
+    /// 用于匹配与展示的文本：文件的相对路径，或 AI 动作名
     pub label: String,
-    /// 打开用的绝对路径
+    /// 打开用的绝对路径；AI 动作为空
     pub path: PathBuf,
+    /// 内置的 AI 动作（需求 A9.1：`AI:` 前缀过滤）
+    ///
+    /// `Some` 时 `path` 为空，确认后不是打开文件，而是对**当前笔记**
+    /// 跑这个动作。
+    pub ai: Option<Action>,
 }
 
 /// 命令面板的状态
@@ -184,16 +190,21 @@ impl CommandPalette {
     /// 先关浮层再打开笔记：反过来的话，`close_dialog` 会把焦点还给
     /// "打开面板前的元素"，刚聚焦的编辑区会被抢回去。
     fn confirm(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self
+        let Some(candidate) = self
             .matches
             .get(row)
             .and_then(|ix| self.files.get(*ix))
-            .map(|candidate| candidate.path.clone())
+            .cloned()
         else {
             return;
         };
         close_palette(window, cx);
-        tabs::open_note(path, window, cx);
+        // AI 动作不打开文件：对当前笔记跑它（没打开笔记时函数自己会提示）
+        if let Some(action) = candidate.ai {
+            crate::app::run_ai_action(action, window, cx);
+            return;
+        }
+        tabs::open_note(candidate.path, window, cx);
     }
 }
 
@@ -320,6 +331,14 @@ fn collect_candidates(root: &Path) -> Result<Vec<Candidate>, String> {
 
     let mut out = Vec::new();
     flatten(root, &tree, &mut out);
+    // 内置 AI 动作（需求 A9.1）：`AI:` 前缀能过滤出来，它们作用于当前笔记
+    for action in all_actions().iter().copied() {
+        out.push(Candidate {
+            label: format!("AI: {}", action.label()),
+            path: PathBuf::new(),
+            ai: Some(action),
+        });
+    }
     out.sort_by(|a, b| a.label.cmp(&b.label));
     Ok(out)
 }
@@ -339,6 +358,7 @@ fn flatten(root: &Path, node: &FileNode, out: &mut Vec<Candidate>) {
             out.push(Candidate {
                 label,
                 path: node.path.clone(),
+                ai: None,
             });
         }
         return;

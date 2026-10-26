@@ -83,12 +83,29 @@ fn collect_candidates_scans_a_real_vault() {
     std::fs::write(root.join(".git/config.json"), "{}").unwrap();
 
     let candidates = collect_candidates(root).expect("扫描成功");
-    let labels: Vec<&str> = candidates
-        .iter()
-        .map(|candidate| candidate.label.as_str())
-        .collect();
 
-    // 按相对路径排序：空查询时的展示顺序必须稳定
-    assert_eq!(labels, vec!["b.md", "notes/a.md"]);
-    assert!(candidates[0].path.starts_with(root));
+    // 候选 = 库内文件 + 内置 AI 动作（需求 A9.1），整体按 label 排序
+    let files: Vec<&str> = candidates
+        .iter()
+        .filter(|c| c.ai.is_none())
+        .map(|c| c.label.as_str())
+        .collect();
+    assert_eq!(files, vec!["b.md", "notes/a.md"]);
+    let actions: Vec<&str> = candidates
+        .iter()
+        .filter(|c| c.ai.is_some())
+        .map(|c| c.label.as_str())
+        .collect();
+    assert_eq!(actions.len(), crate::core::ai::prompt::all_actions().len());
+    assert!(
+        actions.iter().all(|l| l.starts_with("AI: ")),
+        "AI 动作要能用 `AI:` 前缀过滤出来：{actions:?}"
+    );
+    // AI 动作不是文件：确认后不该去打开路径
+    assert!(
+        candidates
+            .iter()
+            .filter(|c| c.ai.is_some())
+            .all(|c| c.path.as_os_str().is_empty())
+    );
 }

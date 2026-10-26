@@ -353,7 +353,10 @@ impl AiChat {
     }
 
     /// 内置动作：对选中或整篇做改写
-    fn run_action(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// 命令面板的 `AI:` 入口（需求 A9.1）经 `EditorPanel::run_ai_action`
+    /// 调用它，因此是 pub。
+    pub fn run_action(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }

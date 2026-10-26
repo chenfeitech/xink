@@ -15,6 +15,9 @@ use crate::actions::{OpenCommandPalette, OpenSearch, OpenSettings, ToggleAiChat,
 use std::path::Path;
 
 use crate::core::config::{AppConfig, ThemeMode};
+// `Action` 与 gpui 的 `Action` trait 同名（上面 `use gpui_kit::*` 会带进来），
+// 因此取个别名，避免"看起来是类型、其实是 trait"的编译错误
+use crate::core::ai::prompt::Action as AiAction;
 use crate::core::index::{IndexChanged, NoteIndex};
 use crate::core::sync::{AnchorTable, ScrollAnchor};
 use crate::core::vault::VaultRegistry;
@@ -265,6 +268,23 @@ pub fn update_config(cx: &mut App, f: impl FnOnce(&mut AppConfig)) {
     apply_theme(None, cx);
     // 让所有窗口重绘，新配置立刻可见
     cx.refresh_windows();
+}
+
+/// 从命令面板跑一个内置 AI 动作：作用于当前活动标签的笔记（需求 A9.1）
+///
+/// 与 `Workspace::toggle_ai_chat` 同一条路由。之所以是模块级函数而不是
+/// 面板的方法：命令面板的 `cx` 是它自己的 `Context`，只能拿到 `&mut App`。
+pub fn run_ai_action(action: AiAction, window: &mut Window, cx: &mut App) {
+    let Some(state) = cx.try_global::<AppState>() else {
+        return;
+    };
+    let Some(path) = state.tabs.active().cloned() else {
+        return;
+    };
+    let Some(panel) = state.tabs.get(&path) else {
+        return;
+    };
+    panel.update(cx, |panel, cx| panel.run_ai_action(action, window, cx));
 }
 
 /// 应用主题配置：System 跟随系统外观，Light / Dark 强制切换。

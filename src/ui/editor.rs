@@ -20,6 +20,8 @@ use crate::actions::{
 };
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
 use crate::core::config::{DataFileConfig, IndentConfig, ScrollSyncMode};
+// 与 gpui 的 `Action` trait 同名，取别名避免"看起来是类型、其实是 trait"
+use crate::core::ai::prompt::Action as AiAction;
 use crate::core::datafile::{DataKind, Parsed, ValidationError, data_kind};
 use crate::core::markdown::{
     ImageOptions, SpanKind, decoration_spans, resolve_image_urls, rewrite_wikilinks,
@@ -1518,6 +1520,23 @@ impl EditorPanel {
         let text = self.note.as_ref()?.text();
         let cursor = self.editor.read(cx).cursor();
         Some((text, cursor))
+    }
+
+    /// 直接跑一个 AI 动作：命令面板的 `AI:` 入口走这里（需求 A9.1）
+    ///
+    /// 对话条没开就先开——不然用户看不到 AI 在做什么，结果却已经写进来了。
+    pub fn run_ai_action(&mut self, action: AiAction, window: &mut Window, cx: &mut Context<Self>) {
+        if self.note.is_none() {
+            self.status = "没有打开的笔记：AI 动作要作用在一篇笔记上".into();
+            cx.notify();
+            return;
+        }
+        if !self.ai_open {
+            self.toggle_ai_chat(window, cx);
+        }
+        if let Some(chat) = &self.ai_chat {
+            chat.update(cx, |chat, cx| chat.run_action(action, window, cx));
+        }
     }
 
     /// 打开 / 关闭编辑器下方的 AI 对话条
