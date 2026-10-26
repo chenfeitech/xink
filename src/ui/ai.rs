@@ -1181,9 +1181,10 @@ impl Render for AiChat {
                 // 比给气泡自身设 `align_self` 稳（不受父容器 align-items 影响）
                 let row = div().w_full().flex();
                 let row = if mine {
-                    row.justify_start()
-                } else {
+                    // 用户消息贴右、AI 回复贴左
                     row.justify_end()
+                } else {
+                    row.justify_start()
                 };
                 if collapsed {
                     // 收起后没有标题可点，留一行极简提示（对齐方向保持原样）
@@ -1210,13 +1211,14 @@ impl Render for AiChat {
                     .rounded(px(BUBBLE_RADIUS))
                     .px_3()
                     .py_2()
-                    // 气泡内文字一律左对齐
-                    .text_left()
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)));
                 if mine {
-                    // 用户消息：浅蓝底 + 内边距 + 圆角；AI 回复不加背景色
-                    bubble = bubble.bg(bubble_bg(cx.theme().is_dark()));
+                    // 用户消息：浅蓝底 + 内边距 + 圆角 + 文字右对齐
+                    bubble = bubble.text_right().bg(bubble_bg(cx.theme().is_dark()));
+                } else {
+                    // AI 回复：无背景色 + 文字左对齐
+                    bubble = bubble.text_left();
                 }
                 history = history.child(
                     row.child(
