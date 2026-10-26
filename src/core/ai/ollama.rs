@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use super::models::{DiscoveredModel, parse_tags};
 use super::ndjson::NdjsonParser;
+use super::tools::ToolCall;
 use super::{
     AiError, CompletionRequest, Provider, StreamEvent, Usage, classify_ureq_error, http_agent,
     pump_stream,
@@ -229,6 +230,9 @@ fn build_body(req: &CompletionRequest) -> serde_json::Value {
     if !req.params.keep_alive.trim().is_empty() {
         body["keep_alive"] = json!(req.params.keep_alive);
     }
+    if !req.tools.is_empty() {
+        body["tools"] = json!(req.tools);
+    }
     body
 }
 
@@ -254,6 +258,28 @@ fn frame_to_events(line: &str, usage: &mut Usage, out: &mut Vec<StreamEvent>) {
             out.push(StreamEvent::Thinking(text.to_string()));
         }
     }
+    // 工具调用：Ollama 整帧给完整的 `tool_calls`（不像 OpenAI 那样分片），
+    // 而且 `arguments` 是**对象**；统一成 JSON 文本给上层
+    if let Some(calls) = value["message"]
+        .get("tool_calls")
+        .and_then(|v| v.as_array())
+    {
+        for call in calls {
+            let Some(name) = call["function"]["name"].as_str() else {
+                continue;
+            };
+            let arguments = match call["function"].get("arguments") {
+                Some(v) if v.is_string() => v.as_str().unwrap_or_default().to_string(),
+                // 对象（Ollama 的形状）→ 序列化回文本；没有该字段视为空参数
+                Some(v) => v.to_string(),
+                None => String::new(),
+            };
+            out.push(StreamEvent::ToolCall(ToolCall {
+                name: name.to_string(),
+                arguments,
+            }));
+        }
+    }
     if value["done"].as_bool() == Some(true) {
         usage.prompt_tokens = value["prompt_eval_count"].as_u64();
         usage.completion_tokens = value["eval_count"].as_u64();
@@ -264,6 +290,11 @@ fn frame_to_events(line: &str, usage: &mut Usage, out: &mut Vec<StreamEvent>) {
         out.push(StreamEvent::Done);
     }
 }
+
+// 帧解析单测（不需要本机 Ollama，常跑）
+#[cfg(test)]
+#[path = "../../../tests/core/ai/ollama_parse.rs"]
+mod parse_tests;
 
 // 端到端测试（需本机 Ollama，默认 ignore）
 #[cfg(test)]

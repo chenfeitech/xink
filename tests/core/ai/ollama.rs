@@ -46,6 +46,7 @@ fn 流式能拿到正文() {
         api_key: None,
         first_byte_timeout: Duration::from_secs(30),
         silence_timeout: Duration::from_secs(40),
+        tools: Vec::new(),
     };
     let provider = OllamaProvider;
     let mut text = String::new();

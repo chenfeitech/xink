@@ -44,6 +44,7 @@ pub use prompt::{Action, all_actions};
 pub use snapshot::{snapshot_name, write_snapshot};
 
 use crate::core::config::AiModelParams;
+use tools::ToolCall;
 
 /// 对话角色
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +114,10 @@ pub struct CompletionRequest {
     pub first_byte_timeout: Duration,
     /// 静默超时：两次数据之间的最大间隔
     pub silence_timeout: Duration,
+    /// 工具 schema（[`tools::specs`]）；空表示这一轮不带工具
+    ///
+    /// 只有连接测试探针通过的模型才会带上它——小模型对着 schema 只会瞎编。
+    pub tools: Vec<serde_json::Value>,
 }
 
 /// 用量统计（各家字段位置不同，缺失即为 None）
@@ -130,6 +135,11 @@ pub enum StreamEvent {
     Delta(String),
     /// 思维链增量（与正文分开，便于折叠或丢弃）
     Thinking(String),
+    /// 模型要求调用工具
+    ///
+    /// 两家协议的 `arguments` 形状不同（Ollama 给对象、OpenAI 兼容给字符串），
+    /// provider 已统一成 JSON 文本；`ToolCall::arguments` 为空串表示无参数。
+    ToolCall(ToolCall),
     Usage(Usage),
     Done,
     Failed(AiError),

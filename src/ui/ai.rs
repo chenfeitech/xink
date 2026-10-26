@@ -350,6 +350,8 @@ impl AiChat {
             api_key: resolve_api_key(&cfg.ai, &model.id, &MacKeychain),
             first_byte_timeout: FIRST_BYTE_TIMEOUT,
             silence_timeout: Duration::from_secs(cfg.ai.timeout_secs),
+            // M1 的 loop 还没接上（P4 后半），这一轮先不带工具
+            tools: Vec::new(),
         };
         let provider: Arc<dyn Provider> = match model.kind {
             AiProviderKind::Ollama => Arc::new(OllamaProvider),
@@ -400,6 +402,8 @@ impl AiChat {
                 false
             }
             StreamEvent::Thinking(_) => false,
+            // loop 接上（P4 后半）后这里要去执行工具；现在不该收到
+            StreamEvent::ToolCall(_) => false,
             StreamEvent::Usage(usage) => {
                 self.usage = Some(usage);
                 false
