@@ -20,7 +20,6 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
-use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::*;
 
 use crate::app::{AppState, config};
@@ -49,6 +48,11 @@ const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// 180 太小：一轮问答就撑满，更早的轮次全在视口外，看起来像"只有一轮"。
 const HISTORY_MAX_H: f32 = 260.;
+/// 单个展开块的最大高度
+///
+/// 块内自带垂直滚动：工具结果动辄几百行，不收口的话它会把对话区撑到很高，
+/// 外层那 260px 再怎么滚也看不全——块内滚动让"看细节"和"看全部轮次"互不干扰。
+const BODY_MAX_H: f32 = 220.;
 
 /// 对话条发出的事件（目前只有"关闭"）
 pub enum AiChatEvent {
@@ -1125,11 +1129,18 @@ impl Render for AiChat {
 
         // ── 对话区 ──
         let mut pending_stats: Option<String> = None;
+        // 用 gpui 原生的 `overflow_y_scroll` + `track_scroll`：
+        // `overflow_y_scrollbar()` 是组件库的封装，它会把元素包进一层
+        // `size_full()` 的滚动壳、并**覆盖掉调用方的 id 与 `track_scroll`**
+        // （handle 由它按 id 自己管），这样我们自己那个 handle 就滚不动了。
+        // 原生写法：height 由 `max_h` 收口（内容超出就是溢出），滚谁由 `track_scroll` 说了算。
         let mut history = div()
             .id("ai-history")
             .track_scroll(&self.history_scroll)
             .max_h(px(HISTORY_MAX_H))
-            .overflow_y_scrollbar()
+            .min_h_0()
+            .w_full()
+            .overflow_y_scroll()
             .flex_col()
             .gap_1()
             .px_2()
@@ -1193,24 +1204,32 @@ impl Render for AiChat {
             if collapsed {
                 continue;
             }
+            // 正文自己就是一个滚动盒：展开后内容再长也只占 BODY_MAX_H，
+            // 块内垂直滚动即可，不依赖外层对话区还剩多少空间。
+            let body_box = |child: AnyElement| {
+                div()
+                    .id(("ai-body-box", ix))
+                    .w_full()
+                    .min_h_0()
+                    .max_h(px(BODY_MAX_H))
+                    .overflow_y_scroll()
+                    .child(child)
+                    .into_any_element()
+            };
             history = history.child(match body {
                 // `TextView` 才有选区与 Cmd-C：普通 `div` 里的文本选不中
-                Body::Markdown(text) => div()
-                    .w_full()
-                    .child(
-                        TextView::markdown(("ai-body", ix), text)
-                            .selectable(true)
-                            .text_sm(),
-                    )
-                    .into_any_element(),
-                Body::Code(text) => div()
-                    .w_full()
-                    .child(
-                        TextView::markdown(("ai-body", ix), code_fence(&text))
-                            .selectable(true)
-                            .text_xs(),
-                    )
-                    .into_any_element(),
+                Body::Markdown(text) => body_box(
+                    TextView::markdown(("ai-body", ix), text)
+                        .selectable(true)
+                        .text_sm()
+                        .into_any_element(),
+                ),
+                Body::Code(text) => body_box(
+                    TextView::markdown(("ai-body", ix), code_fence(&text))
+                        .selectable(true)
+                        .text_xs()
+                        .into_any_element(),
+                ),
                 // diff 逐行：颜色即语义，用 div 而非 TextView（不需要复制）
                 Body::Diff(ix) => {
                     let mut column = div().w_full().flex_col();
@@ -1224,7 +1243,7 @@ impl Render for AiChat {
                             column = column.child(div().text_xs().text_color(color).child(text));
                         }
                     }
-                    column.into_any_element()
+                    body_box(column.into_any_element())
                 }
             });
         }

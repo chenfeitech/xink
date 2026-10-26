@@ -96,6 +96,7 @@ UI 只负责显示，不再二次截断。
 | C | `finish()` 先压 assistant 后压 user → 发给模型的顺序是 `[a1,q1,a2,q2]`，跨轮错序 | `send()` 开始时压 user、`finish()` 只压 assistant；动作模式（一次性改写）不进历史 |
 | D | `pending: Option<PendingEdit>` 是单值，下一轮直接覆盖 → **上一轮的 diff 消失** | 每轮 `finish` 时把该轮 diff 固化成 `Block::Diff { lines, collapsed, applied }`；`pending` 只服务"当前待应用" |
 | E | diff 默认展开 + 工具结果长 → 占满可视区，把更早的对话挤出去 | `Block::Diff` 默认折叠，标题保留 `+A -B` |
+| F | **展开后内容滚不动**：① 外层用的是组件库 `overflow_y_scrollbar()`，它把元素包进一层 `size_full()` 的滚动壳、并**覆盖调用方的 id 与 `track_scroll`**（滚动句柄由它按 id 自管），我们自己那个 `ScrollHandle` 因此完全无效；② 展开的长正文把对话区撑高，外层那 260px 再怎么滚也看不全 | ① 对话区改回 gpui 原生 `overflow_y_scroll()` + `track_scroll(&self.history_scroll)`，滚谁由自己说了算；② **每个展开块自带滚动盒**：`max_h(220) + min_h_0 + overflow_y_scroll`，块内垂直滚动，与外层互不影响 |
 
 ### 6.1 会话持久化
 
