@@ -19,7 +19,6 @@ use crate::actions::{
     FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, Save,
 };
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
-use crate::ui::{AiChat, AiChatEvent};
 use crate::core::config::{DataFileConfig, IndentConfig, ScrollSyncMode};
 use crate::core::datafile::{DataKind, Parsed, ValidationError, data_kind};
 use crate::core::markdown::{
@@ -30,6 +29,7 @@ use crate::core::media::editor_language;
 use crate::core::note::is_markdown;
 use crate::core::sync::{AnchorTable, GestureGuard, ScrollAnchor, Side, SyncGuard};
 use crate::core::{Note, tab_key};
+use crate::ui::{AiChat, AiChatEvent};
 use std::sync::Arc;
 
 /// 行首标记（`#`、列表符号）的淡化程度，语义等同 CSS `opacity`
@@ -1533,6 +1533,11 @@ impl EditorPanel {
             self.ai_chat = Some(chat);
         }
         self.ai_open = !self.ai_open;
+        // 开关状态打一行：快捷键到底有没有走到这里，一眼就能看出来
+        eprintln!(
+            "[xink] AI 对话条：{}",
+            if self.ai_open { "打开" } else { "关闭" }
+        );
         if self.ai_open {
             if let Some(chat) = &self.ai_chat {
                 chat.update(cx, |chat, cx| chat.focus(window, cx));

@@ -267,12 +267,13 @@ fn text_field(
 ) -> SettingField {
     let is_default = Rc::new(move |c: &AppConfig| get(c) == get(&AppConfig::default()));
     let reset = Rc::new(move |c: &mut AppConfig| set(c, get(&AppConfig::default())));
-    let control = Rc::new(move |view: &mut SettingsView, c: &AppConfig| {
-        match view.inputs.get(id) {
-            Some(state) => Input::new(state).small().w(px(240.)).into_any_element(),
-            None => div().text_xs().child(get(c)).into_any_element(),
-        }
-    });
+    let control =
+        Rc::new(
+            move |view: &mut SettingsView, c: &AppConfig| match view.inputs.get(id) {
+                Some(state) => Input::new(state).small().w(px(240.)).into_any_element(),
+                None => div().text_xs().child(get(c)).into_any_element(),
+            },
+        );
     SettingField {
         id,
         title,
@@ -887,7 +888,6 @@ fn all_fields() -> Vec<SettingField> {
             |c| c.ai.ollama.num_ctx as f32,
             |c, v| c.ai.ollama.num_ctx = v as u32,
         ),
-
         // ── AI · 生成 ──
         number_field(
             "ai.timeout_secs",
@@ -936,11 +936,13 @@ fn all_fields() -> Vec<SettingField> {
             "生成",
             None,
             FieldKind::Choice,
-            || vec![
-                ("auto".into(), "跟随输入".into()),
-                ("zh".into(), "简体中文".into()),
-                ("en".into(), "English".into()),
-            ],
+            || {
+                vec![
+                    ("auto".into(), "跟随输入".into()),
+                    ("zh".into(), "简体中文".into()),
+                    ("en".into(), "English".into()),
+                ]
+            },
             |c| match c.ai.output_language {
                 OutputLang::Auto => "auto".into(),
                 OutputLang::Zh => "zh".into(),
@@ -954,7 +956,6 @@ fn all_fields() -> Vec<SettingField> {
                 }
             },
         ),
-
         // ── AI · 扩展 ──
         bool_field(
             "ai.skills_enabled",
@@ -966,7 +967,6 @@ fn all_fields() -> Vec<SettingField> {
             |c| c.ai.skills_enabled,
             |c, v| c.ai.skills_enabled = v,
         ),
-
     ]
 }
 
@@ -1301,12 +1301,7 @@ impl SettingsView {
             .mt_2()
             .border_t_1()
             .border_color(border)
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight(600.))
-                    .child("模型"),
-            );
+            .child(div().text_sm().font_weight(FontWeight(600.)).child("模型"));
 
         // ── 拉取 ──
         let base_url = cfg.ai.ollama.base_url.clone();
@@ -1330,32 +1325,34 @@ impl SettingsView {
                                     std::time::Duration::from_secs(5),
                                 )
                             });
-                            this.model_task = Some(cx.spawn_in(window, async move |this, window| {
-                                let result = task.await;
-                                _ = this.update_in(window, |this, _window, cx| {
-                                    match result {
-                                        Ok(models) => {
-                                            let count = models.len();
-                                            let cache = crate::core::ai::models::ModelCache {
-                                                fetched_at_ms: crate::core::ai::models::now_ms(),
-                                                base_url: base.clone(),
-                                                models,
-                                            };
-                                            let mut added = 0;
-                                            crate::app::update_config(cx, |cfg| {
-                                                added = cache.merge_into(&mut cfg.ai.models);
-                                            });
-                                            this.model_notice = Some(format!(
-                                                "拉取到 {count} 个模型，新增 {added} 个"
-                                            ));
+                            this.model_task =
+                                Some(cx.spawn_in(window, async move |this, window| {
+                                    let result = task.await;
+                                    _ = this.update_in(window, |this, _window, cx| {
+                                        match result {
+                                            Ok(models) => {
+                                                let count = models.len();
+                                                let cache = crate::core::ai::models::ModelCache {
+                                                    fetched_at_ms: crate::core::ai::models::now_ms(
+                                                    ),
+                                                    base_url: base.clone(),
+                                                    models,
+                                                };
+                                                let mut added = 0;
+                                                crate::app::update_config(cx, |cfg| {
+                                                    added = cache.merge_into(&mut cfg.ai.models);
+                                                });
+                                                this.model_notice = Some(format!(
+                                                    "拉取到 {count} 个模型，新增 {added} 个"
+                                                ));
+                                            }
+                                            Err(err) => {
+                                                this.model_notice = Some(err.message());
+                                            }
                                         }
-                                        Err(err) => {
-                                            this.model_notice = Some(err.message());
-                                        }
-                                    }
-                                    cx.notify();
-                                });
-                            }));
+                                        cx.notify();
+                                    });
+                                }));
                             cx.notify();
                         })),
                 )
@@ -1403,7 +1400,11 @@ impl SettingsView {
                 .child(
                     div()
                         .text_sm()
-                        .text_color(if is_default { primary } else { cx.theme().foreground })
+                        .text_color(if is_default {
+                            primary
+                        } else {
+                            cx.theme().foreground
+                        })
                         .child(id.clone()),
                 )
                 .child(div().text_xs().text_color(muted).child(caps))
@@ -1411,7 +1412,11 @@ impl SettingsView {
                     Button::new(SharedString::from(format!("ai-default-{id}")))
                         .small()
                         .ghost()
-                        .label(if is_default { "当前默认" } else { "设为默认" })
+                        .label(if is_default {
+                            "当前默认"
+                        } else {
+                            "设为默认"
+                        })
                         .on_click(cx.listener(move |_, _, _, cx| {
                             let id = id_for_default.clone();
                             crate::app::update_config(cx, move |cfg| cfg.ai.default_model = id);
@@ -1579,6 +1584,9 @@ impl Render for SettingsView {
         // 左靠齐 + 图标在前，选中态用主色底。
         let mut sidebar = div()
             .w(px(layout::SIDEBAR_W))
+            // 内容列是 `flex_1`（且滚动容器自带 `w_full`），不锁住的话
+            // 这一列会被挤窄
+            .flex_none()
             .flex_col()
             .gap_1()
             .p_2()
@@ -1624,7 +1632,10 @@ impl Render for SettingsView {
         }
 
         // ── 右侧设置项（按分组）──
-        let mut content = div().flex_1().min_w_0().flex_col().px_4().py_2();
+        //
+        // 同样要 `min_h_0`：否则这一列会被自己的内容撑到"内容高度"，
+        // 滚动区就有等于内容的高度，滚不动（同上面对话框内容层的坑）。
+        let mut content = div().flex_1().min_w_0().min_h_0().flex_col().px_4().py_2();
         let mut current_group = String::new();
         for field in &visible {
             if field.group != current_group {
@@ -1669,7 +1680,10 @@ impl Render for SettingsView {
 
         div()
             .id("settings-view")
+            // `min_h_0` 与对话框内容层同理：不许被内容撑开，
+            // 高度必须等于对话框给的可视高度，滚动才成立。
             .size_full()
+            .min_h_0()
             .flex()
             .flex_col()
             .bg(cx.theme().background)
@@ -1957,6 +1971,10 @@ pub fn open_settings(window: &mut Window, cx: &mut App) {
             .on_close(|_, _, cx| {
                 cx.set_global(SettingsDialog { view: None });
             })
-            .content(move |content, _, _| content.child(view.clone()))
+            // `min_h_0` 是能不能滚动的关键：flex 子项的 `min-height` 默认是
+            // `auto`，会被内容撑开。这一层撑开后，视图里的滚动区拿到的
+            // "可视高度"就等于内容高度——永远不需要滚，超出部分被对话框的
+            // `overflow_hidden` 直接裁掉（表现：下面的设置项根本看不到）。
+            .content(move |content, _, _| content.min_h_0().child(view.clone()))
     });
 }
