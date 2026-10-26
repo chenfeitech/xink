@@ -16,7 +16,7 @@ use gpui_kit::*;
 
 use crate::app::AppState;
 use crate::core::fuzzy::fuzzy_match;
-use crate::core::media::is_editable_text;
+use crate::core::media::{ai_excluded, is_editable_text};
 use crate::core::vault::{FileNode, Vault};
 use crate::ui::tabs;
 
@@ -327,7 +327,9 @@ fn collect_candidates(root: &Path) -> Result<Vec<Candidate>, String> {
 /// 展平目录树；`label` 用相对库根的路径（含扩展名）。
 fn flatten(root: &Path, node: &FileNode, out: &mut Vec<Candidate>) {
     if !node.is_dir {
-        if is_editable_text(&node.path) {
+        // 目录层已经跳过 `.xink`（`vault::should_ignore`），这里再挡一道：
+        // 命令面板的语义就是"人的笔记"，AI 目录不该出现在候选里
+        if is_editable_text(&node.path) && !ai_excluded(&node.path) {
             let label = node
                 .path
                 .strip_prefix(root)

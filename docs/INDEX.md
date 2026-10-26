@@ -97,6 +97,7 @@
 | [agent-harness-eval.md](./ai/agent-harness-eval.md) | 架构调研：要不要自建 agent harness 与记忆机制、四层记忆模型、可参考的协议/框架/Rust 生态 | `core/ai/`（待建） | 📝 **分析完成，待确认**（2026-10-26） |
 | [ai-assistant-design.md](./ai/ai-assistant-design.md) | 技术设计：agent loop / 工具集 / Provider 抽象 / 配置与持久化 / 异常边界 / M0–M5 分期 | `core/ai/`（待建）、`ui/ai/`（待建） | 📝 **待确认**（2026-10-26，确认后开工） |
 | [ollama-provider-design.md](./ai/ollama-provider-design.md) | Ollama Provider + 模型列表管理：native vs 兼容端点实测、per-model 参数与连接测试、配置与设置界面 | `core/ai/{provider,ndjson,models}.rs`（待建）、`ui/settings.rs` | ✅ **M0 Spike 已完成**；M1 已实施，待人工验收（2026-10-26） |
+| [ai-m1-completion-design.md](./ai/ai-m1-completion-design.md) | M1 收口：agent loop / 只读工具 / 结构校验 / `.xink` 排除 / 连接测试 / 快照轮转与清空 / 命令面板入口，P1–P5 分期 | `core/ai/{loop,tools,verify,snapshot}.rs`、`core/media.rs`、`ui/{ai,command,settings}.rs` | 🚧 **P1 已实施**（2026-10-26，P2–P5 待做） |
 
 ## 9. 规范与其它（docs/ 根目录）
 

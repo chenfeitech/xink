@@ -39,6 +39,25 @@ fn build_collects_nested_markdown_only() {
 }
 
 #[test]
+fn build_skips_ai_dir() {
+    // `.xink/` 是 AI 的机器目录（skills 等）：`vault::should_ignore` 恒跳，
+    // 因此目录树里就没有它，索引里也不该出现。这条锁住 M2 的行为。
+    let dir = tmp();
+    let root = dir.path();
+    note(root, "a.md", "# A");
+    note(root, ".xink/skills/summarize/SKILL.md", "# Skill");
+
+    let index = index_of(root);
+    assert_eq!(index.len(), 1, "AI 目录里的 .md 不该进索引");
+    assert!(
+        index
+            .notes()
+            .all(|n| !n.path.to_string_lossy().contains(".xink")),
+        "索引里不应出现 .xink 下的笔记"
+    );
+}
+
+#[test]
 fn build_is_empty_when_no_vault() {
     let index = NoteIndex::new();
     assert!(index.is_empty());

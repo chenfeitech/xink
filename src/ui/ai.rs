@@ -10,29 +10,27 @@
 //! - 模型可随时切换，只影响本会话，不写配置。
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::Sizable;
 use gpui_kit::*;
 
 use crate::app::{AppState, config};
 use crate::core::ai::context::{ContextScope, assemble};
-use crate::core::ai::diff::{diff_lines, DiffLine};
+use crate::core::ai::diff::{DiffLine, diff_lines};
 use crate::core::ai::keychain::{MacKeychain, resolve_api_key};
 use crate::core::ai::ollama::OllamaProvider;
 use crate::core::ai::openai::OpenAiProvider;
 use crate::core::ai::prompt::{Action, all_actions};
 use crate::core::ai::snapshot::write_snapshot;
-use crate::core::ai::{
-    AiError, ChatMessage, CompletionRequest, Provider, StreamEvent, Usage,
-};
+use crate::core::ai::{AiError, ChatMessage, CompletionRequest, Provider, StreamEvent, Usage};
 use crate::core::config::AiProviderKind;
 use crate::state::workspace::app_data_dir;
 
@@ -116,17 +114,25 @@ pub struct AiChat {
 
 impl AiChat {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("问点什么，或让 AI 改这篇笔记…")
-        });
+        let input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("问点什么，或让 AI 改这篇笔记…"));
         // 订阅只挂一次：写进 render 会每帧多挂一个
-        cx.subscribe_in(&input, window, |this, state, ev: &InputEvent, window, cx| {
-            if matches!(ev, InputEvent::PressEnter { secondary: false, .. })
-                && !state.read(cx).value().trim().is_empty()
-            {
-                this.send(window, cx);
-            }
-        })
+        cx.subscribe_in(
+            &input,
+            window,
+            |this, state, ev: &InputEvent, window, cx| {
+                if matches!(
+                    ev,
+                    InputEvent::PressEnter {
+                        secondary: false,
+                        ..
+                    }
+                ) && !state.read(cx).value().trim().is_empty()
+                {
+                    this.send(window, cx);
+                }
+            },
+        )
         .detach();
 
         Self {
@@ -186,10 +192,17 @@ impl AiChat {
         if text.is_empty() || self.busy {
             return;
         }
-        self.input.update(cx, |state, cx| state.set_value("", window, cx));
+        self.input
+            .update(cx, |state, cx| state.set_value("", window, cx));
         self.mode = AiMode::Chat;
-        self.turns.push(Turn { mine: true, text: text.clone() });
-        self.turns.push(Turn { mine: false, text: String::new() });
+        self.turns.push(Turn {
+            mine: true,
+            text: text.clone(),
+        });
+        self.turns.push(Turn {
+            mine: false,
+            text: String::new(),
+        });
 
         let Some((path, selection, whole, _cursor)) = self.capture(cx) else {
             self.turns.pop();
@@ -245,8 +258,14 @@ impl AiChat {
             return;
         }
         self.mode = AiMode::Action(action);
-        self.turns.push(Turn { mine: true, text: action.label().to_string() });
-        self.turns.push(Turn { mine: false, text: String::new() });
+        self.turns.push(Turn {
+            mine: true,
+            text: action.label().to_string(),
+        });
+        self.turns.push(Turn {
+            mine: false,
+            text: String::new(),
+        });
 
         let Some((path, selection, whole, cursor)) = self.capture(cx) else {
             self.turns.pop();
@@ -288,8 +307,12 @@ impl AiChat {
                     .collect()
             })
             .unwrap_or_default();
-        let messages =
-            crate::core::ai::prompt::build_messages(action, &prepared.text, cfg.ai.output_language, &known_tags);
+        let messages = crate::core::ai::prompt::build_messages(
+            action,
+            &prepared.text,
+            cfg.ai.output_language,
+            &known_tags,
+        );
         self.start_request(messages, window, cx);
     }
 
@@ -385,7 +408,11 @@ impl AiChat {
                 self.busy = false;
                 self.task = None;
                 self.elapsed_ms = self.started.map(|t| t.elapsed().as_millis() as u64);
-                let output = self.turns.last().map(|t| t.text.trim().to_string()).unwrap_or_default();
+                let output = self
+                    .turns
+                    .last()
+                    .map(|t| t.text.trim().to_string())
+                    .unwrap_or_default();
                 if output.is_empty() {
                     // thinking 模型把预算花在思维链上时会这样
                     self.error = Some(AiError::EmptyResult.message());
@@ -519,7 +546,15 @@ impl Render for AiChat {
             .py_1()
             .border_t_1()
             .border_color(border)
-            .child(if models.is_empty() {
+            .child(if !cfg.ai.enabled {
+                // AI 默认是关的（`AiConfig::default`）。不写明的话，
+                // 对话条打开了也发不出请求，看起来就像"用不了 / 打不开"。
+                div()
+                    .text_xs()
+                    .text_color(warning)
+                    .child("AI 未启用：设置 · AI 里打开「启用 AI」并选一个模型")
+                    .into_any_element()
+            } else if models.is_empty() {
                 div()
                     .text_xs()
                     .text_color(muted)
@@ -625,7 +660,9 @@ impl Render for AiChat {
                     .xsmall()
                     .ghost()
                     .label(action.label())
-                    .on_click(cx.listener(move |this, _, window, cx| this.run_action(action, window, cx))),
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.run_action(action, window, cx)),
+                    ),
             );
         }
 
@@ -693,6 +730,19 @@ impl Render for AiChat {
         }
         if let Some(ms) = self.elapsed_ms {
             status = status.child(div().text_xs().text_color(muted).child(format!("{ms} ms")));
+        }
+        if let Some(usage) = &self.usage {
+            // 模型报的真实用量（各 provider 未必都给）；没给就退回上下文粗估
+            let mut parts = Vec::new();
+            if let Some(prompt) = usage.prompt_tokens {
+                parts.push(format!("输入 {prompt}"));
+            }
+            if let Some(completion) = usage.completion_tokens {
+                parts.push(format!("输出 {completion}"));
+            }
+            if !parts.is_empty() {
+                status = status.child(div().text_xs().text_color(muted).child(parts.join(" / ")));
+            }
         }
         if let Some(tokens) = self.input_tokens {
             status = status.child(

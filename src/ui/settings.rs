@@ -1167,6 +1167,12 @@ pub struct SettingsView {
     model_task: Option<Task<()>>,
     /// 模型管理区的提示 / 错误
     model_notice: Option<String>,
+    /// 「清空 AI 快照」已按过一次，等待确认
+    ///
+    /// 清快照是删文件、不可撤销，两步确认比弹一个确认框轻。
+    confirm_clear_snapshots: bool,
+    /// 快照区的提示 / 错误
+    snapshot_notice: Option<String>,
 }
 
 /// 设置窗口各部分的固定尺寸。
@@ -1222,6 +1228,8 @@ impl SettingsView {
             new_model_base,
             model_task: None,
             model_notice: None,
+            confirm_clear_snapshots: false,
+            snapshot_notice: None,
         };
 
         // 搜索框是唯一的 query 写入口：输入即过滤，无需回车
@@ -1503,6 +1511,74 @@ impl SettingsView {
         block
     }
 
+    /// AI 改前快照：自动轮转之外，给一个手动清空的入口（需求 A8.4）
+    ///
+    /// 快照是"AI 改坏了能回退"的唯一手段（项目没有撤销栈），所以数量要看得见、
+    /// 能清干净；清之前要求再点一次确认。
+    fn render_snapshots(&mut self, cx: &mut Context<Self>) -> Div {
+        use crate::core::ai::snapshot::{MAX_SNAPSHOTS, SNAPSHOT_DIR, clear, count};
+
+        let muted = cx.theme().muted_foreground;
+        let border = cx.theme().border;
+        let dir = crate::state::workspace::app_data_dir().join(SNAPSHOT_DIR);
+        let total = count(&dir);
+
+        let mut block = div()
+            .flex_col()
+            .gap_1()
+            .pt_3()
+            .mt_2()
+            .border_t_1()
+            .border_color(border)
+            .child(div().text_sm().font_weight(FontWeight(600.)).child("快照"));
+
+        block = block.child(div().text_xs().text_color(muted).child(format!(
+            "改前快照 {total} 个（自动保留最近 {MAX_SNAPSHOTS} 个）"
+        )));
+
+        // 两步确认：第一次点击只是把按钮换成"确认清空？"
+        let confirming = self.confirm_clear_snapshots;
+        let dir_for_click = dir.clone();
+        let mut row = div().flex().items_center().gap_2().child(
+            Button::new("ai-clear-snapshots")
+                .small()
+                .outline()
+                .label(if confirming {
+                    "确认清空？"
+                } else {
+                    "清空快照"
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.confirm_clear_snapshots {
+                        this.confirm_clear_snapshots = true;
+                        cx.notify();
+                        return;
+                    }
+                    this.confirm_clear_snapshots = false;
+                    this.snapshot_notice = match clear(&dir_for_click) {
+                        Ok(0) => Some("没有可清空的快照".into()),
+                        Ok(n) => Some(format!("已清空 {n} 个快照")),
+                        Err(err) => Some(format!("清空失败: {err}")),
+                    };
+                    cx.notify();
+                })),
+        );
+        if confirming {
+            row = row.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("再点一次删除，切走分类即取消"),
+            );
+        }
+        block = block.child(row);
+
+        if let Some(notice) = &self.snapshot_notice {
+            block = block.child(div().text_xs().text_color(muted).child(notice.clone()));
+        }
+        block
+    }
+
     /// 命中搜索的第一项，用于自动切分类并定位
     fn first_match(&self, cfg: &AppConfig) -> Option<&'static str> {
         let q = self.query.trim().to_lowercase();
@@ -1672,6 +1748,11 @@ impl Render for SettingsView {
         // 元数据表（一行一项、取值/写入都是固定字段）表达不了，因此单独渲染。
         if self.tab == SettingsTab::Ai && query.is_empty() {
             content = content.child(self.render_models(window, cx));
+            // 同一分类下再挂一块「快照」：列表类信息，元数据表表达不了
+            content = content.child(self.render_snapshots(cx));
+        } else {
+            // 切走就是放弃"确认清空"
+            self.confirm_clear_snapshots = false;
         }
 
         // 尺寸由外层对话框给定，这里不再动窗口：设置界面现在是主窗口内的

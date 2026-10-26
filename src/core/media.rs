@@ -13,6 +13,23 @@ use std::path::Path;
 use crate::core::datafile::{data_kind, is_data_file};
 use crate::core::note::is_markdown;
 
+/// 库内的 AI 专属目录名：skills（`SKILL.md`）与 agent 记忆都放这里
+///
+/// `vault::should_ignore` 对它**恒跳**（与 `show_all` 无关），所以文件树、
+/// 索引、命令面板候选都不会出现这一支。名字收在这里是为了将来 M2 往里放
+/// `skills/**/SKILL.md` 时，只有一处需要知道这个目录叫什么。
+pub const AI_DIR_NAME: &str = ".xink";
+
+/// 该路径是否属于 AI 专属目录（不参与索引、命令面板、搜索）
+///
+/// 与 [`is_editable_text`] 同属"什么文件算什么"的判据。M2 的 skills 与
+/// 将来的工具层只认这一个函数：目录层已经跳过这一支（`vault::should_ignore`），
+/// 这里是给只拿得到路径的调用方（如 loop 的工具、后端过滤）用。
+pub fn ai_excluded(path: &Path) -> bool {
+    path.components()
+        .any(|part| part.as_os_str() == AI_DIR_NAME)
+}
+
 /// 能否在编辑器里打开：Markdown 笔记 + 数据文件（JSON / YAML / TOML）
 ///
 /// 这是"能打开"的唯一判据。目录树（`vault::scan_dir`）、文件监听

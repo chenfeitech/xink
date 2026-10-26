@@ -11,6 +11,9 @@ use super::AiError;
 /// 快照目录名（应用数据目录下）
 pub const SNAPSHOT_DIR: &str = "ai-history";
 
+/// 快照保留上限（设计 R4）：超出后删最旧的，避免"用得越久堆得越多"
+pub const MAX_SNAPSHOTS: usize = 200;
+
 /// `<yyyy-mm-dd-HHMMSS>-<文件名>`；同名时用微秒后缀避免覆盖
 pub fn snapshot_name(file_name: &str) -> String {
     let now = std::time::SystemTime::now()
@@ -41,7 +44,60 @@ pub fn write_snapshot(dir: &Path, file_name: &str, content: &str) -> Result<Path
         path
     };
     fs::write(&path, content).map_err(|e| AiError::Io(e.to_string()))?;
+    // 快照已经写成功了，轮转失败不该让这次保存报错，故只记不传
+    let _ = rotate(dir, MAX_SNAPSHOTS);
     Ok(path)
+}
+
+/// 目录里的快照数量（目录不存在即为 0）
+pub fn count(dir: &Path) -> usize {
+    list(dir).map_or(0, |paths| paths.len())
+}
+
+/// 只保留最近 `keep` 个快照，返回删除的数量
+///
+/// 命名是 `<yyyy-mm-dd-HHMMSS>-<文件名>`，字典序就是时间序，
+/// 因此不需要再去读 mtime，排序后砍掉最前面那些即可。
+pub fn rotate(dir: &Path, keep: usize) -> Result<usize, AiError> {
+    let Some(mut paths) = list(dir) else {
+        return Ok(0);
+    };
+    if paths.len() <= keep {
+        return Ok(0);
+    }
+    paths.sort();
+    let drop = paths.len() - keep;
+    let mut removed = 0;
+    for path in paths.into_iter().take(drop) {
+        fs::remove_file(&path).map_err(|e| AiError::Io(e.to_string()))?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+/// 清空快照目录（保留目录本身），返回删除的数量
+pub fn clear(dir: &Path) -> Result<usize, AiError> {
+    let Some(paths) = list(dir) else {
+        return Ok(0);
+    };
+    let mut removed = 0;
+    for path in paths {
+        fs::remove_file(&path).map_err(|e| AiError::Io(e.to_string()))?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+/// 目录内的快照文件；目录不存在或读不了时返回 `None`
+fn list(dir: &Path) -> Option<Vec<PathBuf>> {
+    let entries = fs::read_dir(dir).ok()?;
+    Some(
+        entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_file())
+            .collect(),
+    )
 }
 
 /// 秒 → 年月日时分秒（UTC）

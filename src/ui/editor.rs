@@ -16,7 +16,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size};
 use gpui_kit::*;
 
 use crate::actions::{
-    FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, Save,
+    FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, Save, ToggleAiChat,
 };
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
 use crate::core::config::{DataFileConfig, IndentConfig, ScrollSyncMode};
@@ -1814,6 +1814,9 @@ impl EditorPanel {
                 Format::HorizontalRule,
                 cx,
             ))
+            // AI 入口：与 Cmd-Shift-A 同一个开关。只有快捷键的话，
+            // 这个对话条对没看过设计文档的人等于不存在——补个看得见的按钮。
+            .child(Self::ai_button(cx))
             .into_any_element()
     }
 
@@ -1861,6 +1864,26 @@ impl EditorPanel {
                     .text_color(color)
                     .child(text),
             )
+    }
+
+    /// 工具栏上的 AI 入口，等价于 `Cmd-Shift-A`
+    ///
+    /// 对话条是"贴着编辑区"的形态（`docs/ai/ai-assistant-design.md` D1），
+    /// 因此入口也放在编辑区自己的工具栏上：点了就在正下方展开。
+    fn ai_button(cx: &mut Context<Self>) -> impl IntoElement {
+        let icon_size = crate::app::config(cx).basic.icon_size;
+        Button::new("fmt-ai")
+            .small()
+            .ghost()
+            .icon(Icon::new(IconName::Bot).with_size(Size::Size(px(icon_size as f32))))
+            .tooltip_with_action(
+                "AI 对话：针对这篇笔记提问或改写（对话条在编辑区下方）",
+                &ToggleAiChat,
+                None,
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.toggle_ai_chat(window, cx);
+            }))
     }
 
     /// 创建一个工具栏按钮：仅显示图标，鼠标悬停时通过 tooltip 显示功能说明。

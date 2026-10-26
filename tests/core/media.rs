@@ -1,7 +1,25 @@
-use super::{FileKind, editor_language, file_kind};
+use super::{FileKind, ai_excluded, editor_language, file_kind};
 use std::path::Path;
 
 use super::{is_editable_text, is_image_path};
+
+#[test]
+fn ai_excluded_only_inside_ai_dir() {
+    // M2 会把 skills 放进 `.xink/`，那里的 SKILL.md 不能变成"笔记"
+    assert!(ai_excluded(Path::new(
+        "/vault/.xink/skills/summarize/SKILL.md"
+    )));
+    assert!(ai_excluded(Path::new("/vault/.xink/a.md")));
+    assert!(!ai_excluded(Path::new("/vault/notes/a.md")));
+    assert!(!ai_excluded(Path::new("/vault/a.md")));
+}
+
+#[test]
+fn ai_excluded_is_case_sensitive_and_component_wise() {
+    // 只认完整路径分量，避免 `.xink-notes/` 这类前缀被误伤
+    assert!(!ai_excluded(Path::new("/vault/.xink-notes/a.md")));
+    assert!(!ai_excluded(Path::new("/vault/sub/a.md")));
+}
 
 #[test]
 fn detects_common_image_formats() {

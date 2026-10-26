@@ -468,7 +468,9 @@ fn is_note(path: &Path) -> bool {
 /// 展平目录树，只留 Markdown 文件
 fn collect_markdown(root: &Path, node: &FileNode, out: &mut Vec<PathBuf>) {
     if !node.is_dir {
-        if is_note(&node.path) {
+        // 目录层已经跳过 `.xink`（`vault::should_ignore`），这里再挡一道：
+        // 索引的语义是"人的笔记"，AI 的 skills 之类不该进来
+        if is_note(&node.path) && !crate::core::media::ai_excluded(&node.path) {
             out.push(node.path.clone());
         }
         return;

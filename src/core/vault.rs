@@ -115,7 +115,7 @@ pub fn should_ignore(name: &str, show_all: bool) -> bool {
         // AI 的机器目录：skills（`SKILL.md` 是 .md，不排除会混进索引与搜索）
         // 与 agent 记忆都放在这里，一律不进文件树、不进索引、不进命令面板候选。
         // 见 docs/ai/ai-assistant-design.md §4.4。
-        || name == ".xink"
+        || name == crate::core::media::AI_DIR_NAME
         || (!show_all && name.starts_with('.'))
 }
 
