@@ -365,7 +365,7 @@ D3 diff 自实现、Q1 用 `security` CLI 而非 `keychain` crate、M4 是否真
 | 期 | 内容 | 涉及文件 | 独立验证 |
 |---|---|---|---|
 | **M0 Spike** | ✅ **已完成**（2026-10-26）：`ureq` 3.5.0 编译 12.8s、Ollama native NDJSON 与 SSE 双协议跑通、取消 26ms、工具调用 3/4 模型通过。数据见 [`ollama-provider-design.md`](./ollama-provider-design.md) §2 | 独立 crate（`/tmp`，未进仓库） | 结论已回写本文档与 eval |
-| **M1** | 依赖 `ureq`；`core/ai/{mod,provider,http,sse,ndjson,models,context,prompt,tools,loop,verify,diff,snapshot,keychain}.rs`；**Ollama provider + 模型列表管理（拉取/缓存/连接测试）**；`AppConfig.ai`；设置页 AI 分类；底部 dock 结果/diff 面板；`Cmd+Shift+A`；8 个内置动作；快照 | `Cargo.toml`、`src/core/config.rs`、`src/ui/settings.rs`、`src/ui/ai/panel.rs`、`src/main.rs`（register_panel + 键位）、`src/core/vault.rs`（`.xink` 恒跳）、`src/core/index.rs`+`ui/command.rs`（排除 SKILL.md） | 单测 + 验收清单 1–11 |
+| **M1** | ✅ **已实施（2026-10-26，待人工验收）**： 依赖 `ureq`；`core/ai/{mod,provider,http,sse,ndjson,models,context,prompt,tools,loop,verify,diff,snapshot,keychain}.rs`；**Ollama provider + 模型列表管理（拉取/缓存/连接测试）**；`AppConfig.ai`；设置页 AI 分类；底部 dock 结果/diff 面板；`Cmd+Shift+A`；8 个内置动作；快照 | `Cargo.toml`、`src/core/config.rs`、`src/ui/settings.rs`、`src/ui/ai/panel.rs`、`src/main.rs`（register_panel + 键位）、`src/core/vault.rs`（`.xink` 恒跳）、`src/core/index.rs`+`ui/command.rs`（排除 SKILL.md） | 单测 + 验收清单 1–11 |
 | **M2** | `core/ai/skills.rs`；库内/用户级发现；命令面板 `AI:` 分组；`read_skill_resource`；内置动作改为 `SKILL.md` 表达 | `src/core/ai/skills.rs`、`src/ui/command.rs`、`resources/skills/*`（内置 8 个） | 验收清单 M2 |
 | **M3** | `core/ai/session.rs`；`propose_edit` 批量；计划面板；分批 + 中断恢复；trace | `src/core/ai/{session,tools}.rs`、`src/ui/ai/plan.rs`、`src/state/ai_state.rs` | 验收清单 M3 |
 | **M4** | 多轮会话面板；compaction；L2/L3 记忆与确认流；CLI Agent provider | `src/core/ai/{memory,provider}.rs`、`src/ui/ai/chat.rs` | 验收清单 M4 |

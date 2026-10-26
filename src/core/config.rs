@@ -347,6 +347,8 @@ pub struct AppConfig {
     pub editor: EditorConfig,
     pub preview: PreviewConfig,
     pub highlight: HighlightConfig,
+    /// AI 协助（默认关闭：未配置时不发起任何网络请求）
+    pub ai: AiConfig,
 }
 
 // ── 默认值 ────────────────────────────────────────────────────
@@ -448,6 +450,299 @@ impl Default for PreviewConfig {
     }
 }
 
+// ── AI 配置 ─────────────────────────────────────────────────
+//
+// 设计见 `docs/ai/ai-assistant-design.md` §4.1 与
+// `docs/ai/ollama-provider-design.md` §4.1。
+// AI 配置从未发布过，历史 `config.json` 里没有 `ai` 段，
+// 因此**没有迁移逻辑**——`#[serde(default)]` + `sanitize()` 已足够。
+
+/// Provider 类型
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiProviderKind {
+    /// 本地 Ollama（走 native `/api/chat`）
+    #[default]
+    Ollama,
+    /// OpenAI 兼容端点（云厂商 / Ollama 的 /v1）
+    OpenAiCompatible,
+}
+
+/// API key 的来源
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeySource {
+    /// macOS Keychain（默认）
+    #[default]
+    Keychain,
+    /// 环境变量 `XINK_AI_API_KEY`
+    Env,
+    /// 明文写在 config.json（用户显式选择才用）
+    Plain,
+}
+
+/// 输出语言
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputLang {
+    /// 跟随输入内容
+    #[default]
+    Auto,
+    Zh,
+    En,
+}
+
+/// 单模型的生成参数
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiModelParams {
+    /// 上下文窗口（Ollama `options.num_ctx`），必须 ≤ 模型的 context_length
+    pub num_ctx: u32,
+    /// 最大生成 token（Ollama `num_predict` / OpenAI `max_tokens`）
+    pub num_predict: u32,
+    pub temperature: f32,
+    /// 是否允许思考（Ollama native 专有；兼容端点忽略此参数）
+    pub think: bool,
+    /// 模型常驻时长（Ollama `keep_alive`），如 "5m"、"-1"、"0"
+    pub keep_alive: String,
+}
+
+/// 一个可选模型
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelEntry {
+    /// Ollama 里是模型名（如 `qwen3.5:0.8b`）
+    pub id: String,
+    pub kind: AiProviderKind,
+    /// 展示名，空则用 id
+    pub label: String,
+    /// 覆盖全局 base_url（多实例 / 远端 Ollama）
+    pub base_url: String,
+    pub api_key_source: KeySource,
+    pub params: AiModelParams,
+    /// 来自 `/api/tags` 的 context_length；None 时按默认 num_ctx 用
+    pub context_limit: Option<u32>,
+    /// 来自 `/api/tags`：`completion` / `tools` / `thinking` / `vision`
+    pub capabilities: Vec<String>,
+    /// 是否启用工具阶段（连接测试通过才置 true）
+    pub tools_enabled: bool,
+    /// 列表里停用
+    pub enabled: bool,
+    /// 上次连接测试时间（毫秒时间戳），0 表示没测过
+    pub last_checked_ms: u64,
+}
+
+/// Ollama 连接参数
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OllamaConfig {
+    pub base_url: String,
+    /// `keep_alive`：默认 5m；设 -1 常驻、0 用完即卸
+    pub keep_alive: String,
+    pub num_ctx: u32,
+}
+
+/// AI 配置
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiConfig {
+    /// 总开关，关掉则所有 AI 入口不可用
+    pub enabled: bool,
+    /// 当前模型（对应 [`ModelEntry::id`]）
+    pub default_model: String,
+    pub models: Vec<ModelEntry>,
+    pub ollama: OllamaConfig,
+    /// 静默超时（秒）
+    pub timeout_secs: u64,
+    /// 发给模型的正文字符预算
+    pub max_context_chars: usize,
+    /// agent loop 的最大步数
+    pub max_steps: usize,
+    pub output_language: OutputLang,
+    /// 是否跳过 diff 直接落盘：默认 false，UI 不暴露
+    pub auto_apply: bool,
+    pub skills_enabled: bool,
+    pub disabled_skills: Vec<String>,
+    pub memory_enabled: bool,
+}
+
+impl Default for AiModelParams {
+    fn default() -> Self {
+        Self {
+            num_ctx: 8192,
+            // 给足预算：thinking 模型会把 num_predict 用在思维链上
+            num_predict: 1024,
+            temperature: 0.7,
+            think: false,
+            keep_alive: "5m".into(),
+        }
+    }
+}
+
+impl Default for ModelEntry {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            kind: AiProviderKind::default(),
+            label: String::new(),
+            base_url: String::new(),
+            api_key_source: KeySource::default(),
+            params: AiModelParams::default(),
+            context_limit: None,
+            capabilities: Vec::new(),
+            tools_enabled: false,
+            enabled: true,
+            last_checked_ms: 0,
+        }
+    }
+}
+
+impl ModelEntry {
+    /// 由 `/api/tags` 的发现结果建一条（未测过工具能力）
+    pub fn discovered(found: &crate::core::ai::models::DiscoveredModel) -> Self {
+        Self {
+            id: found.name.clone(),
+            kind: AiProviderKind::Ollama,
+            capabilities: found.capabilities.clone(),
+            context_limit: found.context_length,
+            tools_enabled: false,
+            ..Self::default()
+        }
+    }
+
+    /// 展示名：优先 label
+    pub fn display_name(&self) -> &str {
+        if self.label.trim().is_empty() {
+            &self.id
+        } else {
+            &self.label
+        }
+    }
+
+    /// 实际使用的 base_url：条目覆盖优先，否则用 provider 默认值
+    pub fn base_url_or(&self, cfg: &AiConfig) -> String {
+        if self.base_url.trim().is_empty() {
+            match self.kind {
+                AiProviderKind::Ollama => cfg.ollama.base_url.clone(),
+                AiProviderKind::OpenAiCompatible => String::new(),
+            }
+        } else {
+            self.base_url.clone()
+        }
+    }
+
+    pub fn supports_tools(&self) -> bool {
+        self.capabilities.iter().any(|c| c == "tools")
+    }
+
+    pub fn supports_thinking(&self) -> bool {
+        self.capabilities.iter().any(|c| c == "thinking")
+    }
+}
+
+impl Default for OllamaConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://localhost:11434".into(),
+            keep_alive: "5m".into(),
+            num_ctx: 8192,
+        }
+    }
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_model: String::new(),
+            models: Vec::new(),
+            ollama: OllamaConfig::default(),
+            timeout_secs: 60,
+            max_context_chars: 12_000,
+            max_steps: 8,
+            output_language: OutputLang::default(),
+            auto_apply: false,
+            skills_enabled: true,
+            disabled_skills: Vec::new(),
+            memory_enabled: false,
+        }
+    }
+}
+
+impl AiConfig {
+    /// 当前生效的模型
+    pub fn active_model(&self) -> Option<&ModelEntry> {
+        if self.default_model.is_empty() {
+            return None;
+        }
+        self.models
+            .iter()
+            .find(|m| m.id == self.default_model && m.enabled)
+    }
+
+    /// 可发起请求的前提：启用 + 有模型 + 模型有 endpoint
+    pub fn is_ready(&self) -> bool {
+        self.enabled && self.active_model().is_some()
+    }
+
+    /// 该模型的 endpoint（Ollama 走 native，兼容端点拼 `/chat/completions`）
+    pub fn endpoint_for(&self, model: &ModelEntry) -> String {
+        let base = model.base_url_or(self);
+        match model.kind {
+            AiProviderKind::Ollama => crate::core::ai::ollama::chat_endpoint(&base),
+            AiProviderKind::OpenAiCompatible => {
+                crate::core::ai::openai::chat_endpoint(&base)
+            }
+        }
+    }
+
+    /// 是否所有模型都是本地 Ollama（本地不需要 key）
+    pub fn ollama_only_ignores_keys(&self) -> bool {
+        matches!(
+            self.active_model().map(|m| m.kind),
+            Some(AiProviderKind::Ollama) | None
+        )
+    }
+
+    pub fn default_key_source(&self) -> KeySource {
+        self.active_model()
+            .map(|m| m.api_key_source)
+            .unwrap_or_default()
+    }
+
+    pub fn plain_key(&self) -> Option<&str> {
+        // 明文 key 目前只有一处（当前模型），存放在模型条目外：见 `plain_key_raw`
+        None
+    }
+
+    pub fn sanitize(&mut self) {
+        self.timeout_secs = self.timeout_secs.clamp(limit::AI_TIMEOUT_SECS.0, limit::AI_TIMEOUT_SECS.1);
+        self.max_context_chars = self
+            .max_context_chars
+            .clamp(limit::AI_CONTEXT_CHARS.0, limit::AI_CONTEXT_CHARS.1);
+        self.max_steps = self.max_steps.clamp(limit::AI_MAX_STEPS.0, limit::AI_MAX_STEPS.1);
+        self.auto_apply = false;
+        // 空 id 的条目没有意义（多半是手改配置留下的）
+        self.models.retain(|m| !m.id.trim().is_empty());
+        for model in &mut self.models {
+            model.params.num_predict = model
+                .params
+                .num_predict
+                .clamp(limit::AI_NUM_PREDICT.0, limit::AI_NUM_PREDICT.1);
+            model.params.temperature = clamp_f32(
+                model.params.temperature,
+                (limit::AI_TEMPERATURE.0, limit::AI_TEMPERATURE.1),
+            );
+            let max_ctx = model.context_limit.unwrap_or(limit::AI_NUM_CTX.1);
+            model.params.num_ctx = model.params.num_ctx.clamp(limit::AI_NUM_CTX.0, max_ctx.max(limit::AI_NUM_CTX.0));
+        }
+        // 选中的模型被删掉或停用了：清空选择，避免"看着配好了却发不出去"
+        if !self.default_model.is_empty() && self.active_model().is_none() {
+            self.default_model.clear();
+        }
+    }
+}
+
 // ── 合法区间校正 ──────────────────────────────────────────────
 
 /// 各项配置的合法区间，越界值会被 `sanitize` 夹回区间内
@@ -462,6 +757,13 @@ mod limit {
     /// 数据文件预览格式化：缩进 1–8 空格；体积上限 0（不限制）–20MB
     pub const DATA_INDENT: (usize, usize) = (1, 8);
     pub const MAX_FORMAT_BYTES: (usize, usize) = (0, 20_000_000);
+    /// AI：静默超时（秒）；下限 5s 避免手滑设成 0 导致必然超时
+    pub const AI_TIMEOUT_SECS: (u64, u64) = (5, 600);
+    pub const AI_CONTEXT_CHARS: (usize, usize) = (1_000, 200_000);
+    pub const AI_MAX_STEPS: (usize, usize) = (1, 64);
+    pub const AI_NUM_PREDICT: (u32, u32) = (16, 32_768);
+    pub const AI_TEMPERATURE: (f32, f32) = (0.0, 2.0);
+    pub const AI_NUM_CTX: (u32, u32) = (512, 1_048_576);
 }
 
 fn clamp_f32(v: f32, (min, max): (f32, f32)) -> f32 {
@@ -513,6 +815,7 @@ impl AppConfig {
             self.preview.image_display = ImageDisplay::FitWidth;
         }
         self.sanitize_highlight();
+        self.ai.sanitize();
     }
 
     /// 高亮主题的规范化与旧配置迁移

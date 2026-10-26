@@ -2,6 +2,7 @@
 //!
 //! 本层不得引用任何 `gpui_kit::component::*` 组件类型或样式 API。
 
+pub mod ai;
 pub mod config;
 pub mod datafile;
 pub mod fs;

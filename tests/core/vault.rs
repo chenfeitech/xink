@@ -16,6 +16,15 @@ fn should_ignore_common_noise() {
 }
 
 #[test]
+fn 隐藏的_ai_目录始终跳过() {
+    // .xink 里放 skills 与 agent 记忆：即便是"显示隐藏文件"也不能进树，
+    // 否则 SKILL.md（是 .md）会变成一篇笔记进索引、进搜索、进双链解析。
+    assert!(should_ignore(".xink", false));
+    assert!(should_ignore(".xink", true));
+    assert!(!should_ignore("xink", true));
+}
+
+#[test]
 fn scan_collects_image_files() {
     // 目录树要能看到图片：jpg / png / gif / svg / webp 都应被收集，
     // 其余非笔记文件仍然不进树（避免把库里的杂文件全列出来）

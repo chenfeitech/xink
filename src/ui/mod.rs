@@ -1,5 +1,6 @@
 //! 视图层：只负责渲染与交互，业务规则在 core/
 
+pub mod ai;
 pub mod backlink;
 pub mod command;
 pub mod completion;
@@ -16,6 +17,7 @@ pub mod tags;
 pub mod theme;
 pub mod vault_manager;
 
+pub use ai::AiPanel;
 pub use backlink::BacklinkPanel;
 pub use command::open_command_palette;
 pub use editor::EditorPanel;

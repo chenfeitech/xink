@@ -34,6 +34,8 @@ actions!(
         /// 打开命令面板：按文件名搜索并打开笔记
         OpenCommandPalette,
         /// 打开全文搜索：按内容检索
-        OpenSearch
+        OpenSearch,
+        /// 打开 / 聚焦 AI 面板
+        OpenAiPanel
     ]
 );

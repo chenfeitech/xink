@@ -1496,6 +1496,56 @@ impl EditorPanel {
     /// 在光标处插入文本（供目录树"插入到当前笔记"使用）。
     ///
     /// 插入后走与用户输入相同的同步：更新笔记、防抖保存、重算预览。
+    // ── AI 协助接口 ──────────────────────────────────────────
+    //
+    // 只暴露 AI 需要的最小面：读选中 / 读整篇与光标 / 回填结果。
+    // 回填刻意用 `replace` 而不是 `set_value`：后者会把光标重置到 0，
+    // 用户会被甩回文章开头。
+
+    /// 当前选中的文本（无选中返回空串）
+    pub fn selected_text(&self, cx: &App) -> String {
+        self.editor.read(cx).selected_text().to_string()
+    }
+
+    /// 整篇文本与光标偏移（字节）。无笔记时返回 None
+    pub fn note_text_and_cursor(&self, cx: &App) -> Option<(String, usize)> {
+        let text = self.note.as_ref()?.text();
+        let cursor = self.editor.read(cx).cursor();
+        Some((text, cursor))
+    }
+
+    /// 当前笔记路径
+    pub fn note_path(&self) -> Option<std::path::PathBuf> {
+        self.note.as_ref().map(|n| n.path().to_path_buf())
+    }
+
+    /// 用 `text` 替换选中区；`whole` 为 true 时替换整篇。
+    ///
+    /// 返回是否真的改动了（无笔记时为 false）。
+    pub fn apply_ai_result(
+        &mut self,
+        text: &str,
+        whole: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.note.is_none() {
+            return false;
+        }
+        self.editor.update(cx, |state, cx| {
+            let range = if whole {
+                0..state.text().len()
+            } else {
+                state.selected_range()
+            };
+            state.set_selected_range(range, cx);
+            state.replace(text, window, cx);
+        });
+        self.on_change(window, cx);
+        self.refresh_doc(cx);
+        true
+    }
+
     pub fn insert_at_cursor(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.note.is_none() {
             return;

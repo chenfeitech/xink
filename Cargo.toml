@@ -71,6 +71,12 @@ syntect = { version = "5.3.0", default-features = false, features = [
     "default-themes",
     "regex-fancy",
 ] }
+# AI 能力：阻塞式 HTTP，跑在后台线程（规则 02 §6）。
+# 3.x 是当前活跃维护线；只开 rustls + json，避免拉进 native-tls 与 cookie 等。
+# 传递依赖（rustls / flate2 / base64 / log / libc …）大多已在 Cargo.lock 中存在单份，
+# 实测全新 release 编译 12.8s（大头是 ring），见 docs/ai/ollama-provider-design.md §2.6。
+ureq = { version = "3", features = ["rustls", "json"] }
+
 # 数据文件（JSON / YAML / TOML）解析与格式化预览。
 #
 # YAML 选 `noyalib`：`serde_yaml`（0.9.34+deprecated）与 `serde_yml`

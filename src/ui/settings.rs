@@ -23,7 +23,8 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Size};
 use gpui_kit::*;
 
 use crate::core::config::{
-    AppConfig, FontWeight, ImageDisplay, LinkOpen, PreviewDensity, ScrollSyncMode, ThemeMode,
+    AppConfig, FontWeight, ImageDisplay, LinkOpen, OutputLang, PreviewDensity, ScrollSyncMode,
+    ThemeMode,
 };
 use crate::core::theme::PRESET_THEMES;
 
@@ -34,16 +35,18 @@ pub enum SettingsTab {
     Basic,
     Editor,
     Preview,
+    Ai,
 }
 
 impl SettingsTab {
-    const ALL: [SettingsTab; 3] = [Self::Basic, Self::Editor, Self::Preview];
+    const ALL: [SettingsTab; 4] = [Self::Basic, Self::Editor, Self::Preview, Self::Ai];
 
     fn title(self) -> &'static str {
         match self {
             SettingsTab::Basic => "基本",
             SettingsTab::Editor => "编辑器",
             SettingsTab::Preview => "预览",
+            SettingsTab::Ai => "AI",
         }
     }
 
@@ -56,6 +59,7 @@ impl SettingsTab {
             SettingsTab::Basic => IconName::Settings,
             SettingsTab::Editor => IconName::FileText,
             SettingsTab::Preview => IconName::Eye,
+            SettingsTab::Ai => IconName::Replace,
         }
     }
 }
@@ -69,6 +73,8 @@ pub enum FieldKind {
     Choice,
     Number,
     Font,
+    /// 自由文本（base_url / keep_alive 这类无法枚举的值）
+    Text,
 }
 
 /// 控件构造函数。
@@ -89,6 +95,10 @@ type ResetFn = Rc<dyn Fn(&mut AppConfig)>;
 type ValueFn = Rc<dyn Fn(&AppConfig) -> f32>;
 /// 数值型写入（非数值项为空操作）
 type SetValueFn = Rc<dyn Fn(&mut AppConfig, f32)>;
+/// 文本型取值（非文本项恒为空串）
+type TextValueFn = Rc<dyn Fn(&AppConfig) -> String>;
+/// 文本型写入（非文本项为空操作）
+type TextSetFn = Rc<dyn Fn(&mut AppConfig, String)>;
 
 /// 一项设置的完整描述
 pub struct SettingField {
@@ -105,6 +115,10 @@ pub struct SettingField {
     pub reset: ResetFn,
     pub value: ValueFn,
     pub set_value: SetValueFn,
+    /// 文本型取值（非文本项恒为空串）
+    pub text_value: TextValueFn,
+    /// 文本型写入（非文本项为空操作）
+    pub text_set: TextSetFn,
     pub control: ControlFn,
 }
 
@@ -151,6 +165,8 @@ fn bool_field(
         reset,
         value: Rc::new(|_| 0.0),
         set_value: Rc::new(|_, _| {}),
+        text_value: Rc::new(|_| String::new()),
+        text_set: Rc::new(|_, _| {}),
         control,
     }
 }
@@ -193,6 +209,8 @@ fn choice_field(
         reset,
         value: Rc::new(|_| 0.0),
         set_value: Rc::new(|_, _| {}),
+        text_value: Rc::new(|_| String::new()),
+        text_set: Rc::new(|_, _| {}),
         control,
     }
 }
@@ -230,6 +248,46 @@ fn number_field(
         reset,
         value: Rc::new(get),
         set_value: Rc::new(set),
+        text_value: Rc::new(|_| String::new()),
+        text_set: Rc::new(|_, _| {}),
+        control,
+    }
+}
+
+/// 文本型设置项：一行 = 一项设置（同上述三个构造器）
+#[allow(clippy::too_many_arguments)]
+fn text_field(
+    id: &'static str,
+    title: &'static str,
+    desc: &'static str,
+    tab: SettingsTab,
+    group: &'static str,
+    get: fn(&AppConfig) -> String,
+    set: fn(&mut AppConfig, String),
+) -> SettingField {
+    let is_default = Rc::new(move |c: &AppConfig| get(c) == get(&AppConfig::default()));
+    let reset = Rc::new(move |c: &mut AppConfig| set(c, get(&AppConfig::default())));
+    let control = Rc::new(move |view: &mut SettingsView, c: &AppConfig| {
+        match view.inputs.get(id) {
+            Some(state) => Input::new(state).small().w(px(240.)).into_any_element(),
+            None => div().text_xs().child(get(c)).into_any_element(),
+        }
+    });
+    SettingField {
+        id,
+        title,
+        desc,
+        tab,
+        group,
+        kind: FieldKind::Text,
+        unavailable: None,
+        disabled: Rc::new(|_| None),
+        is_default,
+        reset,
+        value: Rc::new(|_| 0.0),
+        set_value: Rc::new(|_, _| {}),
+        text_value: Rc::new(get),
+        text_set: Rc::new(set),
         control,
     }
 }
@@ -250,7 +308,7 @@ fn with_meta(
 // ── 设置项清单 ────────────────────────────────────────────────
 
 fn all_fields() -> Vec<SettingField> {
-    use SettingsTab::{Basic, Editor, Preview};
+    use SettingsTab::{Ai, Basic, Editor, Preview};
 
     vec![
         // ── 基本 · 外观 ──
@@ -787,6 +845,128 @@ fn all_fields() -> Vec<SettingField> {
             |c| c.preview.debug_scroll_sync,
             |c, v| c.preview.debug_scroll_sync = v,
         ),
+        // ── AI · 连接 ──
+        bool_field(
+            "ai.enabled",
+            "启用 AI",
+            "关闭时所有 AI 入口不可用，也不会发起任何网络请求",
+            Ai,
+            "连接",
+            None,
+            |c| c.ai.enabled,
+            |c, v| c.ai.enabled = v,
+        ),
+        text_field(
+            "ai.ollama.base_url",
+            "Ollama 地址",
+            "本地 Ollama 的服务地址（默认 http://localhost:11434）",
+            Ai,
+            "连接",
+            |c| c.ai.ollama.base_url.clone(),
+            |c, v| c.ai.ollama.base_url = v,
+        ),
+        text_field(
+            "ai.ollama.keep_alive",
+            "模型常驻时长",
+            "Ollama keep_alive：5m 表示 5 分钟，-1 常驻，0 用完即卸",
+            Ai,
+            "连接",
+            |c| c.ai.ollama.keep_alive.clone(),
+            |c, v| c.ai.ollama.keep_alive = v,
+        ),
+        number_field(
+            "ai.ollama.num_ctx",
+            "上下文窗口",
+            "Ollama num_ctx：超过模型上限时会被自动夹回",
+            Ai,
+            "连接",
+            512.,
+            131072.,
+            512.,
+            "",
+            |c| c.ai.ollama.num_ctx as f32,
+            |c, v| c.ai.ollama.num_ctx = v as u32,
+        ),
+
+        // ── AI · 生成 ──
+        number_field(
+            "ai.timeout_secs",
+            "静默超时",
+            "两次响应之间允许的最长间隔（秒）",
+            Ai,
+            "生成",
+            5.,
+            600.,
+            5.,
+            "秒",
+            |c| c.ai.timeout_secs as f32,
+            |c, v| c.ai.timeout_secs = v as u64,
+        ),
+        number_field(
+            "ai.max_context_chars",
+            "上下文上限",
+            "发给模型的正文字符数上限，超出的部分会被截断并提示",
+            Ai,
+            "生成",
+            1000.,
+            200000.,
+            1000.,
+            "字",
+            |c| c.ai.max_context_chars as f32,
+            |c, v| c.ai.max_context_chars = v as usize,
+        ),
+        number_field(
+            "ai.max_steps",
+            "最大步数",
+            "一次任务里模型最多可以调用多少轮工具",
+            Ai,
+            "生成",
+            1.,
+            64.,
+            1.,
+            "步",
+            |c| c.ai.max_steps as f32,
+            |c, v| c.ai.max_steps = v as usize,
+        ),
+        choice_field(
+            "ai.output_language",
+            "输出语言",
+            "自动：跟随输入内容的语言",
+            Ai,
+            "生成",
+            None,
+            FieldKind::Choice,
+            || vec![
+                ("auto".into(), "跟随输入".into()),
+                ("zh".into(), "简体中文".into()),
+                ("en".into(), "English".into()),
+            ],
+            |c| match c.ai.output_language {
+                OutputLang::Auto => "auto".into(),
+                OutputLang::Zh => "zh".into(),
+                OutputLang::En => "en".into(),
+            },
+            |c, v| {
+                c.ai.output_language = match v.as_str() {
+                    "zh" => OutputLang::Zh,
+                    "en" => OutputLang::En,
+                    _ => OutputLang::Auto,
+                }
+            },
+        ),
+
+        // ── AI · 扩展 ──
+        bool_field(
+            "ai.skills_enabled",
+            "启用 Skills",
+            "库内 .xink/skills 与用户级 skills 是否参与命令面板",
+            Ai,
+            "扩展",
+            Some("M2 实现：当前仅登记不生效"),
+            |c| c.ai.skills_enabled,
+            |c, v| c.ai.skills_enabled = v,
+        ),
+
     ]
 }
 
@@ -975,10 +1155,18 @@ pub struct SettingsView {
     query: String,
     /// 命中的设置项 id，用于搜索后高亮
     highlight: Option<&'static str>,
-    /// 数值项的输入框状态，按字段 id 索引
+    /// 数值 / 文本项的输入框状态，按字段 id 索引
     inputs: HashMap<&'static str, Entity<InputState>>,
     /// 顶部搜索框的输入状态
     search_input: Entity<InputState>,
+    /// 「新增模型」的模型名输入
+    new_model_id: Entity<InputState>,
+    /// 「新增模型」的 base_url 输入（留空用全局地址）
+    new_model_base: Entity<InputState>,
+    /// 拉取模型列表的后台任务
+    model_task: Option<Task<()>>,
+    /// 模型管理区的提示 / 错误
+    model_notice: Option<String>,
 }
 
 /// 设置窗口各部分的固定尺寸。
@@ -1019,12 +1207,21 @@ impl SettingsView {
 
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索设置…"));
 
+        let new_model_id =
+            cx.new(|cx| InputState::new(window, cx).placeholder("模型名，如 qwen3.5:0.8b"));
+        let new_model_base =
+            cx.new(|cx| InputState::new(window, cx).placeholder("地址（留空用全局地址）"));
+
         let mut this = Self {
             tab: SettingsTab::Basic,
             query: String::new(),
             highlight: None,
             inputs: HashMap::new(),
             search_input,
+            new_model_id,
+            new_model_base,
+            model_task: None,
+            model_notice: None,
         };
 
         // 搜索框是唯一的 query 写入口：输入即过滤，无需回车
@@ -1043,15 +1240,22 @@ impl SettingsView {
 
         let cfg = crate::app::config(cx);
         for field in all_fields() {
-            if field.kind != FieldKind::Number {
+            let is_number = field.kind == FieldKind::Number;
+            let is_text = field.kind == FieldKind::Text;
+            if !is_number && !is_text {
                 continue;
             }
             let state = cx.new(|cx| InputState::new(window, cx));
-            let text = format_number(&field, &cfg);
+            let text = if is_number {
+                format_number(&field, &cfg)
+            } else {
+                (field.text_value)(&cfg)
+            };
             state.update(cx, |s, cx| s.set_value(text, window, cx));
 
             // 取出写入回调，避免在 FnMut 闭包里移动捕获的变量
             let set_value = field.set_value.clone();
+            let text_set = field.text_set.clone();
             cx.subscribe_in(
                 &state,
                 window,
@@ -1060,11 +1264,16 @@ impl SettingsView {
                         return;
                     }
                     let raw = state.read(cx).value().to_string();
-                    let Some(value) = raw.trim().parse::<f32>().ok() else {
-                        return;
-                    };
-                    let set_value = set_value.clone();
-                    crate::app::update_config(cx, move |c| set_value(c, value));
+                    if is_number {
+                        let Some(value) = raw.trim().parse::<f32>().ok() else {
+                            return;
+                        };
+                        let set_value = set_value.clone();
+                        crate::app::update_config(cx, move |c| set_value(c, value));
+                    } else {
+                        let text_set = text_set.clone();
+                        crate::app::update_config(cx, move |c| text_set(c, raw));
+                    }
                 },
             )
             .detach();
@@ -1073,6 +1282,220 @@ impl SettingsView {
         }
 
         this
+    }
+
+    /// 模型管理区：拉取 / 新增 / 设为默认 / 停用 / 删除
+    ///
+    /// 写入一律走 `crate::app::update_config`（校正 + 落盘 + 重绘），
+    /// 不直接改全局，避免与"改完立即生效"的既有约定脱节。
+    fn render_models(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let cfg = crate::app::config(cx);
+        let muted = cx.theme().muted_foreground;
+        let border = cx.theme().border;
+        let primary = cx.theme().primary;
+
+        let mut block = div()
+            .flex_col()
+            .gap_1()
+            .pt_3()
+            .mt_2()
+            .border_t_1()
+            .border_color(border)
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight(600.))
+                    .child("模型"),
+            );
+
+        // ── 拉取 ──
+        let base_url = cfg.ai.ollama.base_url.clone();
+        block = block.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    Button::new("ai-fetch-models")
+                        .small()
+                        .outline()
+                        .label("从 Ollama 拉取")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let base = base_url.clone();
+                            this.model_notice = Some("正在拉取…".into());
+                            let base_for_task = base.clone();
+                            let task = cx.background_spawn(async move {
+                                crate::core::ai::ollama::list_models(
+                                    &base_for_task,
+                                    std::time::Duration::from_secs(5),
+                                )
+                            });
+                            this.model_task = Some(cx.spawn_in(window, async move |this, window| {
+                                let result = task.await;
+                                _ = this.update_in(window, |this, _window, cx| {
+                                    match result {
+                                        Ok(models) => {
+                                            let count = models.len();
+                                            let cache = crate::core::ai::models::ModelCache {
+                                                fetched_at_ms: crate::core::ai::models::now_ms(),
+                                                base_url: base.clone(),
+                                                models,
+                                            };
+                                            let mut added = 0;
+                                            crate::app::update_config(cx, |cfg| {
+                                                added = cache.merge_into(&mut cfg.ai.models);
+                                            });
+                                            this.model_notice = Some(format!(
+                                                "拉取到 {count} 个模型，新增 {added} 个"
+                                            ));
+                                        }
+                                        Err(err) => {
+                                            this.model_notice = Some(err.message());
+                                        }
+                                    }
+                                    cx.notify();
+                                });
+                            }));
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("只更新上下文上限与能力，不会覆盖你改过的参数"),
+                ),
+        );
+
+        // ── 列表 ──
+        let models: Vec<(String, String, bool, bool)> = cfg
+            .ai
+            .models
+            .iter()
+            .map(|m| {
+                (
+                    m.id.clone(),
+                    m.capabilities.join("/"),
+                    m.enabled,
+                    m.id == cfg.ai.default_model,
+                )
+            })
+            .collect();
+
+        if models.is_empty() {
+            block = block.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("还没有模型：点上面拉取，或在下面手动添加"),
+            );
+        }
+
+        for (id, caps, enabled, is_default) in models {
+            let id_for_default = id.clone();
+            let id_for_toggle = id.clone();
+            let id_for_delete = id.clone();
+            let mut row = div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .py_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(if is_default { primary } else { cx.theme().foreground })
+                        .child(id.clone()),
+                )
+                .child(div().text_xs().text_color(muted).child(caps))
+                .child(
+                    Button::new(SharedString::from(format!("ai-default-{id}")))
+                        .small()
+                        .ghost()
+                        .label(if is_default { "当前默认" } else { "设为默认" })
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let id = id_for_default.clone();
+                            crate::app::update_config(cx, move |cfg| cfg.ai.default_model = id);
+                        })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("ai-toggle-{id}")))
+                        .small()
+                        .ghost()
+                        .label(if enabled { "停用" } else { "启用" })
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let id = id_for_toggle.clone();
+                            crate::app::update_config(cx, move |cfg| {
+                                if let Some(m) = cfg.ai.models.iter_mut().find(|m| m.id == id) {
+                                    m.enabled = !m.enabled;
+                                }
+                            });
+                        })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("ai-delete-{id}")))
+                        .small()
+                        .ghost()
+                        .label("删除")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let id = id_for_delete.clone();
+                            crate::app::update_config(cx, move |cfg| {
+                                cfg.ai.models.retain(|m| m.id != id);
+                            });
+                            this.model_notice = Some("已删除".into());
+                        })),
+                );
+            let _ = &mut row;
+            block = block.child(row);
+        }
+
+        // ── 手动新增 ──
+        block = block.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .pt_2()
+                .child(Input::new(&self.new_model_id).small().w(px(200.)))
+                .child(Input::new(&self.new_model_base).small().w(px(180.)))
+                .child(
+                    Button::new("ai-add-model")
+                        .small()
+                        .outline()
+                        .label("添加为 Ollama 模型")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let id = this.new_model_id.read(cx).value().trim().to_string();
+                            let base = this.new_model_base.read(cx).value().trim().to_string();
+                            if id.is_empty() {
+                                this.model_notice = Some("请先填写模型名".into());
+                                return;
+                            }
+                            let mut entry = crate::core::config::ModelEntry::default();
+                            entry.id = id.clone();
+                            entry.base_url = base;
+                            let mut added = false;
+                            crate::app::update_config(cx, |cfg| {
+                                if cfg.ai.models.iter().any(|m| m.id == id) {
+                                    return;
+                                }
+                                cfg.ai.models.push(entry);
+                                if cfg.ai.default_model.is_empty() {
+                                    cfg.ai.default_model = id.clone();
+                                }
+                                added = true;
+                            });
+                            this.model_notice = Some(if added {
+                                format!("已添加 {id}")
+                            } else {
+                                "该模型已在列表中".into()
+                            });
+                        })),
+                ),
+        );
+
+        if let Some(notice) = &self.model_notice {
+            block = block.child(div().text_xs().text_color(muted).child(notice.clone()));
+        }
+        block
     }
 
     /// 命中搜索的第一项，用于自动切分类并定位
@@ -1125,10 +1548,16 @@ impl Render for SettingsView {
 
         // 数值输入框与配置保持同步（步进/导入/重置后回显新值）
         for field in &fields {
-            if field.kind != FieldKind::Number {
+            let is_number = field.kind == FieldKind::Number;
+            let is_text = field.kind == FieldKind::Text;
+            if !is_number && !is_text {
                 continue;
             }
-            let text = format_number(field, &cfg);
+            let text = if is_number {
+                format_number(field, &cfg)
+            } else {
+                (field.text_value)(&cfg)
+            };
             if let Some(state) = self.inputs.get(field.id)
                 && state.read(cx).value() != text
             {
@@ -1226,6 +1655,12 @@ impl Render for SettingsView {
                     .text_color(cx.theme().muted_foreground)
                     .child("没有匹配的设置项"),
             );
+        }
+
+        // AI 分类额外挂一块「模型管理」：模型是列表、要能拉取与增删，
+        // 元数据表（一行一项、取值/写入都是固定字段）表达不了，因此单独渲染。
+        if self.tab == SettingsTab::Ai && query.is_empty() {
+            content = content.child(self.render_models(window, cx));
         }
 
         // 尺寸由外层对话框给定，这里不再动窗口：设置界面现在是主窗口内的
