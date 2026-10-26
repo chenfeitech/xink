@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use super::{Tool, ToolCall, ToolHost, execute, specs};
+use crate::core::ai::skills::{Skill, SkillSource};
 use crate::core::index::LinkRef;
 use crate::core::search::Hit;
 
@@ -129,6 +130,41 @@ fn call(name: &str, arguments: &str) -> ToolCall {
     ToolCall {
         name: name.into(),
         arguments: arguments.into(),
+    }
+}
+
+/// 只提供一个 skill 的宿主：`read_skill_resource` 的专用测试替身
+struct SkillHost {
+    dir: PathBuf,
+}
+
+impl ToolHost for SkillHost {
+    fn read_note(&self, _path: &Path) -> Option<String> {
+        None
+    }
+    fn search(&self, _query: &str, _limit: usize) -> Vec<Hit> {
+        Vec::new()
+    }
+    fn tags(&self) -> Vec<(String, usize)> {
+        Vec::new()
+    }
+    fn backlinks(&self, _path: &Path) -> Vec<LinkRef> {
+        Vec::new()
+    }
+    fn list_notes(&self, _limit: usize) -> Vec<(PathBuf, String)> {
+        Vec::new()
+    }
+    fn root(&self) -> Option<PathBuf> {
+        None
+    }
+    fn skill(&self, name: &str) -> Option<Skill> {
+        (name == "demo").then(|| Skill {
+            name: name.to_string(),
+            description: "一个演示技能".into(),
+            dir: self.dir.clone(),
+            body: "正文".into(),
+            source: SkillSource::Vault,
+        })
     }
 }
 
@@ -285,7 +321,7 @@ fn tools_never_touch_the_disk() {
 
 #[test]
 fn specs_cover_all_tools() {
-    let specs = specs();
+    let specs = specs(true);
     assert_eq!(specs.len(), Tool::all().len());
     for spec in specs {
         let name = spec["function"]["name"].as_str().unwrap_or_default();
@@ -294,4 +330,75 @@ fn specs_cover_all_tools() {
             "schema 里的名字必须能被解析回工具：{name}"
         );
     }
+}
+
+#[test]
+fn specs_omit_the_skill_tool_when_skills_are_off() {
+    let specs = specs(false);
+    assert_eq!(specs.len(), Tool::all().len() - 1);
+    assert!(
+        !specs
+            .iter()
+            .any(|spec| spec["function"]["name"] == "read_skill_resource"),
+        "总开关关掉时不该把 skill 工具塞给模型"
+    );
+}
+
+#[test]
+fn read_skill_resource_reads_references() {
+    let dir = std::env::temp_dir().join("xink-tool-skill");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("references")).unwrap();
+    std::fs::write(dir.join("references/a.md"), "# 参考资料\n").unwrap();
+    let host = SkillHost { dir: dir.clone() };
+
+    let result = execute(
+        &call(
+            "read_skill_resource",
+            r#"{"skill":"demo","path":"references/a.md"}"#,
+        ),
+        &host,
+        4000,
+    );
+    assert_eq!(result.output, "# 参考资料\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn read_skill_resource_rejects_escaping_paths() {
+    let dir = std::env::temp_dir().join("xink-tool-skill-escape");
+    let _ = std::fs::create_dir_all(&dir);
+    let host = SkillHost { dir: dir.clone() };
+
+    for bad in ["../outside.md", "/etc/passwd"] {
+        let result = execute(
+            &call(
+                "read_skill_resource",
+                &format!(r#"{{"skill":"demo","path":"{bad}"}}"#),
+            ),
+            &host,
+            4000,
+        );
+        assert!(
+            result.output.contains("不允许的资源路径"),
+            "{bad} 该被挡住：{:?}",
+            result.output
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn read_skill_resource_reports_unknown_skill_and_missing_args() {
+    let host = SkillHost {
+        dir: std::env::temp_dir(),
+    };
+    let unknown = execute(
+        &call("read_skill_resource", r#"{"skill":"nope","path":"a.md"}"#),
+        &host,
+        4000,
+    );
+    assert_eq!(unknown.output, "没有这个技能：nope");
+    let no_args = execute(&call("read_skill_resource", "{}"), &host, 4000);
+    assert!(no_args.output.contains("缺少参数"));
 }

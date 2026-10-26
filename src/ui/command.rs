@@ -16,9 +16,12 @@ use gpui_kit::*;
 
 use crate::app::AppState;
 use crate::core::ai::prompt::{Action, all_actions};
+use crate::core::ai::skills;
+use crate::core::config::AiConfig;
 use crate::core::fuzzy::fuzzy_match;
 use crate::core::media::{ai_excluded, is_editable_text};
 use crate::core::vault::{FileNode, Vault};
+use crate::state::workspace::app_data_dir;
 use crate::ui::tabs;
 
 /// 最多展示的匹配条数：候选可能上万，全量装进列表会让测量与渲染都变慢
@@ -30,6 +33,18 @@ const MARGIN_TOP: f32 = 80.;
 /// 列表最大高度
 const LIST_MAX_HEIGHT: f32 = 360.;
 
+/// 一条 AI 候选指向什么
+///
+/// 内置动作是编译期固定的枚举，skill 是运行时从磁盘发现的，
+/// 一个 `Option<Action>` 装不下后者，因此拆成两种。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AiTarget {
+    /// 内置动作
+    Action(Action),
+    /// skill，按 name 索引（执行时再去发现一遍，拿它的正文）
+    Skill(String),
+}
+
 /// 一个候选
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
@@ -37,11 +52,13 @@ pub struct Candidate {
     pub label: String,
     /// 打开用的绝对路径；AI 动作为空
     pub path: PathBuf,
-    /// 内置的 AI 动作（需求 A9.1：`AI:` 前缀过滤）
+    /// AI 入口（需求 A9.1：`AI:` 前缀过滤）
     ///
     /// `Some` 时 `path` 为空，确认后不是打开文件，而是对**当前笔记**
-    /// 跑这个动作。
-    pub ai: Option<Action>,
+    /// 跑这个动作或 skill。
+    pub ai: Option<AiTarget>,
+    /// 副标题：skill 的 description，帮用户分辨同名相近的技能
+    pub hint: Option<String>,
 }
 
 /// 命令面板的状态
@@ -86,9 +103,12 @@ impl CommandPalette {
     /// 扫描是同步 IO，绝不能在主线程做（万级目录会明显卡顿），
     /// 因此丢给 `background_spawn`，完成后再回到实体上更新候选。
     fn start_scan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let root = cx
+        // skill 只在扫描时才发现一次： discovering 要读盘，放在主线程会卡，
+        // 这里把配置一起带进后台任务（配置很小，克隆一份最省事）
+        let (root, ai) = cx
             .try_global::<AppState>()
-            .and_then(|state| state.vaults.active_root());
+            .map(|state| (state.vaults.active_root(), state.config.ai.clone()))
+            .unwrap_or((None, AiConfig::default()));
 
         let Some(root) = root else {
             self.notice = Some("还没有打开库：先在左侧打开一个文件夹".to_string());
@@ -101,7 +121,7 @@ impl CommandPalette {
             state.set_loading(true, window, cx);
         });
 
-        let task = cx.background_spawn(async move { collect_candidates(&root) });
+        let task = cx.background_spawn(async move { collect_candidates(&root, &ai) });
         cx.spawn_in(window, async move |this, window| {
             let result = task.await;
             _ = this.update_in(window, |this, window, cx| {
@@ -199,10 +219,17 @@ impl CommandPalette {
             return;
         };
         close_palette(window, cx);
-        // AI 动作不打开文件：对当前笔记跑它（没打开笔记时函数自己会提示）
-        if let Some(action) = candidate.ai {
-            crate::app::run_ai_action(action, window, cx);
-            return;
+        // AI 入口不打开文件：对当前笔记跑它（没打开笔记时函数自己会提示）
+        match candidate.ai {
+            Some(AiTarget::Action(action)) => {
+                crate::app::run_ai_action(action, window, cx);
+                return;
+            }
+            Some(AiTarget::Skill(name)) => {
+                crate::app::run_ai_skill(&name, window, cx);
+                return;
+            }
+            None => {}
         }
         tabs::open_note(candidate.path, window, cx);
     }
@@ -212,11 +239,15 @@ impl Render for CommandPalette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         // 预先取好文本：items 的构造器要 `move`，不能在闭包里再借用 self
-        let rows: Vec<(String, Vec<usize>)> = self
+        let rows: Vec<(String, Vec<usize>, Option<String>)> = self
             .matches
             .iter()
             .zip(self.hits.iter())
-            .filter_map(|(ix, hits)| self.files.get(*ix).map(|c| (c.label.clone(), hits.clone())))
+            .filter_map(|(ix, hits)| {
+                self.files
+                    .get(*ix)
+                    .map(|c| (c.label.clone(), hits.clone(), c.hint.clone()))
+            })
             .collect();
         let notice = self.notice.clone().unwrap_or_default();
 
@@ -226,8 +257,25 @@ impl Render for CommandPalette {
             .bordered(false)
             .placeholder("搜索文件名…")
             .max_h(px(LIST_MAX_HEIGHT))
-            .items(rows.into_iter().map(|(label, hits)| {
-                CommandItem::new().child(move |_, cx| highlighted_label(&label, &hits, cx))
+            .items(rows.into_iter().map(|(label, hits, hint)| {
+                CommandItem::new().child(move |_, cx| {
+                    let mut row = div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(highlighted_label(&label, &hits, cx));
+                    // 渲染闭包是 `Fn`（每帧都可能再调一次），不能把 hint 移走
+                    if let Some(hint) = hint.clone() {
+                        row = row.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(hint),
+                        );
+                    }
+                    row
+                })
             }))
             .empty(move |_, _, cx| {
                 div()
@@ -325,7 +373,7 @@ fn close_palette(window: &mut Window, cx: &mut App) {
 ///
 /// 只收 [`is_editable_text`] 命中的文件：与目录树、打开入口用同一判据，
 /// 否则面板里会出现"选了却打不开"的条目。
-fn collect_candidates(root: &Path) -> Result<Vec<Candidate>, String> {
+fn collect_candidates(root: &Path, cfg: &AiConfig) -> Result<Vec<Candidate>, String> {
     let vault = Vault::open(root.to_path_buf()).map_err(|err| err.to_string())?;
     let tree = vault.scan(false).map_err(|err| err.to_string())?;
 
@@ -336,8 +384,23 @@ fn collect_candidates(root: &Path) -> Result<Vec<Candidate>, String> {
         out.push(Candidate {
             label: format!("AI: {}", action.label()),
             path: PathBuf::new(),
-            ai: Some(action),
+            ai: Some(AiTarget::Action(action)),
+            hint: None,
         });
+    }
+    // 运行时发现的 skill：同样的 `AI:` 前缀，副标题是 description。
+    // 总开关关掉就一个都不出现；解析失败的那批只在设置里可见，不进面板。
+    if cfg.skills_enabled {
+        let user_dir = skills::user_skills_dir(&app_data_dir());
+        let (found, _issues) = skills::discover(Some(root), &user_dir);
+        for skill in skills::enabled(&found, &cfg.disabled_skills) {
+            out.push(Candidate {
+                label: format!("AI: {}", skill.name),
+                path: PathBuf::new(),
+                ai: Some(AiTarget::Skill(skill.name.clone())),
+                hint: Some(skill.description.clone()),
+            });
+        }
     }
     out.sort_by(|a, b| a.label.cmp(&b.label));
     Ok(out)
@@ -359,6 +422,7 @@ fn flatten(root: &Path, node: &FileNode, out: &mut Vec<Candidate>) {
                 label,
                 path: node.path.clone(),
                 ai: None,
+                hint: None,
             });
         }
         return;

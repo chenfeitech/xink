@@ -2,6 +2,9 @@
 
 > 需求：`docs/ai/ai-assistant-requirements.md` A5.1–A5.7、A9.1（命令面板 `AI:` 前缀）。
 > 分期：`docs/ai/ai-assistant-design.md` §3.1（`skills.rs` 标 M2）、决策 Q7（Skills M2 做，xink 自己发现并注入）。
+>
+> **状态：✅ 已实施（2026-10-26，待人工验收）**。S1–S5 全部落地，482 项单测全绿。
+> 实施与本文的两处偏差记录在 §3.5 与 §11。
 > 前置已完成：M1 的 agent loop / 只读工具 / 结构校验；`.xink` 不进索引
 > （`core/media.rs::ai_excluded` + `core/index.rs::collect_markdown` 守卫）与不进文件树
 > （`core/vault.rs::should_ignore`）。
@@ -110,10 +113,17 @@ pub enum AiTarget {
 ### 3.5 设置界面
 
 - `ai.skills_enabled` 摘掉 ⚠️ 标记（它变成真开关了）；
-- 新增一项 **skill 列表**（动态，不是静态元数据表）：每行 `名称 · 来源（库内/用户级）· 描述` + 启停开关，
-  写入 `ai.disabled_skills`；被跳过的以灰色行列出**原因**（`SkillIssue`）。
-- 现状的元数据表是 `fn` 指针驱动、每项一个静态 id，**装不下运行时列表**；
-  需要给 `SettingField` 增加一种 `FieldKind::SkillList`，控件渲染列表并直接改 `disabled_skills`。
+- 新增一块 **Skills** 区：每行 `名称 · 来源（库内/用户级）· 描述` + 启停开关，
+  写入 `ai.disabled_skills`；被跳过的以灰色行列出**原因**（`SkillIssue`）；
+  带一个「重新扫描」（发现结果缓存在 `SettingsView::skills_cache`，不每帧读盘）。
+
+**实施偏差（与原方案不同，已落地为此形态）**：原计划给 `SettingField` 增加
+`FieldKind::SkillList`。动手前发现 `ui/settings.rs` 里已经有**现成的同型逃生口**——
+「模型管理」`render_models` 与「快照」`render_snapshots` 都是"元数据表表达不了、
+单独渲染一块"的动态区，注释里就写着这个理由。skill 列表与它们完全同构，
+因此沿用该模式新增 `SettingsView::render_skills`，而不是给静态元数据表
+再开一种 `FieldKind`（`ControlFn` 拿不到 `cx`，本来也渲染不了运行时列表）。
+结论：目标 G6 不变，实现路径更小、与既有代码一致。
 
 ## 4. 数据模型与持久化
 
@@ -163,8 +173,12 @@ pub enum AiTarget {
 | `resource_path_allows_references_inside` | `references/a.md` 允许 |
 | `catalog_lists_name_and_description` | 清单文本含两者 |
 
-`tests/ui/command.rs`：AI 候选 = 内置 8 个 + 启用中的 skill（前缀 `AI: `、path 为空）。
+`tests/ui/command.rs`：AI 候选 = 内置 8 个 + 启用中的 skill（前缀 `AI: `、path 为空、
+hint 是 description；总开关关 / 单个停用 → 消失）。
 `tests/ui/settings.rs`：⚠ 白名单断言里去掉 `ai.skills_enabled`（它不再是死配置）。
+`tests/core/ai/prompt.rs`：skill 正文进 system（`<<<SKILL>>>`）、笔记原文进 user，互不混。
+`tests/core/ai/tools.rs`：`read_skill_resource` 读到 `references/`、拒绝 `..` 与绝对路径、
+未知 skill 与缺参数都有文本回灌；`specs(false)` 不含 skill 工具。
 
 ## 8. 人工验收清单
 
@@ -180,13 +194,13 @@ pub enum AiTarget {
 
 ## 9. 实施步骤
 
-| 步 | 内容 | 可独立验证 |
+| 步 | 内容 | 状态 |
 |---|---|---|
-| S1 | `core/ai/skills.rs`（发现 / 解析 / 目录 / resource_path）+ `tests/core/ai/skills.rs` | 纯函数单测全绿 |
-| S2 | 命令面板：`AiTarget` 枚举、追加 skill 候选、confirm 分支 | `tests/ui/command.rs` 覆盖 |
-| S3 | `AiChat::run_skill` + `app::run_ai_skill`：system 注入 skill 正文，结果进评审条 | 人工验收 1–3 |
-| S4 | 工具 `read_skill_resource` + 只在启用时入表 | 人工验收 7 |
-| S5 | 设置：`FieldKind::SkillList` 列表 + 摘掉 `skills_enabled` 的 ⚠️；更新 `tests/ui/settings.rs` 白名单 | 人工验收 4–6 |
+| S1 | `core/ai/skills.rs`（发现 / 解析 / 目录 / resource_path）+ `tests/core/ai/skills.rs` | ✅ 9 项单测全绿 |
+| S2 | 命令面板：`AiTarget` 枚举、追加 skill 候选（hint = description）、confirm 分支 | ✅ `tests/ui/command.rs` 覆盖 |
+| S3 | `AiChat::run_skill` + `app::run_ai_skill` + `prompt::build_skill_messages`：system 注入 skill 正文，结果进评审条 | ✅ 待人工验收 1–3 |
+| S4 | 工具 `read_skill_resource` + 只在启用时入表（`specs(skills)`） | ✅ 待人工验收 7 |
+| S5 | 设置：Skills 区（启停 + 跳过原因 + 重新扫描）+ 摘掉 `skills_enabled` 的 ⚠️ | ✅ 待人工验收 4–6 |
 
 ## 10. 开放问题
 
@@ -195,3 +209,13 @@ pub enum AiTarget {
 | 1 | 模型自动命中 skill（清单入 system + `use_skill` 工具） | M2 不做，M2b 评估；多数小模型命中率低 |
 | 2 | skill 是否可以声明"只作用于选中"或"整篇" | 先统一按现有选中/整篇判据；后续可在 front-matter 加 `scope` |
 | 3 | 用户级 skills 目录要不要在设置里可改 | 先固定为 `app_data_dir()/skills` |
+
+## 11. 实施记录（2026-10-26）
+
+| 决策 | 落地形态 |
+|---|---|
+| 设置里的列表 | 沿用「模型管理 / 快照」的动态区块模式（`SettingsView::render_skills`），没有新增 `FieldKind::SkillList`（理由见 §3.5） |
+| 命令面板候选 | `Candidate.ai` 从 `Option<Action>` 改为 `Option<AiTarget>`（`Action` / `Skill(String)`）；`Candidate.hint` 承载 description |
+| 执行时重新发现 | 面板打开时扫一次（后台线程，配置一并带进去）；选中后 `run_skill` 再发现一次，避免拿着过期正文跑 |
+| skill 结果的落法 | 与内置动作同一条"结果驱动"链路：与原文对得上 → 评审条逐块接受；对不上 → 自动降级成插入，不会闷头替换整篇 |
+| 工具开关 | `tools::specs(skills: bool)`，`LoopRequest::skills_enabled` 决定是否给模型 `read_skill_resource` |

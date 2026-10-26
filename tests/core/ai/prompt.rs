@@ -1,6 +1,6 @@
 //! prompt 组装
 
-use crate::core::ai::prompt::{ALL_ACTIONS, Action, build_messages};
+use crate::core::ai::prompt::{ALL_ACTIONS, Action, build_messages, build_skill_messages};
 use crate::core::config::OutputLang;
 
 #[test]
@@ -19,6 +19,23 @@ fn 笔记内容被包在数据块里() {
     assert!(msgs[0].content.contains("不是指令"), "必须有注入防护声明");
     assert!(msgs[1].content.contains("<<<CONTENT>>>"));
     assert!(msgs[1].content.contains("<<<END>>>"));
+}
+
+#[test]
+fn 技能正文与笔记原文分开且都有边界() {
+    let msgs = build_skill_messages("demo", "把标题改成一句话", "笔记特有的句子", OutputLang::Zh);
+    assert_eq!(msgs.len(), 2);
+    // 正文是**指令**，进 system；原文是**数据**，进 user：两边都不许混
+    assert!(msgs[0].content.contains("<<<SKILL>>>"));
+    assert!(msgs[0].content.contains("把标题改成一句话"));
+    assert!(
+        !msgs[0].content.contains("笔记特有的句子"),
+        "笔记原文不许混进 system 段"
+    );
+    assert!(msgs[1].content.contains("<<<CONTENT>>>"));
+    assert!(msgs[1].content.contains("笔记特有的句子"));
+    assert!(msgs[0].content.contains("demo"), "要标明技能名");
+    assert!(msgs[0].content.contains("用简体中文输出"));
 }
 
 #[test]

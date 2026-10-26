@@ -287,6 +287,23 @@ pub fn run_ai_action(action: AiAction, window: &mut Window, cx: &mut App) {
     panel.update(cx, |panel, cx| panel.run_ai_action(action, window, cx));
 }
 
+/// 从命令面板跑一条 skill：作用于当前活动标签的笔记（需求 A5.3）
+///
+/// 与 [`run_ai_action`] 同构：skill 是运行时发现的，命令面板只记得名字，
+/// 正文在执行时由 `AiChat::run_skill` 重新发现一遍（期间被删掉会提示）。
+pub fn run_ai_skill(name: &str, window: &mut Window, cx: &mut App) {
+    let Some(state) = cx.try_global::<AppState>() else {
+        return;
+    };
+    let Some(path) = state.tabs.active().cloned() else {
+        return;
+    };
+    let Some(panel) = state.tabs.get(&path) else {
+        return;
+    };
+    panel.update(cx, |panel, cx| panel.run_ai_skill(name, window, cx));
+}
+
 /// 应用主题配置：System 跟随系统外观，Light / Dark 强制切换。
 ///
 /// **必须走 [`Theme::change`]**，不能只改 `Theme::global_mut(cx).colors`：

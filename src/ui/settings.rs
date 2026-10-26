@@ -22,6 +22,8 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Size};
 use gpui_kit::*;
 
+use crate::app::AppState;
+use crate::core::ai::skills;
 use crate::core::config::{
     AppConfig, FontWeight, ImageDisplay, LinkOpen, OutputLang, PreviewDensity, ScrollSyncMode,
     ThemeMode,
@@ -988,7 +990,7 @@ fn all_fields() -> Vec<SettingField> {
             "库内 .xink/skills 与用户级 skills 是否参与命令面板",
             Ai,
             "扩展",
-            Some("M2 实现：当前仅登记不生效"),
+            None,
             |c| c.ai.skills_enabled,
             |c, v| c.ai.skills_enabled = v,
         ),
@@ -1239,6 +1241,9 @@ pub struct SettingsView {
     confirm_clear_snapshots: bool,
     /// 快照区的提示 / 错误
     snapshot_notice: Option<String>,
+    /// 已发现的 skill 与被跳过的项：发现要读盘，缓存住，
+    /// 只在首次渲染或点了"重新扫描"时读一次
+    skills_cache: Option<(Vec<skills::Skill>, Vec<skills::SkillIssue>)>,
 }
 
 /// 设置窗口各部分的固定尺寸。
@@ -1296,6 +1301,7 @@ impl SettingsView {
             model_notice: None,
             confirm_clear_snapshots: false,
             snapshot_notice: None,
+            skills_cache: None,
         };
 
         // 搜索框是唯一的 query 写入口：输入即过滤，无需回车
@@ -1720,6 +1726,134 @@ impl SettingsView {
         block
     }
 
+    /// Skills：列出发现到的技能、逐个启停，并给出被跳过的原因
+    /// （需求 A5.6 / A5.7，设计 `docs/ai/ai-skills-design.md` §3.5）
+    ///
+    /// 与「模型管理」「快照」同一个理由单独渲染：列表是**运行时数据**，
+    /// 元数据表（一行一项、取值 / 写入都是固定字段）表达不了。
+    fn render_skills(&mut self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let border = cx.theme().border;
+        let cfg = crate::app::config(cx);
+        let root = cx
+            .try_global::<AppState>()
+            .and_then(|state| state.vaults.active_root());
+
+        if self.skills_cache.is_none() {
+            let user_dir = skills::user_skills_dir(&crate::state::workspace::app_data_dir());
+            self.skills_cache = Some(skills::discover(root.as_deref(), &user_dir));
+        }
+        let (found, issues) = self.skills_cache.clone().unwrap_or_default();
+
+        let mut block = div()
+            .flex_col()
+            .gap_1()
+            .pt_3()
+            .mt_2()
+            .border_t_1()
+            .border_color(border)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .font_weight(FontWeight(600.))
+                            .child("Skills"),
+                    )
+                    .child(
+                        Button::new("ai-rescan-skills")
+                            .small()
+                            .outline()
+                            .label("重新扫描")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.skills_cache = None;
+                                cx.notify();
+                            })),
+                    ),
+            );
+
+        block = block.child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child(format!("发现 {} 个技能", found.len())),
+        );
+        if !cfg.ai.skills_enabled {
+            block = block.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("总开关已关闭：下面的启停不影响命令面板"),
+            );
+        }
+
+        for skill in &found {
+            let name = skill.name.clone();
+            let enabled = !cfg.ai.disabled_skills.iter().any(|n| n == &skill.name);
+            let toggle_name = name.clone();
+            block = block.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .py_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex_col()
+                            .child(div().text_sm().child(format!(
+                                "{} · {}",
+                                skill.name,
+                                skill.source.label()
+                            )))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(skill.description.clone()),
+                            ),
+                    )
+                    .child(
+                        Switch::new(format!("skill-{name}"))
+                            .checked(enabled)
+                            .on_click(move |v, _, cx| {
+                                let v = *v;
+                                let name = toggle_name.clone();
+                                crate::app::update_config(cx, move |cfg| {
+                                    if v {
+                                        cfg.ai.disabled_skills.retain(|n| n != &name);
+                                    } else if !cfg.ai.disabled_skills.contains(&name) {
+                                        cfg.ai.disabled_skills.push(name.clone());
+                                    }
+                                });
+                            }),
+                    ),
+            );
+        }
+
+        // 被跳过的要看得见原因：静默消失会让用户以为"放了没生效"
+        for issue in &issues {
+            block = block.child(div().text_xs().text_color(muted).child(format!(
+                "跳过 {}: {}",
+                issue.path.display(),
+                issue.reason
+            )));
+        }
+
+        if found.is_empty() && issues.is_empty() {
+            block =
+                block.child(div().text_xs().text_color(muted).child(
+                    "还没有技能：放到库内 .xink/skills/<名称>/SKILL.md，或用户级 skills 目录",
+                ));
+        }
+        block
+    }
+
     /// 命中搜索的第一项，用于自动切分类并定位
     fn first_match(&self, cfg: &AppConfig) -> Option<&'static str> {
         let q = self.query.trim().to_lowercase();
@@ -1891,6 +2025,8 @@ impl Render for SettingsView {
             content = content.child(self.render_models(window, cx));
             // 同一分类下再挂一块「快照」：列表类信息，元数据表表达不了
             content = content.child(self.render_snapshots(cx));
+            // Skills 同理：条目来自运行时发现，且要逐个启停
+            content = content.child(self.render_skills(cx));
         } else {
             // 切走就是放弃"确认清空"
             self.confirm_clear_snapshots = false;

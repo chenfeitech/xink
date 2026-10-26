@@ -154,6 +154,32 @@ pub fn build_messages(
     ]
 }
 
+/// 组装一条 skill 的消息（M2，设计 `docs/ai/ai-skills-design.md` §3.3）
+///
+/// 与内置动作的结构一致，只是指令不来自代码里的枚举，而来自用户的
+/// `SKILL.md` 正文。两条约定不变：
+/// 1. **正文在 system 段、笔记原文在 user 段**——skill 正文是"要怎么做"的
+///    指令，笔记原文始终是数据；
+/// 2. 两边都用 `<<<>>>` 包起来，提示注入时模型能分清边界。
+pub fn build_skill_messages(
+    name: &str,
+    body: &str,
+    content: &str,
+    lang: OutputLang,
+) -> Vec<ChatMessage> {
+    let system = format!(
+        "{SYSTEM_PROMPT}\n{}\n\
+         \n本次要遵循的技能《{name}》：下面的技能正文是**指令**，\
+         与上面的规则冲突时以技能正文为准。\n\
+         <<<SKILL>>>\n{body}\n<<<END_SKILL>>>",
+        language_clause(lang)
+    );
+    vec![
+        ChatMessage::system(system),
+        ChatMessage::user(format!("<<<CONTENT>>>\n{content}\n<<<END>>>")),
+    ]
+}
+
 // 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
 #[cfg(test)]
 #[path = "../../../tests/core/ai/prompt.rs"]

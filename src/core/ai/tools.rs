@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use crate::core::ai::skills::{self, Skill};
 use crate::core::index::LinkRef;
 use crate::core::markdown::parse_facts;
 use crate::core::search::Hit;
@@ -50,6 +51,13 @@ pub trait ToolHost {
     fn list_notes(&self, limit: usize) -> Vec<(PathBuf, String)>;
     /// 库根，用来把路径显示成相对路径（短、省 token）
     fn root(&self) -> Option<PathBuf>;
+    /// 按名字取一个 skill（M2：`read_skill_resource` 要用它的目录）
+    ///
+    /// 默认没有 skill——测试宿主不关心这件事，只有 UI 侧的宿主会去
+    /// 发现库内 / 用户级两级目录。
+    fn skill(&self, _name: &str) -> Option<Skill> {
+        None
+    }
 }
 
 /// 内置工具
@@ -67,10 +75,15 @@ pub enum Tool {
     Outline,
     /// 笔记清单
     ListNotes,
+    /// 读 skill 自带的资源（`references/` 等）
+    ///
+    /// 只在 skills 总开关打开时才进工具表（见 [`specs`]）：关掉时模型
+    /// 不该看到这个能力。
+    ReadSkillResource,
 }
 
 impl Tool {
-    pub fn all() -> [Tool; 6] {
+    pub fn all() -> [Tool; 7] {
         [
             Tool::ReadNote,
             Tool::SearchNotes,
@@ -78,6 +91,7 @@ impl Tool {
             Tool::ListBacklinks,
             Tool::Outline,
             Tool::ListNotes,
+            Tool::ReadSkillResource,
         ]
     }
 
@@ -89,6 +103,7 @@ impl Tool {
             Tool::ListBacklinks => "list_backlinks",
             Tool::Outline => "outline",
             Tool::ListNotes => "list_notes",
+            Tool::ReadSkillResource => "read_skill_resource",
         }
     }
 
@@ -105,6 +120,9 @@ impl Tool {
             Tool::ListBacklinks => "列出引用了指定笔记的位置（反向链接）",
             Tool::Outline => "列出指定笔记的标题大纲",
             Tool::ListNotes => "列出库内笔记（路径与标题）",
+            Tool::ReadSkillResource => {
+                "读取技能自带的资源文件（如 references/），只能读该技能目录内"
+            }
         }
     }
 
@@ -131,6 +149,17 @@ impl Tool {
                     "limit": { "type": "integer", "description": "最多返回几条，默认 30" }
                 }
             }),
+            Tool::ReadSkillResource => json!({
+                "type": "object",
+                "properties": {
+                    "skill": { "type": "string", "description": "技能名（SKILL.md 里的 name）" },
+                    "path": {
+                        "type": "string",
+                        "description": "技能目录内的相对路径，如 references/a.md"
+                    }
+                },
+                "required": ["skill", "path"]
+            }),
         }
     }
 
@@ -150,9 +179,16 @@ impl Tool {
     }
 }
 
-/// 全部工具的 schema（发请求时一次带上）
-pub fn specs() -> Vec<Value> {
-    Tool::all().iter().map(|t| t.schema()).collect()
+/// 这一轮要带的工具 schema
+///
+/// `skills` 为 false 时不带 [`Tool::ReadSkillResource`]：库里一个 skill 都没有
+/// （或用户关了总开关）时，多一个工具就是多一份"模型瞎调"的机会。
+pub fn specs(skills: bool) -> Vec<Value> {
+    Tool::all()
+        .into_iter()
+        .filter(|tool| skills || *tool != Tool::ReadSkillResource)
+        .map(|tool| tool.schema())
+        .collect()
 }
 
 /// 模型发起的一次工具调用
@@ -295,6 +331,25 @@ fn run(tool: Tool, arguments: &str, host: &dyn ToolHost) -> String {
                 .map(|(path, title)| format!("{} — {}", show(host, path), title))
                 .collect::<Vec<_>>()
                 .join("\n")
+        }
+        Tool::ReadSkillResource => {
+            let name = text("skill");
+            let rel = text("path");
+            if name.is_empty() || rel.is_empty() {
+                return "缺少参数 skill 或 path".into();
+            }
+            let Some(skill) = host.skill(&name) else {
+                return format!("没有这个技能：{name}");
+            };
+            // 越界路径由 `resource_path` 挡掉（`..`、绝对路径、盘符），
+            // 一个 skill 不该把手伸到它自己的目录之外
+            let Some(path) = skills::resource_path(&skill, &rel) else {
+                return format!("不允许的资源路径：{rel}（只能读技能目录内的文件）");
+            };
+            match std::fs::read_to_string(&path) {
+                Ok(content) => content,
+                Err(_) => format!("读不到技能资源：{rel}"),
+            }
         }
     }
 }

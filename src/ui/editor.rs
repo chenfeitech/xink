@@ -1620,6 +1620,23 @@ impl EditorPanel {
         }
     }
 
+    /// 直接跑一条 skill：命令面板的 `AI: <skill>` 入口走这里（需求 A5.3）
+    ///
+    /// 与 [`Self::run_ai_action`] 同一条链路，只是指令来自 skill 正文。
+    pub fn run_ai_skill(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.note.is_none() {
+            self.status = "没有打开的笔记：技能要作用在一篇笔记上".into();
+            cx.notify();
+            return;
+        }
+        if !self.ai_open {
+            self.toggle_ai_chat(window, cx);
+        }
+        if let Some(chat) = &self.ai_chat {
+            chat.update(cx, |chat, cx| chat.run_skill(name, window, cx));
+        }
+    }
+
     /// 打开 / 关闭编辑器下方的 AI 对话条
     pub fn toggle_ai_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ai_chat.is_none() {

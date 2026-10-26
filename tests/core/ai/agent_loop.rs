@@ -111,6 +111,7 @@ fn request<'a>(
         api_key: None,
         messages: vec![ChatMessage::user("帮我看看")],
         tools_enabled,
+        skills_enabled: true,
         max_steps,
         max_tool_chars: 4000,
         host,

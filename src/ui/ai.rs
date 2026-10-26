@@ -11,6 +11,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -30,6 +31,7 @@ use crate::core::ai::keychain::{MacKeychain, resolve_api_key};
 use crate::core::ai::ollama::OllamaProvider;
 use crate::core::ai::openai::OpenAiProvider;
 use crate::core::ai::prompt::{Action, all_actions};
+use crate::core::ai::skills;
 use crate::core::ai::snapshot::write_snapshot;
 use crate::core::ai::tools::ToolHost;
 use crate::core::ai::verify::LinkIndex;
@@ -102,11 +104,16 @@ enum RuntimeEvent {
 /// 没必要拷两遍。
 struct VaultHost {
     snap: IndexSnapshot,
+    /// 发现一次就够：一轮里可能被问到多次，但目录不会中途变
+    skills: OnceLock<Vec<skills::Skill>>,
 }
 
 impl VaultHost {
     fn new(snap: IndexSnapshot) -> Self {
-        Self { snap }
+        Self {
+            snap,
+            skills: OnceLock::new(),
+        }
     }
 
     /// 模型给的多半是相对库根的路径，工具要的是能打开的那个
@@ -162,6 +169,14 @@ impl ToolHost for VaultHost {
     fn root(&self) -> Option<PathBuf> {
         self.snap.root().map(|p| p.to_path_buf())
     }
+
+    fn skill(&self, name: &str) -> Option<skills::Skill> {
+        let found = self.skills.get_or_init(|| {
+            let user_dir = skills::user_skills_dir(&app_data_dir());
+            skills::discover(self.root().as_deref(), &user_dir).0
+        });
+        skills::find(found, name).cloned()
+    }
 }
 
 impl LinkIndex for VaultHost {
@@ -171,12 +186,14 @@ impl LinkIndex for VaultHost {
 }
 
 /// 一次请求属于哪种模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum AiMode {
     /// 自由对话
     Chat,
     /// 内置动作（改写类）
     Action(Action),
+    /// 用户选的 skill：只留名字，正文在执行时重新发现
+    Skill(String),
 }
 
 /// 对话区的一个内容块
@@ -653,6 +670,69 @@ impl AiChat {
         self.start_request(messages, window, cx);
     }
 
+    /// 执行一条 skill（M2，设计 `docs/ai/ai-skills-design.md` §3.3）
+    ///
+    /// 与 [`Self::run_action`] 同一条链路：上下文同判据（选中 / 整篇）、
+    /// 结果同样进评审条逐块接受。差别只有一处——指令来自 skill 正文，
+    /// 而不是代码里的枚举。
+    pub fn run_skill(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        // 面板是打开时才发现的，执行时再发现一遍：期间被删掉或改名要有提示，
+        // 而不是拿一份过期的正文去跑。
+        let root = cx
+            .try_global::<AppState>()
+            .and_then(|state| state.vaults.active_root());
+        let user_dir = skills::user_skills_dir(&app_data_dir());
+        let (found, _) = skills::discover(root.as_deref(), &user_dir);
+        let Some(skill) = skills::find(&found, name).cloned() else {
+            self.error = Some(format!("技能已不存在：{name}"));
+            cx.notify();
+            return;
+        };
+
+        self.mode = AiMode::Skill(name.to_string());
+        // 同上：先切会话，再压块
+        let Some((path, selection, whole, cursor)) = self.capture(cx) else {
+            cx.notify();
+            return;
+        };
+        self.blocks.push(Block::user(format!("技能：{name}")));
+        self.blocks.push(Block::assistant(String::new()));
+        let scope = if selection.trim().is_empty() {
+            ContextScope::WholeNote
+        } else {
+            ContextScope::Selection
+        };
+        let cfg = config(cx);
+        let prepared = assemble(scope, &selection, &whole, cursor, cfg.ai.max_context_chars);
+        self.notice = prepared.notice.clone();
+        self.input_tokens = Some(crate::core::ai::estimate_tokens(&prepared.text));
+        // 落地方式由**结果**决定（`classify_and_record`）：与原文对得上就进
+        // 评审条逐块决定，对不上自动降级成插入，不会闷头替换整篇。
+        let kind = if selection.trim().is_empty() {
+            ApplyKind::ReplaceWhole
+        } else {
+            ApplyKind::ReplaceSelection
+        };
+        self.pending = Some(PendingEdit {
+            path,
+            kind,
+            before: prepared.text.clone(),
+            after: String::new(),
+            whole_before: whole,
+        });
+
+        let messages = crate::core::ai::prompt::build_skill_messages(
+            name,
+            &skill.body,
+            &prepared.text,
+            cfg.ai.output_language,
+        );
+        self.start_request(messages, window, cx);
+    }
+
     /// 发起请求：取值 → 选 provider → 后台流式 → flume 回实体
     fn start_request(
         &mut self,
@@ -720,6 +800,7 @@ impl AiChat {
             let max_steps = cfg.ai.max_steps as u8;
             let max_tool_chars = cfg.ai.max_tool_chars;
             let silence = Duration::from_secs(cfg.ai.timeout_secs);
+            let skills_enabled = cfg.ai.skills_enabled;
 
             let (tx, rx) = flume::unbounded::<RuntimeEvent>();
             let cancel = self.cancel.clone();
@@ -732,6 +813,7 @@ impl AiChat {
                     api_key,
                     messages: loop_messages,
                     tools_enabled: true,
+                    skills_enabled,
                     max_steps,
                     max_tool_chars,
                     host: &host,

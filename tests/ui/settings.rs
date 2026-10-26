@@ -124,8 +124,8 @@ fn number_fields_change_config_and_reset_back() {
 /// "存了不生效"的配置，需同步 §10 与 `config-wiring-design.md`。
 #[test]
 fn unavailable_fields_match_the_documented_set() {
-    // 只登记到 M2（Skills）为止：这两项随 M2 落地后应从表里摘掉标记。
-    let known: HashSet<&str> = ["ai.skills_enabled"].into_iter().collect();
+    // M2（Skills）已落地：`ai.skills_enabled` 不再是死开关，标记已摘掉。
+    let known: HashSet<&str> = HashSet::new();
 
     let marked: HashSet<&str> = all_fields()
         .iter()

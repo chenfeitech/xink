@@ -22,6 +22,7 @@ pub mod openai;
 pub mod patch;
 pub mod probe;
 pub mod prompt;
+pub mod skills;
 pub mod snapshot;
 pub mod sse;
 pub mod tools;

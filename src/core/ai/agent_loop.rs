@@ -34,6 +34,8 @@ pub struct LoopRequest<'a> {
     pub messages: Vec<ChatMessage>,
     /// 模型是否真的支持工具（连接测试探针给的结论）
     pub tools_enabled: bool,
+    /// skills 总开关：关掉时不给模型 `read_skill_resource`
+    pub skills_enabled: bool,
     /// 步数上限（单篇默认 8）
     pub max_steps: u8,
     /// 单条工具结果回传的字符上限
@@ -91,7 +93,7 @@ pub fn run(
     on: &mut dyn FnMut(LoopEvent),
 ) -> Result<LoopOutcome, AiError> {
     let tools = if req.tools_enabled {
-        specs()
+        specs(req.skills_enabled)
     } else {
         Vec::new()
     };

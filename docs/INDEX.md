@@ -94,14 +94,14 @@
 | 文档 | 说明 | 对应模块 | 状态 |
 |---|---|---|---|
 | [ai-capabilities-eval.md](./ai/ai-capabilities-eval.md) | 技术调研：网络栈现状、Provider 选型（OpenAI 兼容 HTTP / CLI Agent）、依赖与 Skills 规范、分期 | `core/ai/`、`ui/settings.rs` | ✅ **M1 已实施并验收**（含编辑器下方 AI 对话条，2026-10-26） |
-| [ai-assistant-requirements.md](./ai/ai-assistant-requirements.md) | 需求 A1–A9：单篇动作、库级管理、Skills、上下文与写入安全、设置与入口 | `core/ai/`、`ui/ai.rs` | ✅ **A1–A4 / A9.1 已实施并验收**（2026-10-26）；A5–A8（Skills / 库级任务 / 记忆）待做 |
+| [ai-assistant-requirements.md](./ai/ai-assistant-requirements.md) | 需求 A1–A9：单篇动作、库级管理、Skills、上下文与写入安全、设置与入口 | `core/ai/`、`ui/ai.rs` | ✅ **A1–A4 / A5 / A9.1 已实施**（2026-10-26）；A6–A8（库级任务 / 记忆）待做 |
 | [agent-harness-eval.md](./ai/agent-harness-eval.md) | 架构调研：要不要自建 agent harness 与记忆机制、四层记忆模型、可参考的协议/框架/Rust 生态 | `core/ai/` | 📝 **分析完成，待确认**（M2 开工前需确认） |
 | [ai-assistant-design.md](./ai/ai-assistant-design.md) | 技术设计：agent loop / 工具集 / Provider 抽象 / 配置与持久化 / 异常边界 / M0–M5 分期 | `core/ai/`、`ui/ai.rs` | ✅ **M0–M1 已实施并验收**（2026-10-26）；M2–M5 待做 |
 | [ollama-provider-design.md](./ai/ollama-provider-design.md) | Ollama Provider + 模型列表管理：native vs 兼容端点实测、per-model 参数与连接测试、配置与设置界面 | `core/ai/{ollama,models}.rs`、`ui/settings.rs` | ✅ **M0 Spike + M1 已实施并验收**（2026-10-26） |
 | [ai-m1-completion-design.md](./ai/ai-m1-completion-design.md) | M1 收口：agent loop / 只读工具 / 结构校验 / `.xink` 排除 / 连接测试 / 快照轮转与清空 / 命令面板入口，P1–P5 分期 | `core/ai/{agent_loop,tools,verify,probe,snapshot}.rs`、`core/media.rs`、`ui/{ai,command,settings}.rs` | ✅ **P1–P5 全部实施并验收、已合入 main**（2026-10-26） |
 | [ai-chat-blocks-design.md](./ai/ai-chat-blocks-design.md) | 对话条：正文改用 `TextView`（可选中 / `Cmd-C` 可复制）+ 交互过程分块折叠（我 / AI / 工具 / 校验 / diff） | `ui/ai.rs`、`core/ai/agent_loop.rs` | ✅ 已实施（2026-10-26，待人工验收） |
 | [ai-review-hunks-design.md](./ai/ai-review-hunks-design.md) | AI 修订评审：按 hunk 展示原文 / 改后文，逐块「接受修订」「拒绝修订」；落法改为结果驱动（不再只有"替换整篇"） | `core/ai/patch.rs`、`ui/editor.rs`、`ui/ai.rs` | ✅ **已实施**（2026-10-26，待人工验收） |
-| [ai-skills-design.md](./ai/ai-skills-design.md) | M2 Skills：`SKILL.md` 发现 / 解析 / 库内+用户级两级来源、命令面板 `AI:` 入口、`references/` 按需加载、设置里启停 | `core/ai/skills.rs`（待建）、`ui/command.rs`、`ui/ai.rs`、`core/ai/tools.rs` | 📝 **待确认**（2026-10-26） |
+| [ai-skills-design.md](./ai/ai-skills-design.md) | M2 Skills：`SKILL.md` 发现 / 解析 / 库内+用户级两级来源、命令面板 `AI:` 入口、`references/` 按需加载、设置里启停 | `core/ai/skills.rs`、`core/ai/{prompt,tools}.rs`、`ui/{command,ai,editor,settings}.rs` | ✅ **已实施**（2026-10-26，待人工验收） |
 
 ## 9. 规范与其它（docs/ 根目录）
 
