@@ -22,6 +22,7 @@ pub mod prompt;
 pub mod snapshot;
 pub mod sse;
 pub mod tools;
+pub mod verify;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
