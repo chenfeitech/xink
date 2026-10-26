@@ -39,6 +39,37 @@ fn build_collects_nested_markdown_only() {
 }
 
 #[test]
+fn snapshot_resolves_same_as_index() {
+    // 后台线程（AI 的工具与校验）拿的是 IndexSnapshot，
+    // 它的结论必须和 UI 线程的索引逐条一致，否则 AI 会以为自己写的双链是坏的
+    let dir = tmp();
+    let root = dir.path();
+    note(root, "a.md", "# A");
+    note(
+        root,
+        "sub/b.md",
+        "# Beta\n\n见 [[a]] 与 [[Beta]] 与 [[不存在]]\n",
+    );
+
+    let index = index_of(root);
+    let snap = IndexSnapshot::new(&index);
+
+    for target in ["a", "a.md", "sub/b.md", "sub/b", "Beta", "不存在", ""] {
+        assert_eq!(
+            snap.resolve(target),
+            index.resolve_wikilink(target),
+            "双链目标 {target} 的解析结果不一致"
+        );
+    }
+    // 反链同判据
+    let path = root.join("a.md");
+    assert_eq!(snap.backlinks(&path), index.backlinks(&path));
+    // 快照带走的清单与标签
+    assert_eq!(snap.notes().len(), 2);
+    assert_eq!(snap.files().len(), 2);
+}
+
+#[test]
 fn build_skips_ai_dir() {
     // `.xink/` 是 AI 的机器目录（skills 等）：`vault::should_ignore` 恒跳，
     // 因此目录树里就没有它，索引里也不该出现。这条锁住 M2 的行为。

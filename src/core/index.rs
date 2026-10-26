@@ -223,35 +223,7 @@ impl NoteIndex {
 
     /// 解析双链目标：相对路径 → 文件名 → 标题，均大小写不敏感
     pub fn resolve_wikilink(&self, target: &str) -> Resolution {
-        let raw = target.trim();
-        if raw.is_empty() {
-            return Resolution::Missing;
-        }
-        let key = raw.to_lowercase();
-
-        // 1) 相对库根路径（写 `notes/a.md` 或 `notes/a` 都认）
-        if let Some(path) = self.by_rel_path.get(&key) {
-            return Resolution::Hit(path.clone());
-        }
-        if let Some(path) = self.by_rel_path.get(&format!("{key}.md")) {
-            return Resolution::Hit(path.clone());
-        }
-
-        // 2) 文件名
-        let stem = raw.trim_end_matches(".md").to_lowercase();
-        let mut hits: Vec<PathBuf> = self.by_name.get(&stem).cloned().unwrap_or_default();
-
-        // 3) 标题（走派生表，不再全表扫）
-        if hits.is_empty() {
-            hits = self.by_title.get(&stem).cloned().unwrap_or_default();
-        }
-
-        hits.sort();
-        match hits.len() {
-            0 => Resolution::Missing,
-            1 => Resolution::Hit(hits.remove(0)),
-            _ => Resolution::Ambiguous(hits),
-        }
+        resolve_in(&self.by_rel_path, &self.by_name, &self.by_title, target)
     }
 
     /// 解析双链目标，只取"唯一命中"；歧义与缺失都当作解析不到。
@@ -463,6 +435,129 @@ fn is_note(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+}
+
+/// 双链解析判据（相对路径 → 文件名 → 标题，大小写不敏感）
+///
+/// [`NoteIndex::resolve_wikilink`] 与 [`IndexSnapshot::resolve`] 共用：
+/// 判据只有一份，后台线程（AI 的工具与校验）拿快照求出的结果
+/// 必须与 UI 线程一致，否则 AI 会以为自己写的双链是坏的。
+fn resolve_in(
+    by_rel_path: &HashMap<String, PathBuf>,
+    by_name: &HashMap<String, Vec<PathBuf>>,
+    by_title: &HashMap<String, Vec<PathBuf>>,
+    target: &str,
+) -> Resolution {
+    let raw = target.trim();
+    if raw.is_empty() {
+        return Resolution::Missing;
+    }
+    let key = raw.to_lowercase();
+
+    // 1) 相对库根路径（写 `notes/a.md` 或 `notes/a` 都认）
+    if let Some(path) = by_rel_path.get(&key) {
+        return Resolution::Hit(path.clone());
+    }
+    if let Some(path) = by_rel_path.get(&format!("{key}.md")) {
+        return Resolution::Hit(path.clone());
+    }
+
+    // 2) 文件名
+    let stem = raw.trim_end_matches(".md").to_lowercase();
+    let mut hits: Vec<PathBuf> = by_name.get(&stem).cloned().unwrap_or_default();
+
+    // 3) 标题（走派生表，不再全表扫）
+    if hits.is_empty() {
+        hits = by_title.get(&stem).cloned().unwrap_or_default();
+    }
+
+    hits.sort();
+    match hits.len() {
+        0 => Resolution::Missing,
+        1 => Resolution::Hit(hits.remove(0)),
+        _ => Resolution::Ambiguous(hits),
+    }
+}
+
+/// 索引的只读快照：给后台线程用
+///
+/// `Entity<NoteIndex>` 不能跨线程，而 AI 的工具与校验跑在后台线程
+/// （规则 02 §6）。进 loop 前把需要的派生数据拷一份——
+/// 解析与反链走的是和索引**同一个判据**（见 [`resolve_in`]）。
+#[derive(Debug, Default, Clone)]
+pub struct IndexSnapshot {
+    root: Option<PathBuf>,
+    /// `(路径, 标题, 大纲标题)`
+    notes: Vec<(PathBuf, String, Vec<String>)>,
+    tags: Vec<(String, usize)>,
+    by_rel_path: HashMap<String, PathBuf>,
+    by_name: HashMap<String, Vec<PathBuf>>,
+    by_title: HashMap<String, Vec<PathBuf>>,
+    link_refs: HashMap<String, Vec<LinkRef>>,
+}
+
+impl IndexSnapshot {
+    pub fn new(index: &NoteIndex) -> Self {
+        Self {
+            root: index.root.clone(),
+            notes: index
+                .notes()
+                .map(|note| {
+                    (
+                        note.path.clone(),
+                        note.title.clone(),
+                        note.facts.headings.iter().map(|h| h.text.clone()).collect(),
+                    )
+                })
+                .collect(),
+            tags: index.tags(),
+            by_rel_path: index.by_rel_path.clone(),
+            by_name: index.by_name.clone(),
+            by_title: index.by_title.clone(),
+            link_refs: index.link_refs.clone(),
+        }
+    }
+
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+
+    pub fn notes(&self) -> &[(PathBuf, String, Vec<String>)] {
+        &self.notes
+    }
+
+    pub fn tags(&self) -> &[(String, usize)] {
+        &self.tags
+    }
+
+    /// 全部笔记路径（全文检索的候选集）
+    pub fn files(&self) -> Vec<PathBuf> {
+        self.notes.iter().map(|(path, _, _)| path.clone()).collect()
+    }
+
+    pub fn resolve(&self, target: &str) -> Resolution {
+        resolve_in(&self.by_rel_path, &self.by_name, &self.by_title, target)
+    }
+
+    /// 反向链接（与 [`NoteIndex::backlinks`] 同判据）
+    pub fn backlinks(&self, path: &Path) -> Vec<LinkRef> {
+        let Some(root) = &self.root else {
+            return Vec::new();
+        };
+        let mut keys = link_targets_of(path, root);
+        keys.sort();
+        keys.dedup();
+        let mut refs = Vec::new();
+        for key in keys {
+            let Some(bucket) = self.link_refs.get(&key) else {
+                continue;
+            };
+            // 自引不算反链
+            refs.extend(bucket.iter().filter(|link| link.from != path).cloned());
+        }
+        refs.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.line.cmp(&b.line)));
+        refs
+    }
 }
 
 /// 展平目录树，只留 Markdown 文件

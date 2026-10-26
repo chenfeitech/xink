@@ -558,6 +558,12 @@ pub struct AiConfig {
     pub max_context_chars: usize,
     /// agent loop 的最大步数
     pub max_steps: usize,
+    /// agent loop 的总开关：关掉就永远走单轮（与模型支不支持工具无关）
+    ///
+    /// 小模型上多步反而更慢更差，留一个能退回去的开关。
+    pub agentic: bool,
+    /// 单条工具结果回传的字符上限（防止一篇长笔记把上下文吃光）
+    pub max_tool_chars: usize,
     pub output_language: OutputLang,
     /// 是否跳过 diff 直接落盘：默认 false，UI 不暴露
     pub auto_apply: bool,
@@ -664,6 +670,8 @@ impl Default for AiConfig {
             timeout_secs: 60,
             max_context_chars: 12_000,
             max_steps: 8,
+            agentic: true,
+            max_tool_chars: 4000,
             output_language: OutputLang::default(),
             auto_apply: false,
             skills_enabled: true,
@@ -727,6 +735,9 @@ impl AiConfig {
         self.max_steps = self
             .max_steps
             .clamp(limit::AI_MAX_STEPS.0, limit::AI_MAX_STEPS.1);
+        self.max_tool_chars = self
+            .max_tool_chars
+            .clamp(limit::AI_TOOL_CHARS.0, limit::AI_TOOL_CHARS.1);
         self.auto_apply = false;
         // 空 id 的条目没有意义（多半是手改配置留下的）
         self.models.retain(|m| !m.id.trim().is_empty());
@@ -770,6 +781,8 @@ mod limit {
     pub const AI_TIMEOUT_SECS: (u64, u64) = (5, 600);
     pub const AI_CONTEXT_CHARS: (usize, usize) = (1_000, 200_000);
     pub const AI_MAX_STEPS: (usize, usize) = (1, 64);
+    /// 单条工具结果回传的字符数：太小模型看不到内容，太大吃掉上下文预算
+    pub const AI_TOOL_CHARS: (usize, usize) = (500, 20_000);
     pub const AI_NUM_PREDICT: (u32, u32) = (16, 32_768);
     pub const AI_TEMPERATURE: (f32, f32) = (0.0, 2.0);
     pub const AI_NUM_CTX: (u32, u32) = (512, 1_048_576);

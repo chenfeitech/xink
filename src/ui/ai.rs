@@ -23,6 +23,7 @@ use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::*;
 
 use crate::app::{AppState, config};
+use crate::core::ai::agent_loop::{self, LoopEvent, LoopRequest};
 use crate::core::ai::context::{ContextScope, assemble};
 use crate::core::ai::diff::{DiffLine, diff_lines};
 use crate::core::ai::keychain::{MacKeychain, resolve_api_key};
@@ -30,8 +31,12 @@ use crate::core::ai::ollama::OllamaProvider;
 use crate::core::ai::openai::OpenAiProvider;
 use crate::core::ai::prompt::{Action, all_actions};
 use crate::core::ai::snapshot::write_snapshot;
+use crate::core::ai::tools::ToolHost;
+use crate::core::ai::verify::LinkIndex;
 use crate::core::ai::{AiError, ChatMessage, CompletionRequest, Provider, StreamEvent, Usage};
 use crate::core::config::AiProviderKind;
+use crate::core::index::{IndexSnapshot, LinkRef, Resolution};
+use crate::core::search::{Hit, search_files};
 use crate::state::workspace::app_data_dir;
 
 /// 等待首个响应字节的预算（Ollama 冷启动实测数秒）
@@ -42,6 +47,93 @@ const HISTORY_MAX_H: f32 = 180.;
 /// 对话条发出的事件（目前只有"关闭"）
 pub enum AiChatEvent {
     Close,
+}
+
+/// 后台任务回传的事件
+///
+/// loop 与单轮两条路径各有一条通道，这里统一它们的"结束方式"。
+enum RuntimeEvent {
+    /// agent loop 的过程事件
+    Loop(LoopEvent),
+    /// 失败 / 取消
+    Failed(AiError),
+}
+
+/// loop 眼里的"库"：工具与校验只看得到这个
+///
+/// `Entity<NoteIndex>` 进不了后台线程（规则 02 §6），所以拿的是进 loop 前
+/// 拷好的 [`IndexSnapshot`]；读正文仍走磁盘（只读，工具层没有写入口）。
+///
+/// 同一个对象同时实现 `ToolHost` 与 `LinkIndex`：两处要的是同一份快照，
+/// 没必要拷两遍。
+struct VaultHost {
+    snap: IndexSnapshot,
+}
+
+impl VaultHost {
+    fn new(snap: IndexSnapshot) -> Self {
+        Self { snap }
+    }
+
+    /// 模型给的多半是相对库根的路径，工具要的是能打开的那个
+    ///
+    /// 这里写全 `std::path::Path`：`gpui_kit::*` 里也有一个 `Path`（scene 的），
+    /// 直接写 `Path` 会解析到它。
+    fn absolute(&self, path: &std::path::Path) -> PathBuf {
+        match self.snap.root() {
+            Some(root) if path.is_relative() => root.join(path),
+            _ => path.to_path_buf(),
+        }
+    }
+}
+
+impl ToolHost for VaultHost {
+    fn read_note(&self, path: &std::path::Path) -> Option<String> {
+        // 读不到（不存在 / 非 UTF-8 / 无权限）返回 None，由工具层转成提示文本
+        std::fs::read_to_string(self.absolute(path)).ok()
+    }
+
+    fn search(&self, query: &str, limit: usize) -> Vec<Hit> {
+        search_files(&self.snap.files(), query, limit)
+    }
+
+    fn tags(&self) -> Vec<(String, usize)> {
+        self.snap.tags().to_vec()
+    }
+
+    fn backlinks(&self, path: &std::path::Path) -> Vec<LinkRef> {
+        self.snap.backlinks(&self.absolute(path))
+    }
+
+    fn outline(&self, path: &std::path::Path) -> Vec<String> {
+        // 索引里已经有大纲，不必再读一次盘
+        let full = self.absolute(path);
+        self.snap
+            .notes()
+            .iter()
+            .find(|(p, _, _)| *p == full)
+            .map(|(_, _, outline)| outline.clone())
+            .unwrap_or_default()
+    }
+
+    fn list_notes(&self, limit: usize) -> Vec<(PathBuf, String)> {
+        self.snap
+            .notes()
+            .iter()
+            .take(limit)
+            .map(|(path, title, _)| (path.clone(), title.clone()))
+            .collect()
+    }
+
+    fn root(&self) -> Option<PathBuf> {
+        self.snap.root().map(|p| p.to_path_buf())
+    }
+}
+
+impl LinkIndex for VaultHost {
+    fn resolve(&self, target: &str) -> Resolution {
+        self.snap.resolve(target)
+    }
 }
 
 /// 一次请求属于哪种模式
@@ -57,6 +149,9 @@ enum AiMode {
 struct Turn {
     mine: bool,
     text: String,
+    /// 工具调用行：`Some` 时这一轮是"⚙ 工具名(参数) → 结果"，
+    /// 而不是一段对话。与正文分开是为了不让工具噪音混进最终稿。
+    tool: Option<String>,
 }
 
 /// 结果怎么落到笔记里
@@ -110,6 +205,8 @@ pub struct AiChat {
     input_tokens: Option<usize>,
     elapsed_ms: Option<u64>,
     started: Option<Instant>,
+    /// 本轮用掉的工具次数（agent loop 才有，单轮恒为 0）
+    tool_calls: usize,
 }
 
 impl AiChat {
@@ -151,6 +248,7 @@ impl AiChat {
             input_tokens: None,
             elapsed_ms: None,
             started: None,
+            tool_calls: 0,
         }
     }
 
@@ -198,10 +296,12 @@ impl AiChat {
         self.turns.push(Turn {
             mine: true,
             text: text.clone(),
+            tool: None,
         });
         self.turns.push(Turn {
             mine: false,
             text: String::new(),
+            tool: None,
         });
 
         let Some((path, selection, whole, _cursor)) = self.capture(cx) else {
@@ -261,10 +361,12 @@ impl AiChat {
         self.turns.push(Turn {
             mine: true,
             text: action.label().to_string(),
+            tool: None,
         });
         self.turns.push(Turn {
             mine: false,
             text: String::new(),
+            tool: None,
         });
 
         let Some((path, selection, whole, cursor)) = self.capture(cx) else {
@@ -362,9 +464,69 @@ impl AiChat {
         self.error = None;
         self.elapsed_ms = None;
         self.usage = None;
+        self.tool_calls = 0;
         self.cancel.store(false, Ordering::Relaxed);
         self.started = Some(Instant::now());
         cx.notify();
+
+        // 走 agent loop 还是单轮，只看两件事：用户开了它、模型探针说支持工具。
+        // 不满足就完全保持今天的行为（不带 schema、一轮出结果）。
+        if cfg.ai.agentic && model.tools_enabled {
+            let snapshot = cx
+                .try_global::<AppState>()
+                .map(|state| IndexSnapshot::new(state.notes.read(cx)))
+                .unwrap_or_default();
+            // `messages` 已经移进上面的 request，从它这里取一份
+            let loop_messages = request.messages.clone();
+            let endpoint = cfg.ai.endpoint_for(&model);
+            let model_id = model.id.clone();
+            let params = model.params.clone();
+            let api_key = resolve_api_key(&cfg.ai, &model.id, &MacKeychain);
+            let max_steps = cfg.ai.max_steps as u8;
+            let max_tool_chars = cfg.ai.max_tool_chars;
+            let silence = Duration::from_secs(cfg.ai.timeout_secs);
+
+            let (tx, rx) = flume::unbounded::<RuntimeEvent>();
+            let cancel = self.cancel.clone();
+            self.task = Some(cx.background_spawn(async move {
+                let host = VaultHost::new(snapshot);
+                let req = LoopRequest {
+                    endpoint,
+                    model: model_id,
+                    params,
+                    api_key,
+                    messages: loop_messages,
+                    tools_enabled: true,
+                    max_steps,
+                    max_tool_chars,
+                    host: &host,
+                    index: Some(&host),
+                    first_byte_timeout: FIRST_BYTE_TIMEOUT,
+                    silence_timeout: silence,
+                };
+                let mut sink = |ev: LoopEvent| {
+                    let _ = tx.send(RuntimeEvent::Loop(ev));
+                };
+                if let Err(err) = agent_loop::run(&req, provider.as_ref(), cancel, &mut sink) {
+                    let _ = tx.send(RuntimeEvent::Failed(err));
+                }
+            }));
+
+            cx.spawn_in(window, async move |this, window| {
+                while let Ok(ev) = rx.recv_async().await {
+                    let finished = this
+                        .update_in(window, |this, window, cx| {
+                            this.on_runtime_event(ev, window, cx)
+                        })
+                        .unwrap_or(true);
+                    if finished {
+                        break;
+                    }
+                }
+            })
+            .detach();
+            return;
+        }
 
         let (tx, rx) = flume::unbounded::<StreamEvent>();
         let cancel = self.cancel.clone();
@@ -409,33 +571,7 @@ impl AiChat {
                 false
             }
             StreamEvent::Done => {
-                self.busy = false;
-                self.task = None;
-                self.elapsed_ms = self.started.map(|t| t.elapsed().as_millis() as u64);
-                let output = self
-                    .turns
-                    .last()
-                    .map(|t| t.text.trim().to_string())
-                    .unwrap_or_default();
-                if output.is_empty() {
-                    // thinking 模型把预算花在思维链上时会这样
-                    self.error = Some(AiError::EmptyResult.message());
-                    if let Some(pending) = self.pending.as_mut() {
-                        pending.after.clear();
-                    }
-                    self.pending = None;
-                    cx.notify();
-                    return true;
-                }
-                // 记入历史，下一轮才带得走上下文
-                self.history.push(ChatMessage::assistant(output.clone()));
-                if let Some(pending) = self.pending.as_mut() {
-                    pending.after = output;
-                }
-                if let Some(last_user) = self.turns.iter().rev().nth(1) {
-                    self.history.push(ChatMessage::user(last_user.text.clone()));
-                }
-                cx.notify();
+                self.finish(cx);
                 true
             }
             StreamEvent::Failed(err) => {
@@ -443,6 +579,102 @@ impl AiChat {
                 true
             }
         }
+    }
+
+    /// 处理 agent loop 的事件：工具调用单独成行，最终文本追加到 AI 那一轮
+    fn on_runtime_event(
+        &mut self,
+        ev: RuntimeEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match ev {
+            RuntimeEvent::Loop(LoopEvent::Delta(text)) => {
+                // 工具行不是"AI 说的话"：正文要另起一轮，免得混进最终稿
+                match self.turns.last_mut() {
+                    Some(last) if last.tool.is_none() => last.text.push_str(&text),
+                    _ => self.turns.push(Turn {
+                        mine: false,
+                        text,
+                        tool: None,
+                    }),
+                }
+                cx.notify();
+                false
+            }
+            RuntimeEvent::Loop(LoopEvent::ToolCall { name, args_summary }) => {
+                self.turns.push(Turn {
+                    mine: false,
+                    text: String::new(),
+                    tool: Some(format!("⚙ {name}({args_summary})")),
+                });
+                self.tool_calls += 1;
+                cx.notify();
+                false
+            }
+            RuntimeEvent::Loop(LoopEvent::ToolResult {
+                name: _,
+                lines,
+                chars,
+            }) => {
+                // 就地补在刚那一行后面：`⚙ search_notes(…) → 3 行 / 128 字符`
+                if let Some(last) = self.turns.last_mut().filter(|t| t.tool.is_some())
+                    && let Some(tool) = last.tool.take()
+                {
+                    last.tool = Some(format!("{tool} → {lines} 行 / {chars} 字符"));
+                }
+                cx.notify();
+                false
+            }
+            RuntimeEvent::Loop(LoopEvent::VerifyFailed(issues)) => {
+                self.notice = Some(format!("结构校验没过，已让模型重写（{} 处）", issues.len()));
+                cx.notify();
+                false
+            }
+            RuntimeEvent::Loop(LoopEvent::Done) => {
+                self.finish(cx);
+                true
+            }
+            RuntimeEvent::Failed(err) => {
+                self.fail(err, cx);
+                true
+            }
+        }
+    }
+
+    /// 收尾：把最后一轮的正文记入历史并挂上待应用的编辑
+    ///
+    /// loop 与单轮两条路径共用——它们产出的都是"最后一轮的正文"。
+    fn finish(&mut self, cx: &mut Context<Self>) {
+        self.busy = false;
+        self.task = None;
+        self.elapsed_ms = self.started.map(|t| t.elapsed().as_millis() as u64);
+        let output = self
+            .turns
+            .iter()
+            .rev()
+            .find(|t| t.tool.is_none() && !t.mine)
+            .map(|t| t.text.trim().to_string())
+            .unwrap_or_default();
+        if output.is_empty() {
+            // thinking 模型把预算花在思维链上时会这样
+            self.error = Some(AiError::EmptyResult.message());
+            if let Some(pending) = self.pending.as_mut() {
+                pending.after.clear();
+            }
+            self.pending = None;
+            cx.notify();
+            return;
+        }
+        // 记入历史，下一轮才带得走上下文
+        self.history.push(ChatMessage::assistant(output.clone()));
+        if let Some(pending) = self.pending.as_mut() {
+            pending.after = output;
+        }
+        if let Some(last_user) = self.turns.iter().rev().find(|t| t.mine) {
+            self.history.push(ChatMessage::user(last_user.text.clone()));
+        }
+        cx.notify();
     }
 
     fn fail(&mut self, err: AiError, cx: &mut Context<Self>) {
@@ -625,6 +857,11 @@ impl Render for AiChat {
             );
         }
         for turn in &self.turns {
+            // 工具行：灰色小字，和对话分开，一眼能看出"它去翻了什么"
+            if let Some(tool) = &turn.tool {
+                history = history.child(div().text_xs().text_color(muted).child(tool.clone()));
+                continue;
+            }
             if turn.text.is_empty() && !turn.mine && self.busy {
                 continue;
             }
@@ -734,6 +971,15 @@ impl Render for AiChat {
         }
         if let Some(ms) = self.elapsed_ms {
             status = status.child(div().text_xs().text_color(muted).child(format!("{ms} ms")));
+        }
+        if self.tool_calls > 0 {
+            // 让"这次用了几次工具"看得见：多步的代价要摆在明面上
+            status = status.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("工具 {} 次", self.tool_calls)),
+            );
         }
         if let Some(usage) = &self.usage {
             // 模型报的真实用量（各 provider 未必都给）；没给就退回上下文粗估
