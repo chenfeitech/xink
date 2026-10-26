@@ -53,6 +53,20 @@ const HISTORY_MAX_H: f32 = 260.;
 /// 块内自带垂直滚动：工具结果动辄几百行，不收口的话它会把对话区撑到很高，
 /// 外层那 260px 再怎么滚也看不全——块内滚动让"看细节"和"看全部轮次"互不干扰。
 const BODY_MAX_H: f32 = 220.;
+/// 气泡最大宽度（占对话区宽度的比例）：太长的一行读起来累
+const BUBBLE_MAX_W: f32 = 0.78;
+
+/// 用户气泡的浅蓝底
+///
+/// 明暗主题各一套：浅色主题下是浅蓝（配深色正文），深色主题下换成深蓝
+/// （配亮色正文）——气泡自带对比度，不依赖主题前景色，免得深底亮字糊成一片。
+fn bubble_bg(is_dark: bool) -> Hsla {
+    if is_dark {
+        hsla(212., 55., 30., 1.)
+    } else {
+        hsla(210., 100., 92., 1.)
+    }
+}
 
 /// 对话条发出的事件（目前只有"关闭"）
 pub enum AiChatEvent {
@@ -330,10 +344,9 @@ impl Block {
 
 /// 一个块折叠时收起的那部分正文
 ///
-/// 对话正文按 Markdown 渲染（可读），工具结果按代码块渲染（保真、复制即原文），
-/// diff 带颜色，因此直接按块下标回 `blocks` 取。
+/// 工具结果按代码块渲染（保真、复制即原文），diff 带颜色，因此直接按块下标回
+/// `blocks` 取。（对话正文已经是气泡，不在这里。）
 enum Body {
-    Markdown(String),
     Code(String),
     Diff(usize),
 }
@@ -1155,14 +1168,55 @@ impl Render for AiChat {
         }
         for (ix, block) in self.blocks.iter().enumerate() {
             let collapsed = block.is_collapsed();
-            let (title, body) = match block {
-                Block::User { text, .. } => ("我".to_string(), Body::Markdown(text.clone())),
-                Block::Assistant { text, .. } => {
-                    if text.is_empty() && self.busy {
-                        continue;
-                    }
-                    ("AI".to_string(), Body::Markdown(text.clone()))
+            // 对话（我 / AI）走气泡：靠左的是用户、靠右的是回复，不带发送者标签；
+            // 过程块（工具 / 校验 / diff）仍是"标题 + 可折叠正文"。
+            if let Block::User { text, .. } | Block::Assistant { text, .. } = block {
+                let mine = matches!(block, Block::User { .. });
+                if !mine && text.is_empty() && self.busy {
+                    continue;
                 }
+                if collapsed {
+                    // 收起后没有标题可点，留一行极简提示（对齐方向保持原样）
+                    let mut row = div()
+                        .id(("ai-collapsed", ix))
+                        .flex()
+                        .gap_1()
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)));
+                    row = if mine {
+                        row.self_start()
+                    } else {
+                        row.self_end()
+                    };
+                    history = history
+                        .child(row.child(div().text_xs().text_color(muted).child("…（点击展开）")));
+                    continue;
+                }
+                let bubble = div()
+                    .id(("ai-bubble", ix))
+                    .max_w(relative(BUBBLE_MAX_W))
+                    .rounded(cx.theme().radius)
+                    .px_3()
+                    .py_2()
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)));
+                let bubble = if mine {
+                    // 用户消息：左侧 + 浅蓝底 + 内边距 + 圆角
+                    bubble.self_start().bg(bubble_bg(cx.theme().is_dark()))
+                } else {
+                    // AI 回复：右侧 + 无背景色
+                    bubble.self_end()
+                };
+                history = history.child(
+                    bubble.child(
+                        TextView::markdown(("ai-body", ix), text.clone())
+                            .selectable(true)
+                            .text_sm(),
+                    ),
+                );
+                continue;
+            }
+            let (title, body) = match block {
                 Block::Tool { title, output, .. } => (title.clone(), Body::Code(output.clone())),
                 Block::Verify { detail, .. } => (
                     format!(
@@ -1183,6 +1237,8 @@ impl Render for AiChat {
                     ),
                     Body::Diff(ix),
                 ),
+                // 对话块在上面已经按气泡渲染过了
+                _ => continue,
             };
 
             // 标题行：点一下折叠 / 展开（▸ / ▾ 是状态指示，不是按钮）
@@ -1218,12 +1274,6 @@ impl Render for AiChat {
             };
             history = history.child(match body {
                 // `TextView` 才有选区与 Cmd-C：普通 `div` 里的文本选不中
-                Body::Markdown(text) => body_box(
-                    TextView::markdown(("ai-body", ix), text)
-                        .selectable(true)
-                        .text_sm()
-                        .into_any_element(),
-                ),
                 Body::Code(text) => body_box(
                     TextView::markdown(("ai-body", ix), code_fence(&text))
                         .selectable(true)
