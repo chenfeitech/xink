@@ -11,6 +11,7 @@
 //!    阻塞的 `read_line` 无法被打断，只能靠读线程自查标记 + 主循环超时放弃；
 //! 3. 只产出 [`StreamEvent`]，UI 侧负责渲染与节流。
 
+pub mod agent_loop;
 pub mod context;
 pub mod diff;
 pub mod keychain;
