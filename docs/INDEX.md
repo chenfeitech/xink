@@ -100,6 +100,7 @@
 | [ollama-provider-design.md](./ai/ollama-provider-design.md) | Ollama Provider + 模型列表管理：native vs 兼容端点实测、per-model 参数与连接测试、配置与设置界面 | `core/ai/{ollama,models}.rs`、`ui/settings.rs` | ✅ **M0 Spike + M1 已实施并验收**（2026-10-26） |
 | [ai-m1-completion-design.md](./ai/ai-m1-completion-design.md) | M1 收口：agent loop / 只读工具 / 结构校验 / `.xink` 排除 / 连接测试 / 快照轮转与清空 / 命令面板入口，P1–P5 分期 | `core/ai/{agent_loop,tools,verify,probe,snapshot}.rs`、`core/media.rs`、`ui/{ai,command,settings}.rs` | ✅ **P1–P5 全部实施并验收、已合入 main**（2026-10-26） |
 | [ai-chat-blocks-design.md](./ai/ai-chat-blocks-design.md) | 对话条：正文改用 `TextView`（可选中 / `Cmd-C` 可复制）+ 交互过程分块折叠（我 / AI / 工具 / 校验 / diff） | `ui/ai.rs`、`core/ai/agent_loop.rs` | ✅ 已实施（2026-10-26，待人工验收） |
+| [ai-review-hunks-design.md](./ai/ai-review-hunks-design.md) | AI 修订评审：按 hunk 展示原文 / 改后文，逐块「接受修订」「拒绝修订」；落法改为结果驱动（不再只有"替换整篇"） | `core/ai/patch.rs`（待建）、`ui/editor.rs`、`ui/ai.rs` | 📝 **待确认**（2026-10-26） |
 
 ## 9. 规范与其它（docs/ 根目录）
 
