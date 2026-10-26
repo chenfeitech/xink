@@ -16,6 +16,7 @@
 | 能不能做 | 能。缺的不是框架能力，是**网络栈**：应用现在一个 HTTP 请求都发不出去 |
 | 走哪条路 | **Provider 抽象 + 两个实现**：P0 只做 OpenAI 兼容 HTTP，P1 再加 CLI Agent（codex / claude） |
 | 加什么依赖 | `ureq` 3.x（阻塞式，MIT/Apache-2.0），跑在 `background_spawn` 后台线程。不引入 tokio / async runtime |
+| Ollama 怎么接 | **走 native `/api/chat`**（`think` / `keep_alive` / `num_ctx` 可控 + `/api/tags` 发现）；兼容端点留给云厂商。实测数据见 [`ollama-provider-design.md`](./ollama-provider-design.md) §1–§2 |
 | Skills 怎么做 | 采用 **Agent Skills 的 `SKILL.md` 格式**（frontmatter `name` + `description`），由 xink 自己发现与注入，不依赖 CLI 的自动发现 |
 | 检索怎么做 | P0 **不做向量库**。用现有的全文检索 + 索引（双链 / 标签 / 标题）做「检索式上下文」 |
 | AI 能不能直接改文件 | P0 **不能**。一律走 diff 预览 → 用户接受 → 复用现有原子写盘 |
@@ -101,6 +102,10 @@ MCP 客户端、本地 embedding 检索列入**非目标**（P2，理由见 §4.
   - DeepSeek 的 usage 附在最后一个带 `finish_reason` 的内容帧上，不发独立 usage 帧。
   - 推理模型会带 `reasoning_content`（思维链），正文仍是 `content`。
   - 智谱端点不是 `/v1/chat/completions` 而是 `/api/paas/v4/chat/completions`，base_url 必须可整体配置。
+  - **本机实测（Ollama 0.40.11，`ureq` 3.5.0）**：`/v1/chat/completions` 的 SSE 正常（`content-type: text/event-stream`、
+    终帧 `[DONE]`），但**忽略 `think:false`**——thinking 模型把预算全吐在 `delta.reasoning` 上、正文 0 字；
+    `num_predict` 给小（64）时尤其致命。native `/api/chat` 的 `think` 生效（思考 0 字 / 正文 66 字），
+    且带 `keep_alive` / `num_ctx` 与 `/api/tags` 发现。→ **Ollama 单列一个 provider，走 native**。
 
 ### 4.2 方案 B：CLI Agent 子进程（**推荐，P1**）
 
@@ -130,7 +135,7 @@ spawn `codex exec --json` 或 `claude -p --output-format stream-json`，解析 J
 
 ### 4.5 方案 E：内置本地小模型（**非目标**）
 
-体积、内存、质量都不适合作为通用写作助手；本地场景优先用 Ollama 走方案 A 的兼容端点。
+体积、内存、质量都不适合作为通用写作助手；本地场景用 Ollama 走 **native `/api/chat`** 而非方案 A 的兼容端点（理由见下节与 `ollama-provider-design.md` §2.3）。
 
 ---
 
@@ -241,7 +246,7 @@ spawn `codex exec --json` 或 `claude -p --output-format stream-json`，解析 J
 
 | 期 | 内容 | 验收方式 |
 |---|---|---|
-| **M0 Spike** | 独立分支验证：`ureq` 能发请求、能逐块读 SSE、超时/取消可用、编译体积可接受 | 一段最小 demo + 结论回写本文档。**不合并进主线** |
+| **M0 Spike** | ✅ **已完成（2026-10-26）**：`ureq` 3.5.0 + rustls 全新 release 编译 12.8s；Ollama native NDJSON 与 `/v1` SSE 双协议跑通；取消 26ms 内关闭连接；工具调用 3/4 模型通过（1 个声明支持却返回 500）。数据见 [`ollama-provider-design.md`](./ollama-provider-design.md) §2 | 独立 crate（`/tmp/xink-ai-spike`，未进仓库）；结论已回写本文档与 `ai-assistant-design.md` |
 | **M1** | `core/ai/`（client / sse / prompt / diff）+ 设置页 AI 分类 + 8 个内置动作 + diff 预览 + 快照 | 单测覆盖 SSE 解析与 diff；人工跑通「选中 → 润色 → 接受」 |
 | **M2** | Skills 发现与注入 + 命令面板 `AI:` 前缀 + 自定义动作 | 库内放 2 个样例 skill，确认被列出、能生效 |
 | **M3** | 库级管理动作（批量标签、MOC 生成、断链/孤儿检查报告） | 计划面板逐条勾选后执行，快照可回退 |

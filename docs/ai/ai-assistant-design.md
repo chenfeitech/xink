@@ -63,6 +63,8 @@
 | Q11 | ACP | M5 再评估 |
 | D1 | 结果面板位置 | **底部 dock 面板**（`DockPlacement::Bottom`，`src/app.rs:696` 处尚未占用）。理由：diff 需要横向宽度，右侧抽屉只有 260px（`src/ui/drawer.rs:21`） |
 | D2 | 快捷键 | `Cmd+Shift+A` 打开 AI 动作面板（现有键位无冲突，`src/main.rs:59-90`） |
+| D4 | **Ollama 接入方式** | 走 native `/api/chat`（NDJSON），不走 OpenAI 兼容端点。实测：兼容端点忽略 `think:false`，thinking 模型会把预算全花在思考上、正文为空。详见 [`ollama-provider-design.md`](./ollama-provider-design.md) |
+| D5 | **模型管理** | 配置改为**模型列表** `models: Vec<ModelEntry>` + `default_model`，支持多实例 `base_url` 覆盖、`/api/tags` 拉取与缓存、per-model 连接测试与降级。M1 就有 Ollama |
 | D3 | diff 实现 | `core/ai/diff.rs` 自实现行级 LCS（约 80 行、可单测），**不引入 `similar`**；需要词级 diff 再评估 |
 
 ---
@@ -128,6 +130,17 @@ pub trait Provider: Send + Sync {
 - **不在主线程调用**（规则 02 §6）。UI 侧：`cx.background_spawn` 跑 provider，`flume::Sender<StreamEvent>` 回传，实体上 `cx.notify()`。
 - M4 的 CLI provider 实现同一 trait，事件解析独立（codex `item.completed`/`agent_message`；claude `result`/`stream_event`），**不共用解析器**。
 
+三种实现与解析模块（Ollama 部分见 [`ollama-provider-design.md`](./ollama-provider-design.md) §3）：
+
+| kind | 端点 | 协议 | 解析模块 | 期 |
+|---|---|---|---|---|
+| `Ollama`（本地默认） | `{base}/api/chat` | NDJSON | `core/ai/ndjson.rs` | M1 |
+| `OpenAiCompatible` | `{base}/chat/completions` | SSE | `core/ai/sse.rs` | M1 |
+| `Cli` | 子进程 | JSONL | `core/ai/cli_events.rs` | M4 |
+
+`Ollama` 额外实现 `list_models()`（`GET /api/tags`，含 `context_length` 与 `capabilities`）与 `probe(model)`（连接测试 + 工具探针）。
+实测要点：`arguments` 在 Ollama 是**对象**、在 OpenAI 兼容是**字符串**；Ollama 的思维链字段是 `message.thinking` / `delta.reasoning`。
+
 ### 3.4 工具集（M1 只开只读）
 
 `read_note` / `search_notes` / `list_tags` / `list_backlinks` / `outline` / `list_notes` / `read_skill_resource`。
@@ -150,26 +163,38 @@ M3 增 `propose_edit`（批量出 diff，不写盘）、`create_note`。工具�
 
 ### 4.1 配置（`src/core/config.rs` 新增 `ai` 段）
 
+> 模型列表的最终形态见 [`ollama-provider-design.md`](./ollama-provider-design.md) §4.1，此处只列主干。
+
 ```rust
 pub struct AiConfig {
-    pub enabled: bool,                 // 默认 false
-    pub provider: AiProviderKind,      // OpenAiCompatible | Cli（M4）
-    pub base_url: String,              // 整体可配，兼容 /api/paas/v4 这类端点
-    pub model: String,                 // 空则禁止发起请求
-    pub api_key_source: KeySource,     // Keychain | Env | Plain
-    pub api_key_plain: Option<String>, // 仅 Plain 使用；sanitize 时若非 Plain 清空
-    pub timeout_secs: u64,             // 默认 60，sanitize 夹到 [5, 600]
-    pub max_context_chars: usize,      // 默认 12_000，夹到 [1000, 200_000]
-    pub max_steps: usize,              // 默认 8，夹到 [1, 64]
-    pub output_language: OutputLang,   // Auto | Zh | En
-    pub auto_apply: bool,              // 默认 false，UI 不暴露
-    pub skills_enabled: bool,          // 默认 true
-    pub disabled_skills: Vec<String>,  // 停用的 skill 名
-    pub memory_enabled: bool,          // 默认 false（M4 打开）
+    pub enabled: bool,                  // 默认 false
+    pub default_model: Option<String>,  // 形如 "ollama:qwen3:0.6b"
+    pub models: Vec<ModelEntry>,        // 模型列表，可跨 provider / 多实例
+    pub ollama: OllamaConfig,           // base_url 默认 http://localhost:11434、keep_alive "5m"、num_ctx 8192
+    pub timeout_secs: u64,              // 默认 60，夹到 [5, 600]
+    pub max_context_chars: usize,       // 默认 12_000，夹到 [1000, 200_000]
+    pub max_steps: usize,               // 默认 8，夹到 [1, 64]
+    pub output_language: OutputLang,    // Auto | Zh | En
+    pub auto_apply: bool,               // 默认 false，UI 不暴露
+    pub skills_enabled: bool,           // 默认 true
+    pub disabled_skills: Vec<String>,
+    pub memory_enabled: bool,           // 默认 false（M4 打开）
+}
+
+pub struct ModelEntry {
+    pub id: String, pub kind: AiProviderKind, pub label: Option<String>,
+    pub base_url: Option<String>,       // 覆盖 provider 默认
+    pub api_key_source: KeySource,      // Ollama 忽略
+    pub params: ModelParams,            // num_ctx / num_predict / temperature / think
+    pub context_limit: Option<u32>,     // 来自 /api/tags
+    pub capabilities: Vec<String>,      // completion / tools / thinking / vision
+    pub tools_enabled: bool,            // 连接测试通过才置 true
+    pub enabled: bool, pub last_checked: Option<String>,
 }
 ```
 
-兼容：全部 `#[serde(default)]`，旧 `config.json` 无 `ai` 段照常启动；`sanitize()` 负责夹取与清空不该留的明文 key。
+兼容：全部 `#[serde(default)]`，旧 `config.json` 无 `ai` 段照常启动；`sanitize()` 夹取数值、
+丢弃空 id 的模型、非 `Plain` 时清空明文 key。**AI 配置从未发布，无需迁移逻辑。**
 
 ### 4.2 凭据（Keychain）
 
@@ -283,6 +308,10 @@ pub struct AiConfig {
 | `core/ai/keychain.rs` | 用 `SecretStore` 内存实现覆盖 get/set/delete（真 Keychain 不进 CI） |
 | `core/ai/session.rs` | `task.json` 序列化往返；`cursor` 恢复；损坏文件回落 |
 | `core/config.rs` | `AiConfig` 默认值、缺字段兼容、`sanitize` 夹取、非 Plain 时清空明文 key |
+| `core/ai/ndjson.rs` | Ollama 帧：`content` / `thinking` 分离、`done:true` 终止、`eval_count` 用量；**半包跨 read**（实测小模型约 1 字一帧） |
+| `core/ai/provider.rs`（Ollama） | `arguments` 为对象；工具探针失败（模拟 500）→ `tools_enabled=false` 且降级为单轮 |
+| `core/ai/models.rs` | `/api/tags` 解析（含 `context_length`、`capabilities`）；与已配置列表合并时**不覆盖用户参数**；缓存文件损坏回落 |
+| `core/ai/context.rs` 补充 | `num_ctx` 超过 `context_limit` 时夹到上限 |
 
 **需人工验收**
 
@@ -335,8 +364,8 @@ D3 diff 自实现、Q1 用 `security` CLI 而非 `keychain` crate、M4 是否真
 
 | 期 | 内容 | 涉及文件 | 独立验证 |
 |---|---|---|---|
-| **M0 Spike**（独立分支，不合并） | `ureq` 发请求 + 逐块读 SSE + 超时/取消 + 编译体积评估 | 新建 spike 分支，仅 demo | 结论回写 `ai-capabilities-eval.md` |
-| **M1** | 依赖 `ureq`；`core/ai/{mod,provider,http,sse,context,prompt,tools,loop,verify,diff,snapshot,keychain}.rs`；`AppConfig.ai`；设置页 AI 分类；底部 dock 结果/diff 面板；`Cmd+Shift+A`；8 个内置动作；快照 | `Cargo.toml`、`src/core/config.rs`、`src/ui/settings.rs`、`src/ui/ai/panel.rs`、`src/main.rs`（register_panel + 键位）、`src/core/vault.rs`（`.xink` 恒跳）、`src/core/index.rs`+`ui/command.rs`（排除 SKILL.md） | 单测 + 验收清单 1–11 |
+| **M0 Spike** | ✅ **已完成**（2026-10-26）：`ureq` 3.5.0 编译 12.8s、Ollama native NDJSON 与 SSE 双协议跑通、取消 26ms、工具调用 3/4 模型通过。数据见 [`ollama-provider-design.md`](./ollama-provider-design.md) §2 | 独立 crate（`/tmp`，未进仓库） | 结论已回写本文档与 eval |
+| **M1** | 依赖 `ureq`；`core/ai/{mod,provider,http,sse,ndjson,models,context,prompt,tools,loop,verify,diff,snapshot,keychain}.rs`；**Ollama provider + 模型列表管理（拉取/缓存/连接测试）**；`AppConfig.ai`；设置页 AI 分类；底部 dock 结果/diff 面板；`Cmd+Shift+A`；8 个内置动作；快照 | `Cargo.toml`、`src/core/config.rs`、`src/ui/settings.rs`、`src/ui/ai/panel.rs`、`src/main.rs`（register_panel + 键位）、`src/core/vault.rs`（`.xink` 恒跳）、`src/core/index.rs`+`ui/command.rs`（排除 SKILL.md） | 单测 + 验收清单 1–11 |
 | **M2** | `core/ai/skills.rs`；库内/用户级发现；命令面板 `AI:` 分组；`read_skill_resource`；内置动作改为 `SKILL.md` 表达 | `src/core/ai/skills.rs`、`src/ui/command.rs`、`resources/skills/*`（内置 8 个） | 验收清单 M2 |
 | **M3** | `core/ai/session.rs`；`propose_edit` 批量；计划面板；分批 + 中断恢复；trace | `src/core/ai/{session,tools}.rs`、`src/ui/ai/plan.rs`、`src/state/ai_state.rs` | 验收清单 M3 |
 | **M4** | 多轮会话面板；compaction；L2/L3 记忆与确认流；CLI Agent provider | `src/core/ai/{memory,provider}.rs`、`src/ui/ai/chat.rs` | 验收清单 M4 |
