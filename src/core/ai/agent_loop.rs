@@ -61,6 +61,10 @@ pub enum LoopEvent {
         name: String,
         lines: usize,
         chars: usize,
+        /// 结果正文（工具层已按 `max_tool_chars` 截断）
+        ///
+        /// UI 要"展开看细节"，因此事件里带上原文；它同时也是回灌给模型的那份文本。
+        content: String,
     },
     /// 校验没过，已把问题回灌让模型重写
     VerifyFailed(Vec<VerifyIssue>),
@@ -170,6 +174,7 @@ pub fn run(
                 name: result.name.clone(),
                 lines: result.output.lines().count(),
                 chars: result.output.chars().count(),
+                content: result.output.clone(),
             });
             used_tools.push(call.name.clone());
             // 用 user 消息回灌而不是 role=tool：后者各家都要求 tool_call_id，

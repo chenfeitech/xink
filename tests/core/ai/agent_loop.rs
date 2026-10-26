@@ -218,6 +218,15 @@ fn 工具结果会回灌到下一轮() {
             .iter()
             .any(|e| matches!(e, LoopEvent::ToolResult { name, .. } if name == "read_note"))
     );
+    // UI 要"展开看细节"，因此结果事件必须带上正文（不是只有行数 / 字符数）
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            LoopEvent::ToolResult { content, .. } if content.contains("被读到的正文")
+        )),
+        "ToolResult 没带结果正文：{:?}",
+        events
+    );
 }
 
 #[test]

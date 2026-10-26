@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use gpui_kit::base::TextView;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
@@ -145,13 +146,107 @@ enum AiMode {
     Action(Action),
 }
 
-/// 对话区的一轮
-struct Turn {
-    mine: bool,
-    text: String,
-    /// 工具调用行：`Some` 时这一轮是"⚙ 工具名(参数) → 结果"，
-    /// 而不是一段对话。与正文分开是为了不让工具噪音混进最终稿。
-    tool: Option<String>,
+/// 对话区的一个内容块
+///
+/// 一轮交互会被拆成若干块（我说的话、AI 正文、中途的工具调用、校验结果），
+/// 每块都能独立折叠——过程性的块（工具 / 校验）默认收起，只留一行摘要，
+/// 要看细节再展开。设计见 `docs/ai/ai-chat-blocks-design.md` §3.1。
+enum Block {
+    /// 用户说的话
+    User { text: String, collapsed: bool },
+    /// AI 的正文（流式追加）
+    Assistant { text: String, collapsed: bool },
+    /// 一次工具调用：标题是摘要，正文是完整结果
+    Tool {
+        title: String,
+        output: String,
+        collapsed: bool,
+    },
+    /// 结构校验没过，已把问题回灌让模型重写
+    Verify { detail: String, collapsed: bool },
+}
+
+impl Block {
+    /// 新建一块用户消息
+    fn user(text: String) -> Self {
+        Self::User {
+            text,
+            collapsed: false,
+        }
+    }
+
+    /// 新建一块 AI 正文（流式时往里追加）
+    fn assistant(text: String) -> Self {
+        Self::Assistant {
+            text,
+            collapsed: false,
+        }
+    }
+
+    /// 工具块默认收起：它只是"它去翻了什么"，不该抢正文的位置
+    fn tool(name: &str, args_summary: &str) -> Self {
+        Self::Tool {
+            title: format!("⚙ {name}({args_summary})"),
+            output: String::new(),
+            collapsed: true,
+        }
+    }
+
+    /// 校验块默认收起
+    fn verify(detail: String) -> Self {
+        Self::Verify {
+            detail,
+            collapsed: true,
+        }
+    }
+
+    fn is_collapsed(&self) -> bool {
+        match self {
+            Self::User { collapsed, .. }
+            | Self::Assistant { collapsed, .. }
+            | Self::Tool { collapsed, .. }
+            | Self::Verify { collapsed, .. } => *collapsed,
+        }
+    }
+
+    fn toggle(&mut self) {
+        match self {
+            Self::User { collapsed, .. }
+            | Self::Assistant { collapsed, .. }
+            | Self::Tool { collapsed, .. }
+            | Self::Verify { collapsed, .. } => *collapsed = !*collapsed,
+        }
+    }
+
+    /// AI 正在说的那一块（流式追加的目标）
+    fn as_assistant_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Self::Assistant { text, .. } => Some(text),
+            _ => None,
+        }
+    }
+}
+
+/// 一个块折叠时收起的那部分正文
+///
+/// 对话正文按 Markdown 渲染（可读），工具结果按代码块渲染（保真、复制即原文）。
+enum Body {
+    Markdown(String),
+    Code(String),
+}
+
+/// 把工具结果包成 Markdown 代码块
+///
+/// 这样既保留换行与缩进，复制出来的又是原文（`TextView` 的代码块自带 Copy 按钮）。
+/// 围栏长度取内容里最长的前导反引号串 +1（最少 3），避免结果里的 ``` 提前闭掉代码块。
+fn code_fence(text: &str) -> String {
+    let longest = text
+        .lines()
+        .map(|line| line.chars().take_while(|c| *c == '`').count())
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    format!("{fence}\n{text}\n{fence}")
 }
 
 /// 结果怎么落到笔记里
@@ -188,7 +283,10 @@ struct PendingEdit {
 
 pub struct AiChat {
     input: Entity<InputState>,
-    turns: Vec<Turn>,
+    /// 对话区的内容块，顺序即发生顺序
+    blocks: Vec<Block>,
+    /// diff 块的折叠状态：diff 每帧由 `pending` 重算，不进 `blocks`
+    diff_collapsed: bool,
     /// 发给模型的历史（user / assistant），system 每轮重新组装
     history: Vec<ChatMessage>,
     mode: AiMode,
@@ -234,7 +332,8 @@ impl AiChat {
 
         Self {
             input,
-            turns: Vec::new(),
+            blocks: Vec::new(),
+            diff_collapsed: false,
             history: Vec::new(),
             mode: AiMode::Chat,
             model_override: None,
@@ -293,20 +392,13 @@ impl AiChat {
         self.input
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.mode = AiMode::Chat;
-        self.turns.push(Turn {
-            mine: true,
-            text: text.clone(),
-            tool: None,
-        });
-        self.turns.push(Turn {
-            mine: false,
-            text: String::new(),
-            tool: None,
-        });
+        self.blocks.push(Block::user(text.clone()));
+        self.blocks.push(Block::assistant(String::new()));
+        self.diff_collapsed = false;
 
         let Some((path, selection, whole, _cursor)) = self.capture(cx) else {
-            self.turns.pop();
-            self.turns.pop();
+            self.blocks.pop();
+            self.blocks.pop();
             cx.notify();
             return;
         };
@@ -361,20 +453,13 @@ impl AiChat {
             return;
         }
         self.mode = AiMode::Action(action);
-        self.turns.push(Turn {
-            mine: true,
-            text: action.label().to_string(),
-            tool: None,
-        });
-        self.turns.push(Turn {
-            mine: false,
-            text: String::new(),
-            tool: None,
-        });
+        self.blocks.push(Block::user(action.label().to_string()));
+        self.blocks.push(Block::assistant(String::new()));
+        self.diff_collapsed = false;
 
         let Some((path, selection, whole, cursor)) = self.capture(cx) else {
-            self.turns.pop();
-            self.turns.pop();
+            self.blocks.pop();
+            self.blocks.pop();
             cx.notify();
             return;
         };
@@ -560,8 +645,8 @@ impl AiChat {
     fn on_event(&mut self, ev: StreamEvent, _window: &mut Window, cx: &mut Context<Self>) -> bool {
         match ev {
             StreamEvent::Delta(text) => {
-                if let Some(last) = self.turns.last_mut() {
-                    last.text.push_str(&text);
+                if let Some(body) = self.blocks.last_mut().and_then(|b| b.as_assistant_mut()) {
+                    body.push_str(&text);
                 }
                 cx.notify();
                 false
@@ -593,24 +678,16 @@ impl AiChat {
     ) -> bool {
         match ev {
             RuntimeEvent::Loop(LoopEvent::Delta(text)) => {
-                // 工具行不是"AI 说的话"：正文要另起一轮，免得混进最终稿
-                match self.turns.last_mut() {
-                    Some(last) if last.tool.is_none() => last.text.push_str(&text),
-                    _ => self.turns.push(Turn {
-                        mine: false,
-                        text,
-                        tool: None,
-                    }),
+                // 工具块不是"AI 说的话"：正文要另起一块，免得混进最终稿
+                match self.blocks.last_mut().and_then(|b| b.as_assistant_mut()) {
+                    Some(body) => body.push_str(&text),
+                    None => self.blocks.push(Block::assistant(text)),
                 }
                 cx.notify();
                 false
             }
             RuntimeEvent::Loop(LoopEvent::ToolCall { name, args_summary }) => {
-                self.turns.push(Turn {
-                    mine: false,
-                    text: String::new(),
-                    tool: Some(format!("⚙ {name}({args_summary})")),
-                });
+                self.blocks.push(Block::tool(&name, &args_summary));
                 self.tool_calls += 1;
                 cx.notify();
                 false
@@ -619,18 +696,23 @@ impl AiChat {
                 name: _,
                 lines,
                 chars,
+                content,
             }) => {
-                // 就地补在刚那一行后面：`⚙ search_notes(…) → 3 行 / 128 字符`
-                if let Some(last) = self.turns.last_mut().filter(|t| t.tool.is_some())
-                    && let Some(tool) = last.tool.take()
-                {
-                    last.tool = Some(format!("{tool} → {lines} 行 / {chars} 字符"));
+                // 补全刚那块：标题加结果规模，正文留着展开时看
+                if let Some(Block::Tool { title, output, .. }) = self.blocks.last_mut() {
+                    title.push_str(&format!(" → {lines} 行 / {chars} 字符"));
+                    *output = content;
                 }
                 cx.notify();
                 false
             }
             RuntimeEvent::Loop(LoopEvent::VerifyFailed(issues)) => {
-                self.notice = Some(format!("结构校验没过，已让模型重写（{} 处）", issues.len()));
+                let detail = issues
+                    .iter()
+                    .map(|issue| issue.as_feedback())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.blocks.push(Block::verify(detail));
                 cx.notify();
                 false
             }
@@ -653,11 +735,14 @@ impl AiChat {
         self.task = None;
         self.elapsed_ms = self.started.map(|t| t.elapsed().as_millis() as u64);
         let output = self
-            .turns
+            .blocks
             .iter()
             .rev()
-            .find(|t| t.tool.is_none() && !t.mine)
-            .map(|t| t.text.trim().to_string())
+            .find_map(|block| match block {
+                Block::Assistant { text, .. } => Some(text),
+                _ => None,
+            })
+            .map(|text| text.trim().to_string())
             .unwrap_or_default();
         if output.is_empty() {
             // thinking 模型把预算花在思维链上时会这样
@@ -674,8 +759,13 @@ impl AiChat {
         if let Some(pending) = self.pending.as_mut() {
             pending.after = output;
         }
-        if let Some(last_user) = self.turns.iter().rev().find(|t| t.mine) {
-            self.history.push(ChatMessage::user(last_user.text.clone()));
+        if let Some(Block::User { text, .. }) = self
+            .blocks
+            .iter()
+            .rev()
+            .find(|b| matches!(b, Block::User { .. }))
+        {
+            self.history.push(ChatMessage::user(text.clone()));
         }
         cx.notify();
     }
@@ -697,8 +787,22 @@ impl AiChat {
         cx.notify();
     }
 
+    /// 折叠 / 展开某一块
+    fn toggle_block(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if let Some(block) = self.blocks.get_mut(ix) {
+            block.toggle();
+            cx.notify();
+        }
+    }
+
+    fn toggle_diff(&mut self, cx: &mut Context<Self>) {
+        self.diff_collapsed = !self.diff_collapsed;
+        cx.notify();
+    }
+
     fn clear(&mut self, cx: &mut Context<Self>) {
-        self.turns.clear();
+        self.blocks.clear();
+        self.diff_collapsed = false;
         self.history.clear();
         self.pending = None;
         self.error = None;
@@ -851,7 +955,7 @@ impl Render for AiChat {
             .gap_1()
             .px_2()
             .py_1();
-        if self.turns.is_empty() {
+        if self.blocks.is_empty() {
             history = history.child(
                 div()
                     .text_xs()
@@ -859,38 +963,100 @@ impl Render for AiChat {
                     .child("可以直接提问；要改笔记时用下面的动作，或者说“把这段改成……”"),
             );
         }
-        for turn in &self.turns {
-            // 工具行：灰色小字，和对话分开，一眼能看出"它去翻了什么"
-            if let Some(tool) = &turn.tool {
-                history = history.child(div().text_xs().text_color(muted).child(tool.clone()));
-                continue;
-            }
-            if turn.text.is_empty() && !turn.mine && self.busy {
-                continue;
-            }
+        for (ix, block) in self.blocks.iter().enumerate() {
+            let collapsed = block.is_collapsed();
+            let (title, body) = match block {
+                Block::User { text, .. } => ("我".to_string(), Body::Markdown(text.clone())),
+                Block::Assistant { text, .. } => {
+                    if text.is_empty() && self.busy {
+                        continue;
+                    }
+                    ("AI".to_string(), Body::Markdown(text.clone()))
+                }
+                Block::Tool { title, output, .. } => (title.clone(), Body::Code(output.clone())),
+                Block::Verify { detail, .. } => (
+                    format!(
+                        "结构校验没过，已让模型重写（{} 行）",
+                        detail.lines().count()
+                    ),
+                    Body::Code(detail.clone()),
+                ),
+            };
+
+            // 标题行：点一下折叠 / 展开（▸ / ▾ 是状态指示，不是按钮）
             history = history.child(
                 div()
-                    .text_sm()
-                    .text_color(if turn.mine { primary } else { theme.foreground })
-                    .child(if turn.mine {
-                        format!("我：{}", turn.text)
+                    .id(("ai-block", ix))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)))
+                    .child(div().text_xs().text_color(muted).child(if collapsed {
+                        "▸"
                     } else {
-                        format!("AI：{}", turn.text)
-                    }),
+                        "▾"
+                    }))
+                    .child(div().text_xs().text_color(muted).child(title)),
             );
+            if collapsed {
+                continue;
+            }
+            history = history.child(match body {
+                // `TextView` 才有选区与 Cmd-C：普通 `div` 里的文本选不中
+                Body::Markdown(text) => div()
+                    .w_full()
+                    .child(
+                        TextView::markdown(("ai-body", ix), text)
+                            .selectable(true)
+                            .text_sm(),
+                    )
+                    .into_any_element(),
+                Body::Code(text) => div()
+                    .w_full()
+                    .child(
+                        TextView::markdown(("ai-body", ix), code_fence(&text))
+                            .selectable(true)
+                            .text_xs(),
+                    )
+                    .into_any_element(),
+            });
         }
         if let Some(pending) = &self.pending {
             if !pending.after.is_empty() && !matches!(pending.kind, ApplyKind::InsertAtCursor) {
                 let lines = diff_lines(&pending.before, &pending.after);
                 let (added, removed) = crate::core::ai::diff::diff_stats(&lines);
                 pending_stats = Some(format!("+{added} -{removed}"));
-                for line in lines {
-                    let (text, color) = match line {
-                        DiffLine::Same(t) => (format!("  {t}"), muted),
-                        DiffLine::Add(t) => (format!("+ {t}"), primary),
-                        DiffLine::Del(t) => (format!("- {t}"), warning),
-                    };
-                    history = history.child(div().text_xs().text_color(color).child(text));
+                history = history.child(
+                    div()
+                        .id("ai-diff-block")
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_diff(cx)))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(if self.diff_collapsed { "▸" } else { "▾" }),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(format!("改前 / 改后（+{added} -{removed}）")),
+                        ),
+                );
+                if !self.diff_collapsed {
+                    for line in lines {
+                        let (text, color) = match line {
+                            DiffLine::Same(t) => (format!("  {t}"), muted),
+                            DiffLine::Add(t) => (format!("+ {t}"), primary),
+                            DiffLine::Del(t) => (format!("- {t}"), warning),
+                        };
+                        history = history.child(div().text_xs().text_color(color).child(text));
+                    }
                 }
             }
         }
@@ -1026,3 +1192,8 @@ impl Render for AiChat {
             .child(status)
     }
 }
+
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
+#[cfg(test)]
+#[path = "../../tests/ui/ai.rs"]
+mod tests;
