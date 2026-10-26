@@ -1,6 +1,6 @@
 # 文档索引
 
-> `docs/` 共 39 份 Markdown，按领域分组如下。
+> `docs/` 共 40 份 Markdown，按领域分组如下。
 > **状态以当前 `src/` 代码为准**（核对日期 2026-10-20），不是文档自述。
 > 新增文档请按 §7 的命名约定命名，并回到本文件登记一行。
 
@@ -94,6 +94,7 @@
 |---|---|---|---|
 | [ai-capabilities-eval.md](./ai/ai-capabilities-eval.md) | 技术调研：网络栈现状、Provider 选型（OpenAI 兼容 HTTP / CLI Agent）、依赖与 Skills 规范、分期 | `core/ai/`（待建）、`ui/settings.rs` | 📝 **调研完成，待确认**（2026-10-26，分支 `feat/ai-assist-research`） |
 | [ai-assistant-requirements.md](./ai/ai-assistant-requirements.md) | 需求 A1–A9：单篇动作、库级管理、Skills、上下文与写入安全、设置与入口 | `core/ai/`（待建）、`ui/ai/`（待建） | 📝 **待确认**，确认后出 `-design.md` |
+| [agent-harness-eval.md](./ai/agent-harness-eval.md) | 架构调研：要不要自建 agent harness 与记忆机制、四层记忆模型、可参考的协议/框架/Rust 生态 | `core/ai/`（待建） | 📝 **分析完成，待确认**（2026-10-26） |
 
 ## 9. 规范与其它（docs/ 根目录）
 
@@ -164,7 +165,7 @@ docs/
 ├── navigation/       索引与导航 6 份
 ├── preview/          预览与界面 3 份
 ├── config/           配置       4 份
-├── ai/               AI 协助    2 份
+├── ai/               AI 协助    3 份
 └── vault/            多库       1 份
 ```
 
