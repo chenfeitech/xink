@@ -1,6 +1,6 @@
 # 文档索引
 
-> `docs/` 共 37 份 Markdown，按领域分组如下。
+> `docs/` 共 39 份 Markdown，按领域分组如下。
 > **状态以当前 `src/` 代码为准**（核对日期 2026-10-20），不是文档自述。
 > 新增文档请按 §7 的命名约定命名，并回到本文件登记一行。
 
@@ -88,7 +88,14 @@
 |---|---|---|---|
 | [multi-vault-design.md](./vault/multi-vault-design.md) | 多 Vault 注册 / 切换 / 启动校验 / 持久化 | `core/vault.rs`、`state/workspace.rs`、`ui/vault_manager.rs` | ✅（跨库搜索与跨库双链 ❌ 不做） |
 
-## 8. 规范与其它（docs/ 根目录）
+## 8. AI 协助 — `docs/ai/`
+
+| 文档 | 说明 | 对应模块 | 状态 |
+|---|---|---|---|
+| [ai-capabilities-eval.md](./ai/ai-capabilities-eval.md) | 技术调研：网络栈现状、Provider 选型（OpenAI 兼容 HTTP / CLI Agent）、依赖与 Skills 规范、分期 | `core/ai/`（待建）、`ui/settings.rs` | 📝 **调研完成，待确认**（2026-10-26，分支 `feat/ai-assist-research`） |
+| [ai-assistant-requirements.md](./ai/ai-assistant-requirements.md) | 需求 A1–A9：单篇动作、库级管理、Skills、上下文与写入安全、设置与入口 | `core/ai/`（待建）、`ui/ai/`（待建） | 📝 **待确认**，确认后出 `-design.md` |
+
+## 9. 规范与其它（docs/ 根目录）
 
 | 文档 | 说明 | 状态 |
 |---|---|---|
@@ -98,7 +105,7 @@
 
 ---
 
-## 9. 已知缺口（文档说要做、代码还没做）
+## 10. 已知缺口（文档说要做、代码还没做）
 
 - **编辑区 Markdown 高亮待人工验收**：feature 与代码已就绪（`editor-syntax-highlight-eval.md`），
   但着色效果、代码块 injection、明暗跟随都只能肉眼确认，尚未验收。
@@ -115,7 +122,7 @@
 | 反链/标签面板的位置描述过时 | `index-panels-design.md` | 实际由 `ui/rail.rs` + `ui/drawer.rs` 承载 |
 | 部分 `ui/` 模块无对应测试 | `TESTS.md` | `tabs` / `preview` / `settings` / `backlink` / `tags` / `search` / `drawer` / `rail` / `completion` / `vault_manager` |
 
-## 10. 待判断：清理与归档候选
+## 11. 待判断：清理与归档候选
 
 上次全量梳理（2026-10-20）中挑出、尚未处理的部分：
 
@@ -126,20 +133,20 @@
 | `editor-core-migration-eval.md` | 归档到 `docs/archive/` | 迁移已完成，属一次性决策记录 |
 | `wechat-promo.md` | 移出 `docs/` | 宣传文案，与工程文档混放 |
 
-## 11. 命名约定
+## 12. 命名约定
 
 - 功能设计：`<功能>-design.md`（如 `wikilink-design.md`）
 - 功能需求：`<功能>-requirements.md`（如 `json-yaml-editing-requirements.md`）
 - 调研/评估：`<主题>-eval.md`、`<主题>-analysis.md`
 - 新增文档后：① 在本文件对应分组登记一行；② 标注状态与对应模块；③ 若对应代码尚未实现，状态写 ⚠️ 并进 §9。
 
-## 12. 未立项的方向（不在 `docs/`，仅备忘）
+## 13. 未立项的方向（不在 `docs/`，仅备忘）
 
 - **PDF 预览**：`REQUIREMENTS.md` 列为 P2 非目标，尚未立项。已完成的调研结论（后端候选 `hayro` / `stet-pdf-reader` 均为纯 Rust + MIT/Apache；gpui 绘制 API 表达力不足以做矢量直绘）**未落成文档**，需要时从对话记录恢复或重新调研。
 
 ---
 
-## 13. 目录结构与归属规则
+## 14. 目录结构与归属规则
 
 文档按功能分文件夹存放，根目录只放跨功能文档：
 
@@ -157,6 +164,7 @@ docs/
 ├── navigation/       索引与导航 6 份
 ├── preview/          预览与界面 3 份
 ├── config/           配置       4 份
+├── ai/               AI 协助    2 份
 └── vault/            多库       1 份
 ```
 
