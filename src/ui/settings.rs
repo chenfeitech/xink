@@ -1400,6 +1400,7 @@ impl SettingsView {
             let id_for_default = id.clone();
             let id_for_toggle = id.clone();
             let id_for_delete = id.clone();
+            let id_for_probe = id.clone();
             let mut row = div()
                 .flex()
                 .items_center()
@@ -1455,6 +1456,72 @@ impl SettingsView {
                                 cfg.ai.models.retain(|m| m.id != id);
                             });
                             this.model_notice = Some("已删除".into());
+                        })),
+                )
+                // 连接测试：能力声明不可信（设计 D5），是否支持工具
+                // 只能靠一次真实探针来判断
+                .child(
+                    Button::new(SharedString::from(format!("ai-probe-{id}")))
+                        .small()
+                        .ghost()
+                        .label("测试")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let id = id_for_probe.clone();
+                            let cfg = crate::app::config(cx);
+                            let Some(model) = cfg.ai.models.iter().find(|m| m.id == id).cloned()
+                            else {
+                                this.model_notice = Some("模型已不在列表中".into());
+                                return;
+                            };
+                            let ai = cfg.ai.clone();
+                            this.model_notice = Some(format!("正在测试 {id}…"));
+                            let task = cx.background_spawn(async move {
+                                crate::core::ai::probe::probe_model(&ai, &model)
+                            });
+                            this.model_task =
+                                Some(cx.spawn_in(window, async move |this, window| {
+                                    let result = task.await;
+                                    // 面板可能已经随设置窗口关掉了，拿不到就算了
+                                    _ = this.update_in(window, |this, _window, cx| {
+                                        let id_for_write = id.clone();
+                                        let tools = result.supports_tools;
+                                        crate::app::update_config(cx, move |cfg| {
+                                            if let Some(m) = cfg
+                                                .ai
+                                                .models
+                                                .iter_mut()
+                                                .find(|m| m.id == id_for_write)
+                                            {
+                                                m.tools_enabled = tools;
+                                                // 能力列表跟着探针结论走：
+                                                // 声明有但实际不支持的，要摘掉
+                                                m.capabilities.retain(|c| c != "tools");
+                                                if tools {
+                                                    m.capabilities.push("tools".into());
+                                                }
+                                                m.last_checked_ms =
+                                                    crate::core::ai::models::now_ms();
+                                            }
+                                        });
+                                        this.model_notice = Some(match result.error {
+                                            Some(err) => format!("{id}：{}", err.message()),
+                                            None => format!(
+                                                "{id}：{} {} ms{}",
+                                                if tools {
+                                                    "支持工具"
+                                                } else {
+                                                    "不支持工具"
+                                                },
+                                                result.elapsed_ms,
+                                                if tools {
+                                                    ""
+                                                } else {
+                                                    "（将按单轮使用）"
+                                                }
+                                            ),
+                                        });
+                                    });
+                                }));
                         })),
                 );
             let _ = &mut row;
