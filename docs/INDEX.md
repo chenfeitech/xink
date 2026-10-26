@@ -32,8 +32,8 @@
 | [file-tree-hidden-files-design.md](./file-tree/file-tree-hidden-files-design.md) | 显示隐藏文件与引用其他文件 | `core/vault.rs`、`core/config.rs` | ✅ |
 | [file-tree-layout-design.md](./file-tree/file-tree-layout-design.md) | 长文件名下的缩进 / 图标列 / 截断 | `ui/file_tree.rs` | ✅ |
 | [file-tree-icons-design.md](./file-tree/file-tree-icons-design.md) | 按文件类型给不同图标 | `core/media.rs`、`ui/file_tree.rs` | ✅（音频/视频已补齐） |
-| [file-tree-reveal-active-note-requirements.md](./file-tree/file-tree-reveal-active-note-requirements.md) | 切换活动笔记时目录树自动定位（展开 / 选中 / 滚动）的需求 | `ui/file_tree.rs`、`ui/editor.rs` | 📝 **待实现** |
-| [file-tree-reveal-active-note-design.md](./file-tree/file-tree-reveal-active-note-design.md) | 同上：钩子挂在 `EditorPanel::set_active`，复用框架 `TreeState::reveal_item` | `ui/file_tree.rs`、`ui/editor.rs` | 📝 **待实现** |
+| [file-tree-reveal-active-note-requirements.md](./file-tree/file-tree-reveal-active-note-requirements.md) | 切换活动笔记时目录树自动定位（展开 / 选中 / 滚动）的需求 | `ui/file_tree.rs`、`ui/editor.rs` | ✅ 已实施（2026-10-23，待人工验收） |
+| [file-tree-reveal-active-note-design.md](./file-tree/file-tree-reveal-active-note-design.md) | 同上：钩子挂在 `EditorPanel::set_active`，复用框架 `TreeState::reveal_item` | `ui/file_tree.rs`、`ui/editor.rs` | ✅ 已实施（2026-10-23，待人工验收） |
 
 ## 3. 编辑器 — `docs/editor/`
 
@@ -92,12 +92,12 @@
 
 | 文档 | 说明 | 对应模块 | 状态 |
 |---|---|---|---|
-| [ai-capabilities-eval.md](./ai/ai-capabilities-eval.md) | 技术调研：网络栈现状、Provider 选型（OpenAI 兼容 HTTP / CLI Agent）、依赖与 Skills 规范、分期 | `core/ai/`（待建）、`ui/settings.rs` | 🚧 **M1 已实施，待人工验收**（含编辑器下方 AI 对话条，2026-10-26） |
-| [ai-assistant-requirements.md](./ai/ai-assistant-requirements.md) | 需求 A1–A9：单篇动作、库级管理、Skills、上下文与写入安全、设置与入口 | `core/ai/`（待建）、`ui/ai/`（待建） | 🚧 **M1 已实施，待人工验收**（2026-10-26）|
-| [agent-harness-eval.md](./ai/agent-harness-eval.md) | 架构调研：要不要自建 agent harness 与记忆机制、四层记忆模型、可参考的协议/框架/Rust 生态 | `core/ai/`（待建） | 📝 **分析完成，待确认**（2026-10-26） |
-| [ai-assistant-design.md](./ai/ai-assistant-design.md) | 技术设计：agent loop / 工具集 / Provider 抽象 / 配置与持久化 / 异常边界 / M0–M5 分期 | `core/ai/`（待建）、`ui/ai/`（待建） | 📝 **待确认**（2026-10-26，确认后开工） |
-| [ollama-provider-design.md](./ai/ollama-provider-design.md) | Ollama Provider + 模型列表管理：native vs 兼容端点实测、per-model 参数与连接测试、配置与设置界面 | `core/ai/{provider,ndjson,models}.rs`（待建）、`ui/settings.rs` | ✅ **M0 Spike 已完成**；M1 已实施，待人工验收（2026-10-26） |
-| [ai-m1-completion-design.md](./ai/ai-m1-completion-design.md) | M1 收口：agent loop / 只读工具 / 结构校验 / `.xink` 排除 / 连接测试 / 快照轮转与清空 / 命令面板入口，P1–P5 分期 | `core/ai/{loop,tools,verify,snapshot}.rs`、`core/media.rs`、`ui/{ai,command,settings}.rs` | 🚧 **P1 已实施**（2026-10-26，P2–P5 待做） |
+| [ai-capabilities-eval.md](./ai/ai-capabilities-eval.md) | 技术调研：网络栈现状、Provider 选型（OpenAI 兼容 HTTP / CLI Agent）、依赖与 Skills 规范、分期 | `core/ai/`、`ui/settings.rs` | ✅ **M1 已实施并验收**（含编辑器下方 AI 对话条，2026-10-26） |
+| [ai-assistant-requirements.md](./ai/ai-assistant-requirements.md) | 需求 A1–A9：单篇动作、库级管理、Skills、上下文与写入安全、设置与入口 | `core/ai/`、`ui/ai.rs` | ✅ **A1–A4 / A9.1 已实施并验收**（2026-10-26）；A5–A8（Skills / 库级任务 / 记忆）待做 |
+| [agent-harness-eval.md](./ai/agent-harness-eval.md) | 架构调研：要不要自建 agent harness 与记忆机制、四层记忆模型、可参考的协议/框架/Rust 生态 | `core/ai/` | 📝 **分析完成，待确认**（M2 开工前需确认） |
+| [ai-assistant-design.md](./ai/ai-assistant-design.md) | 技术设计：agent loop / 工具集 / Provider 抽象 / 配置与持久化 / 异常边界 / M0–M5 分期 | `core/ai/`、`ui/ai.rs` | ✅ **M0–M1 已实施并验收**（2026-10-26）；M2–M5 待做 |
+| [ollama-provider-design.md](./ai/ollama-provider-design.md) | Ollama Provider + 模型列表管理：native vs 兼容端点实测、per-model 参数与连接测试、配置与设置界面 | `core/ai/{ollama,models}.rs`、`ui/settings.rs` | ✅ **M0 Spike + M1 已实施并验收**（2026-10-26） |
+| [ai-m1-completion-design.md](./ai/ai-m1-completion-design.md) | M1 收口：agent loop / 只读工具 / 结构校验 / `.xink` 排除 / 连接测试 / 快照轮转与清空 / 命令面板入口，P1–P5 分期 | `core/ai/{agent_loop,tools,verify,probe,snapshot}.rs`、`core/media.rs`、`ui/{ai,command,settings}.rs` | ✅ **P1–P5 全部实施并验收、已合入 main**（2026-10-26） |
 
 ## 9. 规范与其它（docs/ 根目录）
 
@@ -121,10 +121,9 @@
 
 | 缺口 | 出处 | 说明 |
 |---|---|---|
-| `language` / `color_scheme` / `keymap` 三项死配置仍在模型里 | `config-wiring-design.md` | `keymap` 连设置界面入口都没有，`main.rs` 键位全部硬编码。文档结论是"要么接线、要么移除"，两者都未执行 |
-| "覆盖配置 → UI 行为改变"的测试仍为 0 | `config-wiring-design.md` §1 | `ui/settings.rs` 无 `#[path]` 测试挂载，防退化机制缺失 |
+| `editor.keymap` 仍是死配置 | `config-wiring-design.md` | `language` / `color_scheme` 已于 2026-10-21 移除；只剩 `keymap`：`main.rs:59-84` 键位全部硬编码，且连设置界面入口都没有。文档结论（§13 第 13 项）是 P2 接线：新建 `core/keymap.rs`，`main.rs` 改 `cx.bind_keys(resolve_bindings(&cfg))`，设置界面补键值对入口 |
 | 反链/标签面板的位置描述过时 | `index-panels-design.md` | 实际由 `ui/rail.rs` + `ui/drawer.rs` 承载 |
-| 部分 `ui/` 模块无对应测试 | `TESTS.md` | `tabs` / `preview` / `settings` / `backlink` / `tags` / `search` / `drawer` / `rail` / `completion` / `vault_manager` |
+| 部分 `ui/` 模块无对应测试 | `TESTS.md` | `tabs` / `preview` / `backlink` / `tags` / `search` / `drawer` / `rail` / `completion` / `vault_manager`（`settings` 已于 2026-10-26 补上描述表测试） |
 
 ## 11. 待判断：清理与归档候选
 
