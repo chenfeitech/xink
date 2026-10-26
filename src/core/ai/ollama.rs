@@ -7,15 +7,15 @@
 
 use serde_json::json;
 use std::io::{BufRead, BufReader};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use super::models::{parse_tags, DiscoveredModel};
+use super::models::{DiscoveredModel, parse_tags};
 use super::ndjson::NdjsonParser;
 use super::{
-    classify_ureq_error, http_agent, pump_stream, AiError, CompletionRequest, Provider, StreamEvent,
-    Usage,
+    AiError, CompletionRequest, Provider, StreamEvent, Usage, classify_ureq_error, http_agent,
+    pump_stream,
 };
 
 pub struct OllamaProvider;

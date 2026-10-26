@@ -38,8 +38,8 @@ impl DiscoveredModel {
 
 /// 解析 `/api/tags` 的响应
 pub fn parse_tags(json: &str) -> Result<Vec<DiscoveredModel>, AiError> {
-    let value: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| AiError::Protocol(format!("tags 不是 JSON: {e}")))?;
+    let value: serde_json::Value = serde_json::from_str(json)
+        .map_err(|e| AiError::Protocol(format!("tags 不是 JSON: {e}")))?;
     let arr = value
         .get("models")
         .and_then(|m| m.as_array())

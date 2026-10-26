@@ -1,6 +1,6 @@
 //! 上下文装配与预算
 
-use crate::core::ai::context::{assemble, estimate_tokens, ContextScope};
+use crate::core::ai::context::{ContextScope, assemble, estimate_tokens};
 
 #[test]
 fn 中文按宽字符计() {
@@ -11,13 +11,7 @@ fn 中文按宽字符计() {
 
 #[test]
 fn 选中优先且超预算时截断() {
-    let prepared = assemble(
-        ContextScope::Selection,
-        "选中内容",
-        "整篇整篇整篇",
-        0,
-        100,
-    );
+    let prepared = assemble(ContextScope::Selection, "选中内容", "整篇整篇整篇", 0, 100);
     assert_eq!(prepared.text, "选中内容");
     assert!(!prepared.truncated);
 

@@ -11,7 +11,7 @@ use gpui_kit::component::dock::{
 use gpui_kit::component::theme::{Theme, ThemeMode as KitThemeMode};
 use gpui_kit::*;
 
-use crate::actions::{ToggleAiChat, OpenCommandPalette, OpenSearch, OpenSettings, ToggleTheme};
+use crate::actions::{OpenCommandPalette, OpenSearch, OpenSettings, ToggleAiChat, ToggleTheme};
 use std::path::Path;
 
 use crate::core::config::{AppConfig, ThemeMode};

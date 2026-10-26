@@ -22,22 +22,22 @@ pub mod prompt;
 pub mod snapshot;
 pub mod sse;
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 // 下面这些 re-export 目前只被测试与后续 UI 用到：bin crate 里 `pub use`
 // 没有外部消费者会被判为未使用。UI（M1 下半）接入后自然消失。
 #[allow(unused_imports)]
-pub use context::{assemble, estimate_tokens, ContextScope, PreparedContext};
+pub use context::{ContextScope, PreparedContext, assemble, estimate_tokens};
 #[allow(unused_imports)]
-pub use diff::{diff_lines, DiffLine};
+pub use diff::{DiffLine, diff_lines};
 #[allow(unused_imports)]
-pub use keychain::{resolve_api_key, MacKeychain, MemorySecretStore, SecretStore};
+pub use keychain::{MacKeychain, MemorySecretStore, SecretStore, resolve_api_key};
 #[allow(unused_imports)]
-pub use models::{parse_tags, DiscoveredModel, ModelCache};
+pub use models::{DiscoveredModel, ModelCache, parse_tags};
 #[allow(unused_imports)]
-pub use prompt::{all_actions, Action};
+pub use prompt::{Action, all_actions};
 #[allow(unused_imports)]
 pub use snapshot::{snapshot_name, write_snapshot};
 
@@ -63,16 +63,28 @@ pub struct ChatMessage {
 #[allow(dead_code)]
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: Role::System, content: content.into() }
+        Self {
+            role: Role::System,
+            content: content.into(),
+        }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: Role::User, content: content.into() }
+        Self {
+            role: Role::User,
+            content: content.into(),
+        }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: Role::Assistant, content: content.into() }
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+        }
     }
     pub fn tool(content: impl Into<String>) -> Self {
-        Self { role: Role::Tool, content: content.into() }
+        Self {
+            role: Role::Tool,
+            content: content.into(),
+        }
     }
 
     /// Ollama / OpenAI 兼容端点用的角色名
@@ -153,12 +165,18 @@ impl AiError {
             Self::NoModel => "没有选中模型：请到设置 · AI 里选择一个模型".into(),
             Self::Auth => "认证失败：检查密钥是否正确".into(),
             Self::RateLimit => "被服务商限流了，请稍后重试".into(),
-            Self::ModelNotFound(name) => format!("模型 {name} 不存在：先用 `ollama pull {name}` 拉取"),
-            Self::Network(detail) => format!("网络不可用（{detail}）：检查 Ollama 是否已启动、地址是否正确"),
+            Self::ModelNotFound(name) => {
+                format!("模型 {name} 不存在：先用 `ollama pull {name}` 拉取")
+            }
+            Self::Network(detail) => {
+                format!("网络不可用（{detail}）：检查 Ollama 是否已启动、地址是否正确")
+            }
             Self::Timeout => "等待响应超时：可以重试，或在设置里调大超时".into(),
             Self::Protocol(detail) => format!("返回内容无法解析（{detail}）"),
             Self::Truncated => "连接中断，结果可能不完整".into(),
-            Self::EmptyResult => "模型没有返回正文（可能是思考占用了全部预算）：请重试或关闭「思考」".into(),
+            Self::EmptyResult => {
+                "模型没有返回正文（可能是思考占用了全部预算）：请重试或关闭「思考」".into()
+            }
             Self::Canceled => "已取消".into(),
             Self::Io(detail) => format!("读写失败（{detail}）"),
         }

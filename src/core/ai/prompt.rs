@@ -67,20 +67,37 @@ impl Action {
 
     /// 是否有意义地作用于选中文本（生成标签这类更适合整篇）
     pub fn prefers_selection(self) -> bool {
-        matches!(self, Self::Polish | Self::Expand | Self::Condense | Self::Translate)
+        matches!(
+            self,
+            Self::Polish | Self::Expand | Self::Condense | Self::Translate
+        )
     }
 
     /// 给模型的指令
     fn instruction(self) -> &'static str {
         match self {
-            Self::Polish => "润色下面这段笔记：修正语病与不通顺的表达，保持原意、保持原有的 Markdown 结构，不要新增事实。",
-            Self::Expand => "扩写下面这段笔记：补充合理的细节与例子，保持原有语气与 Markdown 结构，不要编造具体数据。",
-            Self::Condense => "精简下面这段笔记：保留全部关键信息，压缩到原来的一半以内，保持 Markdown 结构。",
-            Self::Translate => "翻译下面这段笔记：保持 Markdown 结构与专有名词原样，只翻译自然语言部分。",
-            Self::Retitle => "为下面这篇笔记拟一个标题：只输出一行标题文本，不要 Markdown 标记，不要解释。",
+            Self::Polish => {
+                "润色下面这段笔记：修正语病与不通顺的表达，保持原意、保持原有的 Markdown 结构，不要新增事实。"
+            }
+            Self::Expand => {
+                "扩写下面这段笔记：补充合理的细节与例子，保持原有语气与 Markdown 结构，不要编造具体数据。"
+            }
+            Self::Condense => {
+                "精简下面这段笔记：保留全部关键信息，压缩到原来的一半以内，保持 Markdown 结构。"
+            }
+            Self::Translate => {
+                "翻译下面这段笔记：保持 Markdown 结构与专有名词原样，只翻译自然语言部分。"
+            }
+            Self::Retitle => {
+                "为下面这篇笔记拟一个标题：只输出一行标题文本，不要 Markdown 标记，不要解释。"
+            }
             Self::Summarize => "为下面这篇笔记写一段摘要：3 句话以内，只输出摘要正文。",
-            Self::Tag => "为下面这篇笔记生成标签：只输出一行以逗号分隔的标签，3–5 个，不要 `#` 前缀，不要解释。",
-            Self::Continue => "接着下面这段笔记继续写：延续既有语气与结构，只输出续写的内容，不要重复原文。",
+            Self::Tag => {
+                "为下面这篇笔记生成标签：只输出一行以逗号分隔的标签，3–5 个，不要 `#` 前缀，不要解释。"
+            }
+            Self::Continue => {
+                "接着下面这段笔记继续写：延续既有语气与结构，只输出续写的内容，不要重复原文。"
+            }
         }
     }
 }

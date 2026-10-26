@@ -1,6 +1,6 @@
 //! `/api/tags` 解析与缓存
 
-use crate::core::ai::models::{parse_tags, DiscoveredModel, ModelCache};
+use crate::core::ai::models::{DiscoveredModel, ModelCache, parse_tags};
 use crate::core::config::{AiConfig, ModelEntry};
 
 const TAGS: &str = r#"{"models":[

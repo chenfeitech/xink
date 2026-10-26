@@ -5,13 +5,13 @@
 
 use serde_json::json;
 use std::io::{BufRead, BufReader};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::sse::{SseFrame, SseParser};
 use super::{
-    classify_ureq_error, http_agent, pump_stream, AiError, CompletionRequest, Provider, StreamEvent,
-    Usage,
+    AiError, CompletionRequest, Provider, StreamEvent, Usage, classify_ureq_error, http_agent,
+    pump_stream,
 };
 
 pub struct OpenAiProvider;

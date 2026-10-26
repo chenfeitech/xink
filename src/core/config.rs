@@ -694,9 +694,7 @@ impl AiConfig {
         let base = model.base_url_or(self);
         match model.kind {
             AiProviderKind::Ollama => crate::core::ai::ollama::chat_endpoint(&base),
-            AiProviderKind::OpenAiCompatible => {
-                crate::core::ai::openai::chat_endpoint(&base)
-            }
+            AiProviderKind::OpenAiCompatible => crate::core::ai::openai::chat_endpoint(&base),
         }
     }
 
@@ -720,11 +718,15 @@ impl AiConfig {
     }
 
     pub fn sanitize(&mut self) {
-        self.timeout_secs = self.timeout_secs.clamp(limit::AI_TIMEOUT_SECS.0, limit::AI_TIMEOUT_SECS.1);
+        self.timeout_secs = self
+            .timeout_secs
+            .clamp(limit::AI_TIMEOUT_SECS.0, limit::AI_TIMEOUT_SECS.1);
         self.max_context_chars = self
             .max_context_chars
             .clamp(limit::AI_CONTEXT_CHARS.0, limit::AI_CONTEXT_CHARS.1);
-        self.max_steps = self.max_steps.clamp(limit::AI_MAX_STEPS.0, limit::AI_MAX_STEPS.1);
+        self.max_steps = self
+            .max_steps
+            .clamp(limit::AI_MAX_STEPS.0, limit::AI_MAX_STEPS.1);
         self.auto_apply = false;
         // 空 id 的条目没有意义（多半是手改配置留下的）
         self.models.retain(|m| !m.id.trim().is_empty());
@@ -738,7 +740,10 @@ impl AiConfig {
                 (limit::AI_TEMPERATURE.0, limit::AI_TEMPERATURE.1),
             );
             let max_ctx = model.context_limit.unwrap_or(limit::AI_NUM_CTX.1);
-            model.params.num_ctx = model.params.num_ctx.clamp(limit::AI_NUM_CTX.0, max_ctx.max(limit::AI_NUM_CTX.0));
+            model.params.num_ctx = model
+                .params
+                .num_ctx
+                .clamp(limit::AI_NUM_CTX.0, max_ctx.max(limit::AI_NUM_CTX.0));
         }
         // 选中的模型被删掉或停用了：清空选择，避免"看着配好了却发不出去"
         if !self.default_model.is_empty() && self.active_model().is_none() {

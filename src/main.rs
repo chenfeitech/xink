@@ -8,8 +8,8 @@ mod ui;
 
 use actions::{
     FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, NewNote,
-    OpenCommandPalette, OpenFolder, OpenSearch, OpenSettings, RenameItem, Save,
-    ToggleAiChat, ToggleTheme,
+    OpenCommandPalette, OpenFolder, OpenSearch, OpenSettings, RenameItem, Save, ToggleAiChat,
+    ToggleTheme,
 };
 use app::Workspace;
 use gpui_kit::component::Root;

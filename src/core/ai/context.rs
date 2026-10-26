@@ -61,14 +61,22 @@ pub fn assemble(
     };
 
     if body.chars().count() <= budget_chars {
-        return PreparedContext { text: body, truncated: false, notice: None };
+        return PreparedContext {
+            text: body,
+            truncated: false,
+            notice: None,
+        };
     }
 
     let (text, start, end) = window(&body, budget_chars);
     PreparedContext {
         text,
         truncated: true,
-        notice: Some(format!("内容超过预算，本次只发送第 {}–{} 行", start + 1, end + 1)),
+        notice: Some(format!(
+            "内容超过预算，本次只发送第 {}–{} 行",
+            start + 1,
+            end + 1
+        )),
     }
 }
 

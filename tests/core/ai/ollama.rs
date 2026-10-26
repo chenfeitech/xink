@@ -4,11 +4,11 @@
 //! `cargo test -- --ignored core::ai::ollama`
 //! 前提：本机 `http://localhost:11434` 有 Ollama 且至少拉了一个模型。
 
-use crate::core::ai::ollama::{list_models, probe, chat_endpoint, OllamaProvider};
+use crate::core::ai::ollama::{OllamaProvider, chat_endpoint, list_models, probe};
 use crate::core::ai::{ChatMessage, CompletionRequest, Provider, StreamEvent};
 use crate::core::config::AiModelParams;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 const BASE: &str = "http://localhost:11434";
@@ -38,7 +38,11 @@ fn 流式能拿到正文() {
         endpoint: chat_endpoint(BASE),
         model,
         messages: vec![ChatMessage::user("用一句话说明什么是本地优先软件")],
-        params: AiModelParams { think: false, num_predict: 64, ..Default::default() },
+        params: AiModelParams {
+            think: false,
+            num_predict: 64,
+            ..Default::default()
+        },
         api_key: None,
         first_byte_timeout: Duration::from_secs(30),
         silence_timeout: Duration::from_secs(40),
@@ -47,13 +51,11 @@ fn 流式能拿到正文() {
     let mut text = String::new();
     let mut done = false;
     provider
-        .stream(&req, Arc::new(AtomicBool::new(false)), &mut |ev| {
-            match ev {
-                StreamEvent::Delta(s) => text.push_str(&s),
-                StreamEvent::Done => done = true,
-                StreamEvent::Failed(e) => panic!("{e}"),
-                _ => {}
-            }
+        .stream(&req, Arc::new(AtomicBool::new(false)), &mut |ev| match ev {
+            StreamEvent::Delta(s) => text.push_str(&s),
+            StreamEvent::Done => done = true,
+            StreamEvent::Failed(e) => panic!("{e}"),
+            _ => {}
         })
         .expect("stream 失败");
     assert!(done, "没有收到结束事件");

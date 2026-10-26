@@ -1,6 +1,6 @@
 //! 行级 diff
 
-use crate::core::ai::diff::{diff_lines, diff_stats, DiffLine};
+use crate::core::ai::diff::{DiffLine, diff_lines, diff_stats};
 
 #[test]
 fn 改一行() {

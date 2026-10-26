@@ -1,6 +1,6 @@
 //! prompt 组装
 
-use crate::core::ai::prompt::{build_messages, Action, ALL_ACTIONS};
+use crate::core::ai::prompt::{ALL_ACTIONS, Action, build_messages};
 use crate::core::config::OutputLang;
 
 #[test]

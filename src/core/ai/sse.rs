@@ -51,7 +51,9 @@ impl SseParser {
                 2
             } else {
                 // 只可能是 \n\n 的变体；防御性处理单个空行
-                rest.chars().take_while(|c| *c == '\n' || *c == '\r').count()
+                rest.chars()
+                    .take_while(|c| *c == '\n' || *c == '\r')
+                    .count()
             };
             self.buf = rest[skip..].to_string();
             if let Some(frame) = parse_block(&block) {
