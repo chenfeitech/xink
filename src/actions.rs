@@ -1,5 +1,8 @@
 //! 应用级 Action 定义（快捷键与命令面板的统一入口）
 
+use std::collections::BTreeMap;
+
+use gpui_kit::component::dock::ClosePanel;
 use gpui_kit::*;
 
 actions!(
@@ -39,3 +42,47 @@ actions!(
         ToggleAiChat
     ]
 );
+
+/// 按 `editor.keymap` 生成最终的键位表
+///
+/// 键位表本身在 [`crate::core::keymap`]（纯数据，可单测），这里只负责把
+/// "动作名 + 键串" 变成 gpui 的 `KeyBinding`——只有这里能拿到具体的 Action
+/// 类型（其中 `ClosePanel` 来自 dock 组件，core 层不引用组件）。
+/// 覆盖值的合法性已在 core 侧校验过，因此 `KeyBinding::new` 不会 panic。
+///
+/// 设计见 `docs/config/keymap-wiring-design.md` §3.3。
+pub fn key_bindings(overrides: &BTreeMap<String, String>) -> Vec<KeyBinding> {
+    crate::core::keymap::resolve(overrides)
+        .into_iter()
+        .filter_map(|resolved| binding_for(resolved.action, &resolved.keystroke, resolved.context))
+        .collect()
+}
+
+/// 动作名 → `KeyBinding`；未知动作名返回 `None`（不产生绑定）
+fn binding_for(action: &str, keystroke: &str, context: Option<&str>) -> Option<KeyBinding> {
+    Some(match action {
+        "OpenFolder" => KeyBinding::new(keystroke, OpenFolder, context),
+        "NewNote" => KeyBinding::new(keystroke, NewNote, context),
+        "NewFolder" => KeyBinding::new(keystroke, NewFolder, context),
+        "DeleteItem" => KeyBinding::new(keystroke, DeleteItem, context),
+        "Save" => KeyBinding::new(keystroke, Save, context),
+        "ClosePanel" => KeyBinding::new(keystroke, ClosePanel, context),
+        "RenameItem" => KeyBinding::new(keystroke, RenameItem, context),
+        "OpenSettings" => KeyBinding::new(keystroke, OpenSettings, context),
+        "FormatBold" => KeyBinding::new(keystroke, FormatBold, context),
+        "FormatItalic" => KeyBinding::new(keystroke, FormatItalic, context),
+        "FormatStrikethrough" => KeyBinding::new(keystroke, FormatStrikethrough, context),
+        "FormatInlineCode" => KeyBinding::new(keystroke, FormatInlineCode, context),
+        "FormatLink" => KeyBinding::new(keystroke, FormatLink, context),
+        "ToggleTheme" => KeyBinding::new(keystroke, ToggleTheme, context),
+        "OpenCommandPalette" => KeyBinding::new(keystroke, OpenCommandPalette, context),
+        "OpenSearch" => KeyBinding::new(keystroke, OpenSearch, context),
+        "ToggleAiChat" => KeyBinding::new(keystroke, ToggleAiChat, context),
+        _ => return None,
+    })
+}
+
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
+#[cfg(test)]
+#[path = "../tests/actions.rs"]
+mod tests;

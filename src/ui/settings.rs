@@ -26,6 +26,7 @@ use crate::core::config::{
     AppConfig, FontWeight, ImageDisplay, LinkOpen, OutputLang, PreviewDensity, ScrollSyncMode,
     ThemeMode,
 };
+use crate::core::keymap;
 use crate::core::theme::PRESET_THEMES;
 
 // ── 分类 ──────────────────────────────────────────────────────
@@ -120,6 +121,8 @@ pub struct SettingField {
     /// 文本型写入（非文本项为空操作）
     pub text_set: TextSetFn,
     pub control: ControlFn,
+    /// 输入框的占位提示：留空时显示什么（快捷键项用它显示默认键位）
+    pub placeholder: &'static str,
 }
 
 // ── 描述表的构造器（消除逐项重复代码） ──────────────────────────
@@ -168,6 +171,7 @@ fn bool_field(
         text_value: Rc::new(|_| String::new()),
         text_set: Rc::new(|_, _| {}),
         control,
+        placeholder: "",
     }
 }
 
@@ -212,6 +216,7 @@ fn choice_field(
         text_value: Rc::new(|_| String::new()),
         text_set: Rc::new(|_, _| {}),
         control,
+        placeholder: "",
     }
 }
 
@@ -251,6 +256,7 @@ fn number_field(
         text_value: Rc::new(|_| String::new()),
         text_set: Rc::new(|_, _| {}),
         control,
+        placeholder: "",
     }
 }
 
@@ -262,16 +268,28 @@ fn text_field(
     desc: &'static str,
     tab: SettingsTab,
     group: &'static str,
-    get: fn(&AppConfig) -> String,
-    set: fn(&mut AppConfig, String),
+    // 用闭包而不是 `fn` 指针：快捷键那批项要按 action 名捕获不同的读写路径，
+    // 而 fn 指针无法携带捕获。`impl Fn` 对既有的非捕获闭包与函数项都兼容。
+    get: impl Fn(&AppConfig) -> String + 'static,
+    set: impl Fn(&mut AppConfig, String) + 'static,
 ) -> SettingField {
-    let is_default = Rc::new(move |c: &AppConfig| get(c) == get(&AppConfig::default()));
-    let reset = Rc::new(move |c: &mut AppConfig| set(c, get(&AppConfig::default())));
+    let get: TextValueFn = Rc::new(get);
+    let set: TextSetFn = Rc::new(set);
+
+    let get_for_default = get.clone();
+    let is_default =
+        Rc::new(move |c: &AppConfig| get_for_default(c) == get_for_default(&AppConfig::default()));
+    let get_for_reset = get.clone();
+    let set_for_reset = set.clone();
+    let reset = Rc::new(move |c: &mut AppConfig| {
+        set_for_reset(c, get_for_reset(&AppConfig::default()));
+    });
+    let get_for_control = get.clone();
     let control =
         Rc::new(
             move |view: &mut SettingsView, c: &AppConfig| match view.inputs.get(id) {
                 Some(state) => Input::new(state).small().w(px(240.)).into_any_element(),
-                None => div().text_xs().child(get(c)).into_any_element(),
+                None => div().text_xs().child(get_for_control(c)).into_any_element(),
             },
         );
     SettingField {
@@ -287,10 +305,17 @@ fn text_field(
         reset,
         value: Rc::new(|_| 0.0),
         set_value: Rc::new(|_, _| {}),
-        text_value: Rc::new(get),
-        text_set: Rc::new(set),
+        text_value: get,
+        text_set: set,
         control,
+        placeholder: "",
     }
+}
+
+/// 在任意设置项之上追加输入框的占位提示（空值时的灰字）
+fn with_placeholder(mut field: SettingField, placeholder: &'static str) -> SettingField {
+    field.placeholder = placeholder;
+    field
 }
 
 /// 在 [`bool_field`] / [`choice_field`] 之上追加"依赖禁用"与"未生效"标记
@@ -968,6 +993,47 @@ fn all_fields() -> Vec<SettingField> {
             |c, v| c.ai.skills_enabled = v,
         ),
     ]
+    .into_iter()
+    // 快捷键：每个可绑定动作一项，表里在 `core/keymap.rs`
+    .chain(keymap_fields())
+    .collect()
+}
+
+/// 快捷键设置项：一个动作一行
+///
+/// 值就是 `editor.keymap` 里的覆盖值；留空（或从没配过）表示用默认键位，
+/// 默认键位写在说明里，同时作为输入框的占位提示。
+/// 绑定只在启动时下发一次，所以改动**重启后生效**（说明里已标注）。
+fn keymap_fields() -> Vec<SettingField> {
+    keymap::BINDINGS
+        .iter()
+        .map(|binding| {
+            let action = binding.action;
+            let field = text_field(
+                binding.id,
+                binding.label,
+                binding.desc,
+                SettingsTab::Editor,
+                "快捷键",
+                move |c: &AppConfig| c.editor.keymap.get(action).cloned().unwrap_or_default(),
+                move |c: &mut AppConfig, v: String| {
+                    let value = keymap::normalize(&v);
+                    if value.is_empty() {
+                        c.editor.keymap.remove(action);
+                    } else {
+                        c.editor.keymap.insert(action.to_string(), value);
+                    }
+                },
+            );
+            // 空串默认表示"默认不绑定"，占位提示换成更好懂的说法
+            let hint = if binding.default.is_empty() {
+                "默认不绑定"
+            } else {
+                binding.default
+            };
+            with_placeholder(field, hint)
+        })
+        .collect()
 }
 
 // ── 控件 ──────────────────────────────────────────────────────
@@ -1253,7 +1319,15 @@ impl SettingsView {
             if !is_number && !is_text {
                 continue;
             }
-            let state = cx.new(|cx| InputState::new(window, cx));
+            let placeholder = field.placeholder;
+            let state = cx.new(|cx| {
+                let state = InputState::new(window, cx);
+                if placeholder.is_empty() {
+                    state
+                } else {
+                    state.placeholder(placeholder)
+                }
+            });
             let text = if is_number {
                 format_number(&field, &cfg)
             } else {

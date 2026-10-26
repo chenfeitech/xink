@@ -6,14 +6,11 @@ mod core;
 mod state;
 mod ui;
 
-use actions::{
-    FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, NewNote,
-    OpenCommandPalette, OpenFolder, OpenSearch, OpenSettings, RenameItem, Save, ToggleAiChat,
-    ToggleTheme,
-};
+use crate::core::config::AppConfig;
+use actions::key_bindings;
 use app::Workspace;
 use gpui_kit::component::Root;
-use gpui_kit::component::dock::{ClosePanel, panel_handle, register_panel};
+use gpui_kit::component::dock::{panel_handle, register_panel};
 use gpui_kit::*;
 use ui::{BacklinkPanel, EditorPanel, FilesPanel, OutlinePanel, PreviewPanel, TagsPanel};
 
@@ -56,32 +53,11 @@ fn main() {
             gpui_kit::init(cx);
             register_panels(cx);
 
-            cx.bind_keys([
-                KeyBinding::new("cmd-o", OpenFolder, None),
-                KeyBinding::new("cmd-n", NewNote, None),
-                KeyBinding::new("cmd-s", Save, None),
-                // 关闭当前笔记标签
-                KeyBinding::new("ctrl-w", ClosePanel, None),
-                // 在文件树中重命名选中项（仅当焦点位于文件面板时生效）
-                KeyBinding::new("f2", RenameItem, Some("FilesPanel")),
-                // 打开设置（与 Obsidian 一致）
-                KeyBinding::new("cmd-,", OpenSettings, None),
-                // Markdown 行内格式（与 Obsidian 一致）；键位来源见
-                // `ui::editor::Format::action`（工具栏提示复用同一批 Action）
-                KeyBinding::new("cmd-b", FormatBold, None),
-                KeyBinding::new("cmd-i", FormatItalic, None),
-                KeyBinding::new("cmd-shift-x", FormatStrikethrough, None),
-                KeyBinding::new("cmd-e", FormatInlineCode, None),
-                KeyBinding::new("cmd-k", FormatLink, None),
-                // 切换明暗主题
-                KeyBinding::new("cmd-shift-l", ToggleTheme, None),
-                // 命令面板（与 Obsidian 一致）
-                KeyBinding::new("cmd-p", OpenCommandPalette, None),
-                // 全文搜索
-                KeyBinding::new("cmd-shift-f", OpenSearch, None),
-                // 编辑器下方的 AI 对话条（Cmd-Shift-A）
-                KeyBinding::new("cmd-shift-a", ToggleAiChat, None),
-            ]);
+            // 键位来自 `core/keymap.rs` 的表 + `editor.keymap` 的覆盖；
+            // 没配过 keymap 时结果与之前硬编码的表逐条一致（有单测锁定）。
+            // 绑定只在启动时下发一次，改键位要重启（L3，见设置项说明）。
+            let cfg = AppConfig::load();
+            cx.bind_keys(key_bindings(&cfg.editor.keymap));
 
             cx.spawn(async move |cx| {
                 let window = cx

@@ -9,6 +9,7 @@ pub mod fs;
 pub mod fuzzy;
 pub mod highlight;
 pub mod index;
+pub mod keymap;
 pub mod markdown;
 pub mod media;
 pub mod note;

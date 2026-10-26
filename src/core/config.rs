@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use crate::core::keymap;
 use crate::core::theme;
 use crate::state::workspace::config_path;
 
@@ -822,6 +823,9 @@ impl AppConfig {
             .clamp(limit::TAB_SIZE.0, limit::TAB_SIZE.1);
         self.editor.font.sanitize();
         self.editor.data_file.sanitize();
+        // 键位：空值 / 非法键串 / 未知动作名一律删除（等价于"用默认键位"），
+        // 不留"存了但不生效"的键。见 `docs/config/keymap-wiring-design.md` §3.5
+        keymap::sanitize(&mut self.editor.keymap);
 
         self.preview.font.sanitize();
         self.preview.max_width = self
