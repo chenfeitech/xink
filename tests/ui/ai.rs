@@ -90,6 +90,34 @@ fn diff_block_starts_collapsed_and_unapplied() {
     );
 }
 
+/// 防"浅蓝底变白"回归
+///
+/// gpui 的 `hsla()` 四个分量都是 0..1 且会 clamp：按 360 度 / 100 百分比的直觉
+/// 写进去会被夹成纯白，看上去就是底色没生效。
+#[test]
+fn bubble_bg_is_actually_blue_not_white() {
+    for (is_dark, expected_l) in [(false, 0.92), (true, 0.30)] {
+        let bg = super::bubble_bg(is_dark);
+        assert_eq!(bg.a, 1., "底色必须不透明，否则看不出来");
+        assert!(
+            (bg.l - expected_l).abs() < 0.01,
+            "亮度应约等于 {expected_l}，实际 {}",
+            bg.l
+        );
+        assert!(bg.s > 0.2, "饱和度太低就不是蓝的：{}", bg.s);
+        assert!(
+            (bg.h - 0.58).abs() < 0.02,
+            "色相应是蓝（约 0.58），实际 {}",
+            bg.h
+        );
+        // 关键：不能是被 clamp 出来的白色
+        assert!(
+            !(bg.s >= 1. && bg.l >= 1.),
+            "饱和度与亮度都被夹到 1 = 纯白，底色白写了"
+        );
+    }
+}
+
 #[test]
 fn only_assistant_accepts_streamed_text() {
     let mut block = Block::assistant(String::new());
