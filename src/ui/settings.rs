@@ -2126,3 +2126,8 @@ pub fn open_settings(window: &mut Window, cx: &mut App) {
             .content(move |content, _, _| content.min_h_0().child(view.clone()))
     });
 }
+
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
+#[cfg(test)]
+#[path = "../../tests/ui/settings.rs"]
+mod tests;
