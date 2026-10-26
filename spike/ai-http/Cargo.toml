@@ -1,0 +1,15 @@
+[package]
+name = "xink-ai-spike"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+ureq = { version = "3", features = ["rustls", "json"] }
+serde_json = "1"
+
+[profile.dev]
+debug = false
+
+# 独立包：不参与 xink 的构建（xink 是 bin crate，无 workspace）。
+# 声明空 workspace 以避免被任何上层 workspace 吸收。
+[workspace]
