@@ -12,6 +12,7 @@ pub enum DiffLine {
     Del(String),
 }
 
+#[allow(dead_code)]
 impl DiffLine {
     pub fn text(&self) -> &str {
         match self {

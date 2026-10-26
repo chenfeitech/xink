@@ -5,6 +5,7 @@
 
 /// 上下文的作用范围
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // FromCursor：M2 的作用域切换会用到（见需求 A6.1）
 pub enum ContextScope {
     /// 选中文本；为空时回落整篇
     Selection,

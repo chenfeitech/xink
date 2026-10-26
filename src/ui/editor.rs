@@ -19,6 +19,7 @@ use crate::actions::{
     FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, Save,
 };
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
+use crate::ui::{AiChat, AiChatEvent};
 use crate::core::config::{DataFileConfig, IndentConfig, ScrollSyncMode};
 use crate::core::datafile::{DataKind, Parsed, ValidationError, data_kind};
 use crate::core::markdown::{
@@ -52,6 +53,9 @@ pub struct EditorPanel {
     doc: Option<Entity<TextViewState>>,
     /// 防抖保存任务。每次编辑都用新任务覆盖，旧任务被 drop 即取消。
     save_task: Option<Task<()>>,
+    /// 编辑器下方的 AI 对话条：按需创建一次，关闭只是隐藏（保留历史）
+    ai_chat: Option<Entity<AiChat>>,
+    ai_open: bool,
     status: SharedString,
     /// 滚动同步方向锁：谁先滚谁在一段时间内独占推动同步，对端回显一律吸收
     /// （取代旧的"单值 EPS 比较"，后者既会 ping-pong 也会吃掉用户滚动）
@@ -241,6 +245,8 @@ impl EditorPanel {
             validation: None,
             doc: None,
             save_task: None,
+            ai_chat: None,
+            ai_open: false,
             status: SharedString::default(),
             guard: SyncGuard::default(),
             pending_anchor: None,
@@ -1514,9 +1520,25 @@ impl EditorPanel {
         Some((text, cursor))
     }
 
-    /// 当前笔记路径
-    pub fn note_path(&self) -> Option<std::path::PathBuf> {
-        self.note.as_ref().map(|n| n.path().to_path_buf())
+    /// 打开 / 关闭编辑器下方的 AI 对话条
+    pub fn toggle_ai_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ai_chat.is_none() {
+            let chat = cx.new(|cx| AiChat::new(window, cx));
+            // 对话条自己请求关闭：这里只负责把开关拨回去
+            cx.subscribe(&chat, |this, _, _: &AiChatEvent, cx| {
+                this.ai_open = false;
+                cx.notify();
+            })
+            .detach();
+            self.ai_chat = Some(chat);
+        }
+        self.ai_open = !self.ai_open;
+        if self.ai_open {
+            if let Some(chat) = &self.ai_chat {
+                chat.update(cx, |chat, cx| chat.focus(window, cx));
+            }
+        }
+        cx.notify();
     }
 
     /// 用 `text` 替换选中区；`whole` 为 true 时替换整篇。
@@ -2185,7 +2207,16 @@ impl Render for EditorPanel {
             view = view.child(self.render_toolbar(cx));
         }
 
-        view = view.child(body).child(
+        view = view.child(body);
+
+        // AI 对话条：贴在编辑区下方，聊天对象就是当前这篇笔记
+        if self.ai_open {
+            if let Some(chat) = &self.ai_chat {
+                view = view.child(chat.clone());
+            }
+        }
+
+        view = view.child(
             div()
                 .flex_none()
                 .px_2()

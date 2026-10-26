@@ -631,10 +631,14 @@ impl ModelEntry {
         }
     }
 
+    /// 是否声明支持工具调用（M2 工具阶段用它决定是否显示"启用工具"开关）
+    #[allow(dead_code)]
     pub fn supports_tools(&self) -> bool {
         self.capabilities.iter().any(|c| c == "tools")
     }
 
+    /// 是否声明支持思考（M2 起用来决定是否显示"思考"开关）
+    #[allow(dead_code)]
     pub fn supports_thinking(&self) -> bool {
         self.capabilities.iter().any(|c| c == "thinking")
     }

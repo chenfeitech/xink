@@ -1,3 +1,8 @@
+// 本模块有一部分 API 是为后续里程碑准备的（Skills 的 `read_skill_resource`、
+// 记忆层、CLI provider、工具能力判定、Keychain 写入、模型缓存落盘），当前未接线。
+// 统一豁免而不是逐项打 `#[allow]`：逐项打点会把"还没接上"和"真该删"混在一起。
+#![allow(dead_code)]
+
 //! AI 领域层：与 UI 完全解耦，可独立单元测试
 //!
 //! 三条约束（来自 `docs/ai/ai-assistant-design.md`）：
@@ -172,6 +177,7 @@ impl std::error::Error for AiError {}
 ///
 /// 实现必须是阻塞的（同步 IO 直接写在里面），由调用方放到后台线程。
 pub trait Provider: Send + Sync {
+    /// provider 标识（状态行展示用；M4 接 CLI provider 后会在 UI 里显示）
     fn id(&self) -> &'static str;
     fn stream(
         &self,

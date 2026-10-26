@@ -61,7 +61,7 @@
 | Q9 | 长任务中途停下 | 默认开启：每 N 篇或遇冲突停下报告 |
 | Q10 | 记忆检索 | 关键词 + 路径，不上 embedding |
 | Q11 | ACP | M5 再评估 |
-| D1 | 结果面板位置 | **底部 dock 面板**（`DockPlacement::Bottom`，`src/app.rs:696` 处尚未占用）。理由：diff 需要横向宽度，右侧抽屉只有 260px（`src/ui/drawer.rs:21`） |
+| D1 | 交互入口 | **编辑器下方的内嵌对话条**（`EditorPanel` 内、`Cmd+Shift+A` 开关），不是独立 dock 面板。理由：聊天对象就是当前这篇笔记，贴着编辑区才不用解释上下文；可输入、可多轮，动作按钮只是快捷方式。原「底部 dock 面板」方案已废弃——面板与笔记不绑定，切标签后上下文会错位 |
 | D2 | 快捷键 | `Cmd+Shift+A` 打开 AI 动作面板（现有键位无冲突，`src/main.rs:59-90`） |
 | D4 | **Ollama 接入方式** | 走 native `/api/chat`（NDJSON），不走 OpenAI 兼容端点。实测：兼容端点忽略 `think:false`，thinking 模型会把预算全花在思考上、正文为空。详见 [`ollama-provider-design.md`](./ollama-provider-design.md) |
 | D5 | **模型管理** | 配置改为**模型列表** `models: Vec<ModelEntry>` + `default_model`，支持多实例 `base_url` 覆盖、`/api/tags` 拉取与缓存、per-model 连接测试与降级。M1 就有 Ollama |

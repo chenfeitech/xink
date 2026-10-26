@@ -8,14 +8,14 @@ mod ui;
 
 use actions::{
     FormatBold, FormatInlineCode, FormatItalic, FormatLink, FormatStrikethrough, NewNote,
-    OpenAiPanel, OpenCommandPalette, OpenFolder, OpenSearch, OpenSettings, RenameItem, Save,
-    ToggleTheme,
+    OpenCommandPalette, OpenFolder, OpenSearch, OpenSettings, RenameItem, Save,
+    ToggleAiChat, ToggleTheme,
 };
 use app::Workspace;
 use gpui_kit::component::Root;
 use gpui_kit::component::dock::{ClosePanel, panel_handle, register_panel};
 use gpui_kit::*;
-use ui::{AiPanel, BacklinkPanel, EditorPanel, FilesPanel, OutlinePanel, PreviewPanel, TagsPanel};
+use ui::{BacklinkPanel, EditorPanel, FilesPanel, OutlinePanel, PreviewPanel, TagsPanel};
 
 /// 注册各类 Panel 的重建工厂。
 ///
@@ -40,8 +40,6 @@ fn register_panels(cx: &mut App) {
     register_panel(cx, "PreviewPanel", |_, window, cx| {
         panel_handle(cx.new(|cx| PreviewPanel::new(window, cx)))
     });
-    // AI 面板：底部 dock，布局恢复时靠这里重建（未登记会得到空白面板）
-    register_panel(cx, "AiPanel", |_, _, cx| panel_handle(cx.new(AiPanel::new)));
 }
 
 fn main() {
@@ -81,8 +79,8 @@ fn main() {
                 KeyBinding::new("cmd-p", OpenCommandPalette, None),
                 // 全文搜索
                 KeyBinding::new("cmd-shift-f", OpenSearch, None),
-                // AI 面板（Cmd-Shift-A）
-                KeyBinding::new("cmd-shift-a", OpenAiPanel, None),
+                // 编辑器下方的 AI 对话条（Cmd-Shift-A）
+                KeyBinding::new("cmd-shift-a", ToggleAiChat, None),
             ]);
 
             cx.spawn(async move |cx| {

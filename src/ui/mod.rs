@@ -17,7 +17,7 @@ pub mod tags;
 pub mod theme;
 pub mod vault_manager;
 
-pub use ai::AiPanel;
+pub use ai::{AiChat, AiChatEvent};
 pub use backlink::BacklinkPanel;
 pub use command::open_command_palette;
 pub use editor::EditorPanel;

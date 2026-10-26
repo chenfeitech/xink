@@ -92,7 +92,7 @@
 
 | 文档 | 说明 | 对应模块 | 状态 |
 |---|---|---|---|
-| [ai-capabilities-eval.md](./ai/ai-capabilities-eval.md) | 技术调研：网络栈现状、Provider 选型（OpenAI 兼容 HTTP / CLI Agent）、依赖与 Skills 规范、分期 | `core/ai/`（待建）、`ui/settings.rs` | 🚧 **M1 已实施，待人工验收**（2026-10-26，分支 `feat/ai-assist-research`） |
+| [ai-capabilities-eval.md](./ai/ai-capabilities-eval.md) | 技术调研：网络栈现状、Provider 选型（OpenAI 兼容 HTTP / CLI Agent）、依赖与 Skills 规范、分期 | `core/ai/`（待建）、`ui/settings.rs` | 🚧 **M1 已实施，待人工验收**（含编辑器下方 AI 对话条，2026-10-26） |
 | [ai-assistant-requirements.md](./ai/ai-assistant-requirements.md) | 需求 A1–A9：单篇动作、库级管理、Skills、上下文与写入安全、设置与入口 | `core/ai/`（待建）、`ui/ai/`（待建） | 🚧 **M1 已实施，待人工验收**（2026-10-26）|
 | [agent-harness-eval.md](./ai/agent-harness-eval.md) | 架构调研：要不要自建 agent harness 与记忆机制、四层记忆模型、可参考的协议/框架/Rust 生态 | `core/ai/`（待建） | 📝 **分析完成，待确认**（2026-10-26） |
 | [ai-assistant-design.md](./ai/ai-assistant-design.md) | 技术设计：agent loop / 工具集 / Provider 抽象 / 配置与持久化 / 异常边界 / M0–M5 分期 | `core/ai/`（待建）、`ui/ai/`（待建） | 📝 **待确认**（2026-10-26，确认后开工） |

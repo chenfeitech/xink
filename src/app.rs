@@ -11,8 +11,7 @@ use gpui_kit::component::dock::{
 use gpui_kit::component::theme::{Theme, ThemeMode as KitThemeMode};
 use gpui_kit::*;
 
-use crate::ui::AiPanel;
-use crate::actions::{OpenAiPanel, OpenCommandPalette, OpenSearch, OpenSettings, ToggleTheme};
+use crate::actions::{ToggleAiChat, OpenCommandPalette, OpenSearch, OpenSettings, ToggleTheme};
 use std::path::Path;
 
 use crate::core::config::{AppConfig, ThemeMode};
@@ -105,11 +104,6 @@ pub struct AppState {
     /// 因此由 `FilesPanel::new` 自注册——与 `EditorPanel` 登记 `empty_panels`
     /// 同一套做法。未创建 / 已释放时为 `None`，调用方按"没有就算了"处理。
     pub files: Option<WeakEntity<FilesPanel>>,
-    /// AI 面板的弱引用（底部 dock 面板，按需创建）。
-    ///
-    /// 与 `files` 同一套做法：面板自己登记，需要定位它的地方（模型下拉等）
-    /// 通过全局拿。未创建 / 已释放时为 `None`。
-    pub ai_panel: Option<WeakEntity<AiPanel>>,
     /// 已注册的库与当前选择（多库机制，见 `docs/multi-vault-design.md`）。
     ///
     /// 库的当前路径统一由 `vaults.active_root()` 派生，避免两处状态不一致。
@@ -501,7 +495,6 @@ impl Workspace {
             notes,
             rail,
             files: None,
-            ai_panel: None,
         });
 
         // 主题等外观类配置在启动时先应用一次
@@ -682,29 +675,21 @@ impl Workspace {
         crate::ui::open_search(window, cx);
     }
 
-    /// 打开 AI 面板（Cmd-Shift-A）：底部 dock，按需创建一次。
+    /// 打开 / 关闭编辑器下方的 AI 对话条（Cmd-Shift-A）
     ///
-    /// 面板是 dock 的一部分，因此必须经 `add_panel_view` 加进去才会被布局持久化；
-    /// 直接 `cx.new` 而 `update_global` 只记弱引用，会出现「有状态但看不见」。
-    fn open_ai_panel(&mut self, _: &OpenAiPanel, window: &mut Window, cx: &mut Context<Self>) {
-        let _ = window;
-        let existing = cx
-            .try_global::<AppState>()
-            .and_then(|state| state.ai_panel.clone())
-            .and_then(|weak| weak.upgrade());
-        if existing.is_some() {
-            // 面板已存在：dock 没有"把某个面板提到前台"的 API，
-            // 重复 add_panel_view 会开出第二个面板，因此这里只重绘。
-            cx.notify();
+    /// 对话条属于某个编辑页（聊天对象就是那一篇笔记），因此路由到当前活动标签；
+    /// 没有打开的笔记时什么都不做——AI 没有可作用的对象。
+    fn toggle_ai_chat(&mut self, _: &ToggleAiChat, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = cx.try_global::<AppState>() else {
             return;
-        }
-
-        let panel = cx.new(AiPanel::new);
-        let handle = panel_handle(panel.clone());
-        self.dock_area.update(cx, |area, cx| {
-            area.add_panel_view(handle, DockPlacement::Bottom, None, window, cx);
-        });
-        cx.update_global::<AppState, _>(|state, _| state.ai_panel = Some(panel.downgrade()));
+        };
+        let Some(path) = state.tabs.active().cloned() else {
+            return;
+        };
+        let Some(panel) = state.tabs.get(&path) else {
+            return;
+        };
+        panel.update(cx, |panel, cx| panel.toggle_ai_chat(window, cx));
     }
 
     fn reset_default_layout(dock_area: &Entity<DockArea>, window: &mut Window, cx: &mut App) {
@@ -759,6 +744,6 @@ impl Render for Workspace {
             // 全文搜索（Cmd-Shift-F）
             .on_action(cx.listener(Self::open_search))
             // AI 面板（Cmd-Shift-A）
-            .on_action(cx.listener(Self::open_ai_panel))
+            .on_action(cx.listener(Self::toggle_ai_chat))
     }
 }

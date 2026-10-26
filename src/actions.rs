@@ -35,7 +35,7 @@ actions!(
         OpenCommandPalette,
         /// 打开全文搜索：按内容检索
         OpenSearch,
-        /// 打开 / 聚焦 AI 面板
-        OpenAiPanel
+        /// 打开 / 关闭编辑器下方的 AI 对话条
+        ToggleAiChat
     ]
 );
