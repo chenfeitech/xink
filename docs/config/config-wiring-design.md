@@ -17,11 +17,11 @@
 |---|---|---|
 | 叶子配置项（顶层字段展开后） | **29** | 18 个顶层字段（`default_mode` 已于 2026-09-24 移除，`code_theme` 已于 2026-10-20 下线，`language` / `color_scheme` 已于 2026-10-21 移除，新增 `editor.soft_wrap` / `preview.debug_scroll_sync` / `preview.sync_mode`），其中 `tree_font` / `editor.font` / `preview.font` / `indent` 为结构体 |
 | 已真正作用于软件功能 | **25** | 含 Spike 后接线的 `indent.*` 两项、内核升级后的 `show_line_numbers`、P1 补接线的 `font.weight` ×2、滚动同步重构新增的 `soft_wrap` / `debug_scroll_sync` / `sync_mode` |
-| **死配置（存了不生效）** | **1** | 值能保存、能导出，但不影响任何行为：仅剩 `keymap`（`spell_check` 已于 2026-10-20 **移除**；`language`、`color_scheme` 已于 2026-10-21 移除） |
+| **死配置（存了不生效）** | **0** | `keymap` 已于 2026-10-26 接线（见 §4 第 13 项）；`spell_check` 已于 2026-10-20 **移除**；`language`、`color_scheme` 已于 2026-10-21 移除 |
 | 其中：设置界面已标注 ⚠ | 0 | `language`、`color_scheme` 已随字段一并删除，不再占位 |
 | 其中：界面有入口但未标注 | 0 | P1 已为两个 `font.weight` 补上设置界面入口并接线 |
-| 其中：**连设置项入口都没有** | 1 | `editor.keymap`（`main.rs:46-56` 快捷键全部硬编码） |
-| 覆盖"配置改动 → UI 行为改变"的测试 | **0** | `src/ui/settings.rs` 无 `tests.rs`，配置单测全部停留在数据层 |
+| 其中：**连设置项入口都没有** | 0 | `editor.keymap` 已于 2026-10-26 补上设置界面入口（编辑器 · 快捷键） |
+| 覆盖"配置改动 → UI 行为改变"的测试 | **7** | 2026-10-26 新增 `tests/ui/settings.rs`：id 唯一 / 默认态 / 重置幂等 / 文本项与数值项改值后出现 ⟲ 且重置回默认 / ⚠ 项白名单 |
 
 **结论**：配置页面当前"看起来能调 20+ 项，实际只有 17 项真正接线"，且这条链路**没有任何测试守护**，
 重构时极易退化。本文档给出：接线总表、生效链路规范、逐项接线方案、验证方法与防退化机制。
@@ -35,7 +35,10 @@
 > `settings.rs` 的 `all_fields()` 条目均已删除，旧 `config.json` 里的该字段被 serde 忽略。
 > **2026-10-21**：`language`、`color_scheme` **已实际移除**（数据模型 + `Default` +
 > `settings.rs` 条目一并删除，旧 `config.json` 里的字段被 serde 忽略）。
-> 因此**当前仍未接线的只剩 1 项**：`keymap`。
+> **2026-10-26**：`keymap` **已接线**——新增 `core/keymap.rs`（绑定表 + 覆盖解析 + 校正），
+> `main.rs` 改为 `cx.bind_keys(actions::key_bindings(&cfg.editor.keymap))`，设置界面补齐
+> 「编辑器 · 快捷键」17 项入口。设计见 `keymap-wiring-design.md`。
+> 至此**死配置清零**。
 > （`link_open` 已随"图片预览"接线，`image_display` 与新增的 `image_width_percent` 已接线。）
 
 ### 1.1 三条根因
@@ -258,7 +261,7 @@ UI 呈现规则：
 | 10 | `spell_check` | 拼写检查 | **已核实框架无能力 → 移除**（§1.2）。自研需新依赖 + 词典 + 编辑器装饰，属独立特性 | — | ✅ 已移除（2026-10-20） |
 | 11 | `editor.font.*` | 编辑区字体 | **已完成**：family/size/line_height/weight 全部接线；`editor.rs` 的 `Editor::new` 链加 `.font_weight(FontWeight(font.weight.value()))`，设置界面补"编辑器字重"入口 | L1 | ✅ 已完成（待人工验证） |
 | 12 | `color_scheme` | 编辑区配色独立于主题 | `Auto`=跟随全局主题；`Light/Dark`=在编辑区容器显式设前景/背景色（不依赖全局 Theme） | L1 | P3 |
-| 13 | `keymap` | 快捷键覆盖 | 新增 `core/keymap.rs`：`default_bindings() + override(cfg.editor.keymap)`；`main.rs:46-56` 改为 `cx.bind_keys(resolve_bindings(&cfg))`；设置界面补键值对列表入口 | **L3** | P2 |
+| 13 | `keymap` | 快捷键覆盖 | ✅ **已接线（2026-10-26）**：新增 `core/keymap.rs`（`BINDINGS` 表 + `resolve` + `sanitize`）；`main.rs` 改为 `cx.bind_keys(actions::key_bindings(&cfg.editor.keymap))`；设置界面「编辑器 · 快捷键」17 项入口。设计见 `keymap-wiring-design.md` | **L3** | ✅ P2 |
 | 14 | `preview.font.*` | 预览区字体 | **已完成**：四项全部接线；`preview.rs` 预览根容器加 `.font_weight(...)`，设置界面补"预览字重"入口 | L1 | ✅ 已完成（待人工验证） |
 | 15 | `code_theme` | 代码块高亮配色 | **已完成（含跟随明暗）**：默认值改为 `AUTO_CODE_THEME`（`auto`），渲染时按 `app::is_dark()` 解析为 `default_theme(is_dark)`；设置界面选项首位为"跟随主题"。旧配置里的具体主题名不受影响（原样使用） | L1 | ✅ 已完成（待人工验证） |
 | 16 | `image_display` | 预览区图片渲染方式 | **已完成**：预处理阶段按配置改写——`Hidden` 去掉 `!` 退化为文本链接；`FitWidth` 渲染为 `<img style="width: N%">`（N 取 `image_width_percent`）。**`Original`（原始尺寸）已移除选项**：渲染层硬编码 `max_w(relative(1.))`，Markdown 侧无法突破 | L1 | ✅ 已完成 |
@@ -295,7 +298,7 @@ UI 呈现规则：
 |---|---|---|---|
 | **P0 防退化**（先做） | ① 消费点注释规范 `// config: <field.path>`<br>② `scripts/check-config-wiring.sh` 静态校验<br>③ `settings.rs` 补 `tests.rs`，断言 `all_fields()` 每项都有 `effect` 且 `NotWired` 项与本文档清单一致 | 全仓 + `scripts/` | 脚本可跑通；删除任一消费点注释 → 脚本失败 |
 | **P1 低成本接线** | `editor.font.weight`、`preview.font.weight`、`code_theme` 跟随明暗、`sync_scroll` 编辑器侧判断、**`link_open`（`on_link_click`）**、配置克隆开销 | `editor.rs`、`preview.rs`、`settings.rs`、`core/config/resolve.rs`（新建） | §7.3 验收清单对应项通过；新增单测 ≥ 9 |
-| **P2 结构性接线** | `language` 文案表（`core/i18n.rs`）、`keymap` 覆盖（`core/keymap.rs` + `main.rs`）、退出前 flush | `core/i18n.rs`（新建）、`core/keymap.rs`（新建）、`main.rs`、`app.rs` | 切英文生效；改 `cmd-s`→`cmd-shift-s` 重启后生效 |
+| **P2 结构性接线** | `language` 文案表（`core/i18n.rs`）、~~`keymap` 覆盖（`core/keymap.rs` + `main.rs`）~~ ✅ 已完成（2026-10-26）、退出前 flush | `core/i18n.rs`（新建）~~、`core/keymap.rs`（新建）~~、`main.rs`、`app.rs` | 切英文生效；✅ 改 `cmd-s`→`cmd-shift-s` 重启后生效 |
 | **P3 能力补齐/清理** | 缩进 Tab（已接线）、行号（已接线）、`color_scheme`、**移除 `spell_check`** | `editor.rs`、`core/markdown.rs`、`config.rs`、`settings.rs`、`config/tests.rs` | 每项要么生效，要么从模型与界面移除（不留死配置） |
 | **P4 形态类** | ~~`default_mode`~~ **已取消**（2026-09-24）：分屏由 DockArea 布局直接提供，所见即所得按 `REQUIREMENTS.md` 不在本期范围 | — | 无需实施 |
 
@@ -383,7 +386,7 @@ rg -o '// config: [a-z_.]+' src --no-filename | sed 's|// config: ||' | sort -u
 | V12 | `max_width` | 0 → 800 | 预览正文宽度与居中 | 正文限宽并居中 | ✅ |
 | V13 | `sync_scroll` | 关闭后滚动编辑区 | 预览区是否跟随 | 不再跟随 | ✅ |
 | V14 | `language` | 切 English | 界面文案 | **当前无变化**；P2 后切换 | ❌ → P2 |
-| V15 | `keymap` | — | — | **无入口**；P2 后可改键位，重启生效 | ❌ → P2 |
+| V15 | `keymap` | 「保存」改 `cmd-shift-s` | 保存动作 | ✅ **已接线**：重启后 ⌘⇧S 保存、⌘S 释放；留空回默认（2026-10-26） | ✅ |
 | V16 | `indent.tab_size` / `use_tabs` | 4 → 8 后按 Tab；再勾选"使用 Tab 字符" | 插入字符 | 分别插入 8 空格与 `\t`，**改完即生效**（无需重开标签） | ✅ 已接线，待人工验证 |
 | V17 | `show_line_numbers` | 打开开关 | 编辑区左侧的行号 | 开关打开后立即显示行号；关闭后隐藏（无需重开标签） | ✅ 已接线，待人工验证 |
 | V18 | `image_display` / `image_width_percent` | ① 设为"不显示图片" ② 宽度改为 60% | 预览区图片 | ① 图片变成文本链接 ② 图片宽度变为预览区的 60%；**改完即生效**（配置变化时重算预览源文） | ✅ 已接线，待人工验证 |

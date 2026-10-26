@@ -79,7 +79,8 @@
 |---|---|---|---|
 | [config-management-requirements.md](./config/config-management-requirements.md) | 配置需求 C1–C8 | `core/config.rs` | ✅ |
 | [config-management-design.md](./config/config-management-design.md) | 配置的数据模型 / 存储 / 生效机制 | `core/config.rs`、`state/workspace.rs` | ✅ |
-| [config-wiring-design.md](./config/config-wiring-design.md) | "死配置"审查与逐项接线方案 | `core/config.rs`、`ui/settings.rs` | ⚠️ 见 §9：`language` / `color_scheme` / `keymap` 三项仍是死配置 |
+| [config-wiring-design.md](./config/config-wiring-design.md) | "死配置"审查与逐项接线方案 | `core/config.rs`、`ui/settings.rs` | ✅ 死配置已清零（`language` / `color_scheme` 已移除、`keymap` 2026-10-26 已接线） |
+| [keymap-wiring-design.md](./config/keymap-wiring-design.md) | `editor.keymap` 接线：绑定表 / 覆盖解析 / 设置界面入口（L3 重启生效） | `core/keymap.rs`、`actions.rs`、`main.rs`、`ui/settings.rs` | ✅ 已实施（2026-10-26，待人工验收） |
 | [settings-ui-design.md](./config/settings-ui-design.md) | 设置窗口的交互与视觉设计 | `ui/settings.rs` | ✅（D5 搜索框曾只回显不可用，2026-10-20 已修复） |
 
 ## 7. 多库 — `docs/vault/`
@@ -121,7 +122,6 @@
 
 | 缺口 | 出处 | 说明 |
 |---|---|---|
-| `editor.keymap` 仍是死配置 | `config-wiring-design.md` | `language` / `color_scheme` 已于 2026-10-21 移除；只剩 `keymap`：`main.rs:59-84` 键位全部硬编码，且连设置界面入口都没有。文档结论（§13 第 13 项）是 P2 接线：新建 `core/keymap.rs`，`main.rs` 改 `cx.bind_keys(resolve_bindings(&cfg))`，设置界面补键值对入口 |
 | 反链/标签面板的位置描述过时 | `index-panels-design.md` | 实际由 `ui/rail.rs` + `ui/drawer.rs` 承载 |
 | 部分 `ui/` 模块无对应测试 | `TESTS.md` | `tabs` / `preview` / `backlink` / `tags` / `search` / `drawer` / `rail` / `completion` / `vault_manager`（`settings` 已于 2026-10-26 补上描述表测试） |
 
