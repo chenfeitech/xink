@@ -21,6 +21,7 @@ pub mod openai;
 pub mod prompt;
 pub mod snapshot;
 pub mod sse;
+pub mod tools;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
