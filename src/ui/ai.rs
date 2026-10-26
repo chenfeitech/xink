@@ -55,6 +55,8 @@ const HISTORY_MAX_H: f32 = 260.;
 const BODY_MAX_H: f32 = 220.;
 /// 气泡最大宽度（占对话区宽度的比例）：太长的一行读起来累
 const BUBBLE_MAX_W: f32 = 0.78;
+/// 气泡圆角：固定值，不取 `theme.radius`（后者可能为 0，那样气泡就是方块）
+const BUBBLE_RADIUS: f32 = 12.;
 
 /// 用户气泡的浅蓝底
 ///
@@ -1175,43 +1177,54 @@ impl Render for AiChat {
                 if !mine && text.is_empty() && self.busy {
                     continue;
                 }
+                // 外层是整行容器，靠 `justify` 决定气泡贴哪一边：
+                // 比给气泡自身设 `align_self` 稳（不受父容器 align-items 影响）
+                let row = div().w_full().flex();
+                let row = if mine {
+                    row.justify_start()
+                } else {
+                    row.justify_end()
+                };
                 if collapsed {
                     // 收起后没有标题可点，留一行极简提示（对齐方向保持原样）
-                    let mut row = div()
-                        .id(("ai-collapsed", ix))
-                        .flex()
-                        .gap_1()
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)));
-                    row = if mine {
-                        row.self_start()
-                    } else {
-                        row.self_end()
-                    };
-                    history = history
-                        .child(row.child(div().text_xs().text_color(muted).child("…（点击展开）")));
+                    history = history.child(
+                        row.child(
+                            div()
+                                .id(("ai-collapsed", ix))
+                                .text_xs()
+                                .text_color(muted)
+                                .cursor_pointer()
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)),
+                                )
+                                .child("…（点击展开）"),
+                        ),
+                    );
                     continue;
                 }
-                let bubble = div()
+                let mut bubble = div()
                     .id(("ai-bubble", ix))
                     .max_w(relative(BUBBLE_MAX_W))
-                    .rounded(cx.theme().radius)
+                    // 圆角写死而不是取 `theme.radius`：有的主题把 radius 设成 0，
+                    // 气泡就成了方块。气泡圆角是设计决定，不跟主题走。
+                    .rounded(px(BUBBLE_RADIUS))
                     .px_3()
                     .py_2()
+                    // 气泡内文字一律左对齐
+                    .text_left()
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)));
-                let bubble = if mine {
-                    // 用户消息：左侧 + 浅蓝底 + 内边距 + 圆角
-                    bubble.self_start().bg(bubble_bg(cx.theme().is_dark()))
-                } else {
-                    // AI 回复：右侧 + 无背景色
-                    bubble.self_end()
-                };
+                if mine {
+                    // 用户消息：浅蓝底 + 内边距 + 圆角；AI 回复不加背景色
+                    bubble = bubble.bg(bubble_bg(cx.theme().is_dark()));
+                }
                 history = history.child(
-                    bubble.child(
-                        TextView::markdown(("ai-body", ix), text.clone())
-                            .selectable(true)
-                            .text_sm(),
+                    row.child(
+                        bubble.child(
+                            TextView::markdown(("ai-body", ix), text.clone())
+                                .selectable(true)
+                                .text_sm(),
+                        ),
                     ),
                 );
                 continue;
