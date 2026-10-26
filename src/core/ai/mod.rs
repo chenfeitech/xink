@@ -19,6 +19,7 @@ pub mod models;
 pub mod ndjson;
 pub mod ollama;
 pub mod openai;
+pub mod patch;
 pub mod probe;
 pub mod prompt;
 pub mod snapshot;

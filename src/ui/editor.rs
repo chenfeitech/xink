@@ -21,6 +21,8 @@ use crate::actions::{
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
 use crate::core::config::{DataFileConfig, IndentConfig, ScrollSyncMode};
 // 与 gpui 的 `Action` trait 同名，取别名避免"看起来是类型、其实是 trait"
+use crate::core::ai::DiffLine;
+use crate::core::ai::patch::{self, Hunk};
 use crate::core::ai::prompt::Action as AiAction;
 use crate::core::datafile::{DataKind, Parsed, ValidationError, data_kind};
 use crate::core::markdown::{
@@ -36,6 +38,8 @@ use std::sync::Arc;
 
 /// 行首标记（`#`、列表符号）的淡化程度，语义等同 CSS `opacity`
 const MARKER_FADE_OUT: f32 = 0.45;
+/// AI 修订评审条的最大高度：超过就在条内滚动，正文不被压扁
+const REVIEW_MAX_H: f32 = 240.;
 
 pub struct EditorPanel {
     focus_handle: FocusHandle,
@@ -132,6 +136,82 @@ pub struct EditorPanel {
     content_changed_at: Option<Instant>,
     /// Markdown 装饰集合。范围随编辑自动平移，但内容变了要由我们重设。
     decorations: Option<TextDecorationCollection>,
+    /// AI 修订评审：按 hunk 逐块接受 / 拒绝
+    ///
+    /// 挂在面板上（与 `ai_chat` 同级），因此切标签回来评审还在。
+    /// 设计见 `docs/ai/ai-review-hunks-design.md` §3.2。
+    ai_review: Option<AiReview>,
+}
+
+/// 一处待处理的 AI 修订
+#[derive(Debug, Clone)]
+struct ReviewHunk {
+    hunk: Hunk,
+    state: HunkState,
+}
+
+/// 一块修订的处置状态
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HunkState {
+    /// 还没决定
+    Pending,
+    /// 已写入笔记
+    Accepted,
+    /// 已丢弃，原文不动
+    Rejected,
+    /// 原文被改过（或被关闭），定位不上了：按钮禁用，不盲改
+    Stale(String),
+}
+
+/// 一次 AI 改动的评审会话
+#[derive(Debug, Clone)]
+struct AiReview {
+    /// 属于哪篇笔记：笔记换了就整份作废
+    path: PathBuf,
+    hunks: Vec<ReviewHunk>,
+}
+
+/// 评审条渲染用的一行
+///
+/// 先把数据拷出来，因为 `cx.listener` 的闭包里要拿 `&mut self`。
+struct ReviewRow {
+    ix: usize,
+    title: String,
+    /// （' ' 未变 / '+' 新增 / '-' 删除，已带前缀符号）
+    lines: Vec<(char, String)>,
+    state: HunkState,
+}
+
+impl AiReview {
+    fn new(path: PathBuf, hunks: Vec<Hunk>) -> Self {
+        Self {
+            path,
+            hunks: hunks
+                .into_iter()
+                .map(|hunk| ReviewHunk {
+                    hunk,
+                    state: HunkState::Pending,
+                })
+                .collect(),
+        }
+    }
+
+    /// （待处理，已接受，已拒绝，已失效）
+    fn stats(&self) -> (usize, usize, usize, usize) {
+        let mut pending = 0;
+        let mut accepted = 0;
+        let mut rejected = 0;
+        let mut stale = 0;
+        for entry in &self.hunks {
+            match entry.state {
+                HunkState::Pending => pending += 1,
+                HunkState::Accepted => accepted += 1,
+                HunkState::Rejected => rejected += 1,
+                HunkState::Stale(_) => stale += 1,
+            }
+        }
+        (pending, accepted, rejected, stale)
+    }
 }
 
 impl EditorPanel {
@@ -249,6 +329,7 @@ impl EditorPanel {
             save_task: None,
             ai_chat: None,
             ai_open: false,
+            ai_review: None,
             status: SharedString::default(),
             guard: SyncGuard::default(),
             pending_anchor: None,
@@ -1594,6 +1675,316 @@ impl EditorPanel {
         true
     }
 
+    /// 按字节区间替换（AI 修订的"接受"走这里）
+    ///
+    /// 与 [`Self::apply_ai_result`] 的区别是区间由调用方给定（来自
+    /// `patch::locate_range`），不是"选中"或"整篇"。
+    pub fn replace_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.note.is_none() {
+            return false;
+        }
+        self.editor.update(cx, |state, cx| {
+            state.set_selected_range(range, cx);
+            state.replace(text, window, cx);
+        });
+        self.on_change(window, cx);
+        self.refresh_doc(cx);
+        true
+    }
+
+    /// 开始一轮 AI 修订评审
+    ///
+    /// `path` 与当前笔记不一致时直接忽略（笔记被换掉了）。
+    pub fn start_review(&mut self, path: PathBuf, hunks: Vec<Hunk>, cx: &mut Context<Self>) {
+        if self.note.as_ref().map(|n| n.path()) != Some(path.as_path()) {
+            return;
+        }
+        self.status = format!("AI 修订：{} 处待处理", hunks.len()).into();
+        self.ai_review = Some(AiReview::new(path, hunks));
+        cx.notify();
+    }
+
+    /// 接受某一块：只改这一段，其余不动
+    ///
+    /// 每次都按**内容**重新定位（`patch::locate_range`），因此接受顺序无所谓。
+    fn accept_hunk(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        // 先把要用的东西拷出来：`replace_range` 需要 `&mut self`，
+        // 不能一边借着 `ai_review` 一边改笔记。
+        let Some(hunk) = self
+            .ai_review
+            .as_ref()
+            // 笔记被换掉了就整份作废：这些改动块属于另一篇
+            .filter(|review| self.note.as_ref().map(|n| n.path()) == Some(review.path.as_path()))
+            .and_then(|review| review.hunks.get(ix))
+            .filter(|entry| entry.state == HunkState::Pending)
+            .map(|entry| entry.hunk.clone())
+        else {
+            return;
+        };
+        let Some(text) = self.note.as_ref().map(|note| note.text().to_string()) else {
+            return;
+        };
+
+        match patch::locate_range(&text, &hunk) {
+            patch::Located::Unique(range) => {
+                let new_text = hunk.new_lines.join("\n");
+                if self.replace_range(range, &new_text, window, cx) {
+                    self.set_hunk_state(ix, HunkState::Accepted);
+                    let (pending, accepted, _, _) = self.review_stats().unwrap_or((0, 0, 0, 0));
+                    self.status = if pending == 0 {
+                        format!("已应用 {accepted} 处修订（未自动保存）")
+                    } else {
+                        format!("AI 修订：还剩 {pending} 处")
+                    }
+                    .into();
+                }
+            }
+            patch::Located::NotFound => self.set_hunk_state(
+                ix,
+                HunkState::Stale("原文已改动，这段修订定位不上了".into()),
+            ),
+            patch::Located::Ambiguous(count) => self.set_hunk_state(
+                ix,
+                HunkState::Stale(format!("这段原文出现 {count} 次，无法确定是哪一处")),
+            ),
+        }
+        cx.notify();
+    }
+
+    fn set_hunk_state(&mut self, ix: usize, state: HunkState) {
+        if let Some(entry) = self
+            .ai_review
+            .as_mut()
+            .and_then(|review| review.hunks.get_mut(ix))
+        {
+            entry.state = state;
+        }
+    }
+
+    /// 拒绝某一块：只改状态，原文不动
+    fn reject_hunk(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(review) = self.ai_review.as_mut() else {
+            return;
+        };
+        let Some(entry) = review.hunks.get_mut(ix) else {
+            return;
+        };
+        if entry.state != HunkState::Pending {
+            return;
+        }
+        entry.state = HunkState::Rejected;
+        let (pending, accepted, rejected, _) = review.stats();
+        self.status = if pending == 0 {
+            format!("已应用 {accepted} 处、拒绝 {rejected} 处")
+        } else {
+            format!("AI 修订：还剩 {pending} 处")
+        }
+        .into();
+        cx.notify();
+    }
+
+    fn accept_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let count = self
+            .ai_review
+            .as_ref()
+            .map(|r| r.hunks.len())
+            .unwrap_or_default();
+        for ix in 0..count {
+            self.accept_hunk(ix, window, cx);
+        }
+    }
+
+    fn reject_all(&mut self, cx: &mut Context<Self>) {
+        let count = self
+            .ai_review
+            .as_ref()
+            .map(|r| r.hunks.len())
+            .unwrap_or_default();
+        for ix in 0..count {
+            self.reject_hunk(ix, cx);
+        }
+    }
+
+    fn dismiss_review(&mut self, cx: &mut Context<Self>) {
+        self.ai_review = None;
+        cx.notify();
+    }
+
+    fn review_stats(&self) -> Option<(usize, usize, usize, usize)> {
+        self.ai_review.as_ref().map(|review| review.stats())
+    }
+
+    /// 编辑区下方的 AI 修订评审条
+    ///
+    /// 每块显示原文（`-`）与改后（`+`），带 2 行上下文；每块两个按钮：
+    /// 接受只改这一段，拒绝保留原文。设计见 `docs/ai/ai-review-hunks-design.md` §3.4。
+    fn render_review(&mut self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let review = self.ai_review.as_ref()?;
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let border = theme.border;
+        let primary = theme.primary;
+        let warning = theme.warning;
+
+        let (pending, accepted, rejected, stale) = review.stats();
+        let added: usize = review.hunks.iter().map(|e| e.hunk.added).sum();
+        let removed: usize = review.hunks.iter().map(|e| e.hunk.removed).sum();
+
+        let mut strip = div()
+            .id("ai-review")
+            .flex_none()
+            .w_full()
+            .min_h_0()
+            .max_h(px(REVIEW_MAX_H))
+            .overflow_y_scroll()
+            .flex_col()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .border_t_1()
+            .border_color(border);
+
+        // ── 标题行 ──
+        let title = if pending > 0 {
+            format!("AI 修订（{pending} 处待处理 · +{added} -{removed}）")
+        } else {
+            format!("AI 修订已完成 · 接受 {accepted} / 拒绝 {rejected} / 失效 {stale}")
+        };
+        let mut header = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(div().text_xs().text_color(muted).child(title));
+        if pending > 0 {
+            header = header
+                .child(
+                    Button::new("ai-review-accept-all")
+                        .xsmall()
+                        .ghost()
+                        .label("全部接受")
+                        .on_click(cx.listener(|this, _, window, cx| this.accept_all(window, cx))),
+                )
+                .child(
+                    Button::new("ai-review-reject-all")
+                        .xsmall()
+                        .ghost()
+                        .label("全部拒绝")
+                        .on_click(cx.listener(|this, _, _, cx| this.reject_all(cx))),
+                );
+        }
+        header = header.child(
+            Button::new("ai-review-dismiss")
+                .xsmall()
+                .ghost()
+                .label("清除")
+                .on_click(cx.listener(|this, _, _, cx| this.dismiss_review(cx))),
+        );
+        strip = strip.child(header);
+
+        // ── 逐块 ──
+        // 先把要渲染的东西拷出来：`cx.listener` 里要 `&mut self`
+        let rows: Vec<ReviewRow> = review
+            .hunks
+            .iter()
+            .enumerate()
+            .map(|(ix, entry)| ReviewRow {
+                ix,
+                title: format!(
+                    "第 {} 行起 · +{} -{}",
+                    entry.hunk.start_line + 1,
+                    entry.hunk.added,
+                    entry.hunk.removed
+                ),
+                lines: entry
+                    .hunk
+                    .lines
+                    .iter()
+                    .map(|line| match line {
+                        DiffLine::Same(t) => (' ', format!("  {t}")),
+                        DiffLine::Add(t) => ('+', format!("+ {t}")),
+                        DiffLine::Del(t) => ('-', format!("- {t}")),
+                    })
+                    .collect(),
+                state: entry.state.clone(),
+            })
+            .collect();
+
+        for row in rows {
+            let ReviewRow {
+                ix,
+                title,
+                lines,
+                state,
+            } = row;
+            let resolved = state != HunkState::Pending;
+            let mut block = div()
+                .flex_col()
+                .gap_0()
+                .px_2()
+                .py_1()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(border);
+
+            let mut row = div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(div().text_xs().text_color(muted).child(title));
+            if resolved {
+                let label = match &state {
+                    HunkState::Accepted => "已接受",
+                    HunkState::Rejected => "已拒绝",
+                    HunkState::Stale(msg) => msg.as_str(),
+                    HunkState::Pending => "",
+                };
+                row = row.child(div().text_xs().text_color(muted).child(label.to_string()));
+            } else {
+                row = row
+                    .child(
+                        Button::new(SharedString::from(format!("ai-review-accept-{ix}")))
+                            .xsmall()
+                            .ghost()
+                            .label("接受修订")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.accept_hunk(ix, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("ai-review-reject-{ix}")))
+                            .xsmall()
+                            .ghost()
+                            .label("拒绝修订")
+                            .on_click(cx.listener(move |this, _, _, cx| this.reject_hunk(ix, cx))),
+                    );
+            }
+            block = block.child(row);
+
+            // 已处理的块不再铺开细节，避免评审条越用越长
+            if resolved {
+                strip = strip.child(block);
+                continue;
+            }
+            for (kind, text) in lines {
+                let color = match kind {
+                    '+' => primary,
+                    '-' => warning,
+                    _ => muted,
+                };
+                block = block.child(div().text_xs().text_color(color).child(text));
+            }
+            strip = strip.child(block);
+        }
+
+        Some(strip)
+    }
+
     pub fn insert_at_cursor(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.note.is_none() {
             return;
@@ -2257,6 +2648,11 @@ impl Render for EditorPanel {
         }
 
         view = view.child(body);
+
+        // AI 修订评审条：贴在正文下方、对话条上方
+        if let Some(strip) = self.render_review(cx) {
+            view = view.child(strip);
+        }
 
         // AI 对话条：贴在编辑区下方，聊天对象就是当前这篇笔记
         if self.ai_open {

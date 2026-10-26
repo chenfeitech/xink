@@ -438,6 +438,8 @@ pub struct AiChat {
     started: Option<Instant>,
     /// 本轮用掉的工具次数（agent loop 才有，单轮恒为 0）
     tool_calls: usize,
+    /// 兜底的"替换整篇 / 替换选中"是否已经点过一次确认
+    confirm_apply: bool,
 }
 
 impl AiChat {
@@ -484,6 +486,7 @@ impl AiChat {
             elapsed_ms: None,
             started: None,
             tool_calls: 0,
+            confirm_apply: false,
         };
         if let Some(path) = note_path {
             this.switch_note(&path);
@@ -612,7 +615,11 @@ impl AiChat {
         let prepared = assemble(scope, &selection, &whole, cursor, cfg.ai.max_context_chars);
         self.notice = prepared.notice.clone();
         self.input_tokens = Some(crate::core::ai::estimate_tokens(&prepared.text));
-        let kind = if selection.trim().is_empty() {
+        // 生成类动作（续写 / 摘要 / 标签）天然是"往里加内容"，
+        // 不该判成替换整篇——那会把原文其余部分删掉。
+        let kind = if matches!(action, Action::Continue | Action::Summarize | Action::Tag) {
+            ApplyKind::InsertAtCursor
+        } else if selection.trim().is_empty() {
             ApplyKind::ReplaceWhole
         } else {
             ApplyKind::ReplaceSelection
@@ -900,18 +907,96 @@ impl AiChat {
         if matches!(self.mode, AiMode::Chat) {
             self.history.push(ChatMessage::assistant(output.clone()));
         }
-        if let Some(pending) = self.pending.as_mut() {
-            pending.after = output;
-            // 把这一轮的 diff 固化成块：`pending` 是单值，下一轮一来就被覆盖，
-            // 不固化的话上一轮的对照会凭空消失（§6 D）
-            if !matches!(pending.kind, ApplyKind::InsertAtCursor) {
-                let lines = diff_lines(&pending.before, &pending.after);
-                let (added, removed) = crate::core::ai::diff::diff_stats(&lines);
-                self.blocks.push(Block::diff(lines, added, removed));
-            }
+        // 先把这一轮的落法定下来：由**结果**决定，而不是发起时有没有选中
+        // （设计见 `docs/ai/ai-review-hunks-design.md` §3.6）。
+        let review_target = self.classify_and_record(&output);
+        if let Some((path, hunks)) = review_target {
+            self.start_review(path, hunks, cx);
         }
         self.persist();
         cx.notify();
+    }
+
+    /// 判定这一轮怎么落地，并把 diff 固化成块
+    ///
+    /// 返回 `Some((笔记路径, 改动块))` 表示"进评审条逐块决定"；
+    /// `None` 表示不进评审（纯插入，或模型输出与原文对不上）。
+    fn classify_and_record(
+        &mut self,
+        output: &str,
+    ) -> Option<(std::path::PathBuf, Vec<crate::core::ai::patch::Hunk>)> {
+        let pending = self.pending.as_mut()?;
+        pending.after = output.to_string();
+        if matches!(pending.kind, ApplyKind::InsertAtCursor) {
+            return None;
+        }
+        let lines = diff_lines(&pending.before, &pending.after);
+        let (added, removed) = crate::core::ai::diff::diff_stats(&lines);
+        // 把这一轮的 diff 固化成块：`pending` 是单值，下一轮一来就被覆盖，
+        // 不固化的话上一轮的对照会凭空消失（§6 D）
+        self.blocks.push(Block::diff(lines, added, removed));
+
+        let hunks = crate::core::ai::patch::hunks(
+            &pending.before,
+            &pending.after,
+            crate::core::ai::patch::DEFAULT_CONTEXT,
+        );
+        if hunks.is_empty() {
+            // 输出与原文没有任何对应关系 → 当成纯插入，别拿它去覆盖笔记
+            pending.kind = ApplyKind::InsertAtCursor;
+            self.notice = Some("模型和原文对不上，已按“插入”处理".into());
+            return None;
+        }
+        Some((pending.path.clone(), hunks))
+    }
+
+    /// 把改动块交给编辑面板逐块评审，并先存一份快照
+    fn start_review(
+        &mut self,
+        path: std::path::PathBuf,
+        hunks: Vec<crate::core::ai::patch::Hunk>,
+        cx: &mut Context<Self>,
+    ) {
+        // 进入评审就存快照：逐块接受过程中原文一直在变，事后再存就晚了
+        if let Some(pending) = &self.pending {
+            let dir = app_data_dir();
+            let file_name = pending
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "note.md".into());
+            if let Err(err) = write_snapshot(&dir, &file_name, &pending.whole_before) {
+                eprintln!("[xink] AI 快照写入失败：{err:?}");
+            }
+        }
+        let Some(state) = cx.try_global::<AppState>() else {
+            return;
+        };
+        let Some(panel) = state.tabs.get(&path) else {
+            return;
+        };
+        panel.update(cx, |panel, cx| panel.start_review(path.clone(), hunks, cx));
+        self.notice = Some("已在编辑区下方按块评审，可逐块接受或拒绝".into());
+    }
+
+    /// 这轮的兜底落法是否要先点一次确认
+    ///
+    /// 只在**删除量大**时要求确认（改动块正常情况下已经进评审条了，
+    /// 这里的"替换整篇 / 替换选中"是兜底，不该悄悄把原文删掉）。
+    fn needs_confirm(&self) -> bool {
+        if self.confirm_apply {
+            return false;
+        }
+        let Some(pending) = &self.pending else {
+            return false;
+        };
+        if matches!(pending.kind, ApplyKind::InsertAtCursor) {
+            return false;
+        }
+        let total = pending.before.lines().count().max(1);
+        let (_, removed) =
+            crate::core::ai::diff::diff_stats(&diff_lines(&pending.before, &pending.after));
+        removed * 100 / total > 30
     }
 
     /// 会话按笔记归属：换了一篇笔记就换一份历史（§6.1）
@@ -1387,32 +1472,48 @@ impl Render for AiChat {
                     .on_click(cx.listener(|this, _, window, cx| this.send(window, cx))),
             );
         }
-        if let Some(pending) = &self.pending {
-            if !pending.after.is_empty() {
-                let kind = pending.kind;
-                let suffix = pending_stats
-                    .clone()
-                    .map(|s| format!("（{s}）"))
-                    .unwrap_or_default();
-                input_row = input_row
-                    .child(
-                        Button::new("ai-apply")
-                            .small()
-                            .primary()
-                            .label(format!("{}{}", kind.label(), suffix))
-                            .on_click(cx.listener(|this, _, window, cx| this.apply(window, cx))),
-                    )
-                    .child(
-                        Button::new("ai-drop")
-                            .small()
-                            .ghost()
-                            .label("不采用")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.pending = None;
-                                cx.notify();
-                            })),
-                    );
-            }
+        if let Some(pending) = &self.pending
+            && !pending.after.is_empty()
+        {
+            let kind = pending.kind;
+            let suffix = pending_stats
+                .clone()
+                .map(|s| format!("（{s}）"))
+                .unwrap_or_default();
+            // 改动块已经进评审条了，这里的"替换整篇 / 替换选中"只是兜底：
+            // 破坏性最大的那个降级为 ghost，且删除量大时要二次确认。
+            let destructive = !matches!(kind, ApplyKind::InsertAtCursor);
+            let label = if destructive && self.confirm_apply {
+                format!("确认{}？{}", kind.label(), suffix)
+            } else {
+                format!("{}{}", kind.label(), suffix)
+            };
+            let mut apply_button = Button::new("ai-apply").small().label(label);
+            apply_button = if destructive {
+                apply_button.ghost()
+            } else {
+                apply_button.primary()
+            };
+            input_row = input_row
+                .child(apply_button.on_click(cx.listener(|this, _, window, cx| {
+                    if this.needs_confirm() {
+                        this.confirm_apply = true;
+                        cx.notify();
+                        return;
+                    }
+                    this.apply(window, cx);
+                })))
+                .child(
+                    Button::new("ai-drop")
+                        .small()
+                        .ghost()
+                        .label("不采用")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.pending = None;
+                            this.confirm_apply = false;
+                            cx.notify();
+                        })),
+                );
         }
 
         // ── 状态行 ──

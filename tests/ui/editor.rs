@@ -402,3 +402,49 @@ fn scroll_offset_is_zero_when_content_fits_the_viewport() {
 
     assert_eq!(offset, px(0.), "不足一屏没有可滚空间: {offset:?}");
 }
+
+// ── AI 修订评审的状态机（设计见 docs/ai/ai-review-hunks-design.md §3.2）──
+
+use super::{AiReview, HunkState};
+use crate::core::ai::patch::Hunk;
+
+fn hunk(start_line: usize) -> Hunk {
+    Hunk {
+        start_line,
+        orig_lines: vec!["原文行".into()],
+        new_lines: vec!["改后行".into()],
+        lines: Vec::new(),
+        added: 1,
+        removed: 1,
+    }
+}
+
+#[test]
+fn new_review_starts_every_hunk_pending() {
+    let review = AiReview::new("a.md".into(), vec![hunk(0), hunk(5)]);
+    assert_eq!(review.stats(), (2, 0, 0, 0));
+    assert!(review.hunks.iter().all(|e| e.state == HunkState::Pending));
+}
+
+#[test]
+fn review_stats_counts_every_state() {
+    let mut review = AiReview::new("a.md".into(), vec![hunk(0), hunk(5), hunk(9), hunk(12)]);
+    review.hunks[0].state = HunkState::Accepted;
+    review.hunks[1].state = HunkState::Rejected;
+    review.hunks[2].state = HunkState::Stale("原文已改动".into());
+    // （待处理，已接受，已拒绝，已失效）
+    assert_eq!(review.stats(), (1, 1, 1, 1));
+}
+
+#[test]
+fn rejecting_a_hunk_leaves_the_note_text_alone() {
+    // 拒绝 = 不调用 apply_hunk：这里锁死"拒绝后原文逐字不变"
+    let note = "开头\n原文行\n结尾\n";
+    let hunk = hunk(1);
+    let mut review = AiReview::new("a.md".into(), vec![hunk.clone()]);
+    review.hunks[0].state = HunkState::Rejected;
+    assert_eq!(note, "开头\n原文行\n结尾\n", "拒绝不该动原文");
+    // 而接受是要真的改的（对照：apply_hunk 会生效）
+    let applied = crate::core::ai::patch::apply_hunk(note, &hunk).unwrap();
+    assert!(applied.contains("改后行"), "接受才改：{applied}");
+}
