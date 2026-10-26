@@ -7,6 +7,8 @@
 //! "能不能选中 / 复制"是框架 `TextView` 的行为，只能人工验收。
 
 use super::{Block, code_fence};
+use crate::core::ai::diff::DiffLine;
+use crate::state::ai_sessions::StoredBlock;
 
 #[test]
 fn code_fence_wraps_text_in_three_backticks() {
@@ -48,6 +50,44 @@ fn toggle_flips_collapsed_back_and_forth() {
     assert!(!block.is_collapsed());
     block.toggle();
     assert!(block.is_collapsed());
+}
+
+#[test]
+fn stored_round_trip_keeps_every_variant() {
+    let blocks = vec![
+        Block::user("问一句".into()),
+        Block::assistant("答一句".into()),
+        Block::tool("read_note", "a.md"),
+        Block::verify("第 3 行：[[不存在]]".into()),
+        Block::diff(
+            vec![
+                DiffLine::Same("未变".into()),
+                DiffLine::Add("新增".into()),
+                DiffLine::Del("删除".into()),
+            ],
+            1,
+            1,
+        ),
+    ];
+    for block in blocks {
+        let stored = block.to_stored();
+        let back = Block::from_stored(stored.clone());
+        assert_eq!(back.to_stored(), stored, "{stored:?} 往返后不一致");
+    }
+}
+
+#[test]
+fn diff_block_starts_collapsed_and_unapplied() {
+    let block = Block::diff(vec![DiffLine::Add("x".into())], 1, 0);
+    assert!(
+        block.is_collapsed(),
+        "diff 默认收起，否则会把对话挤出可视区"
+    );
+    let stored = block.to_stored();
+    assert!(
+        matches!(stored, StoredBlock::Diff { applied, .. } if !applied),
+        "新 diff 不该是已应用状态"
+    );
 }
 
 #[test]

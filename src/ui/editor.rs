@@ -1542,7 +1542,9 @@ impl EditorPanel {
     /// 打开 / 关闭编辑器下方的 AI 对话条
     pub fn toggle_ai_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ai_chat.is_none() {
-            let chat = cx.new(|cx| AiChat::new(window, cx));
+            // 会话按笔记归属：建好就把这篇笔记的历史读回来
+            let note_path = self.note.as_ref().map(|note| note.path().to_path_buf());
+            let chat = cx.new(|cx| AiChat::new(window, cx, note_path));
             // 对话条自己请求关闭：这里只负责把开关拨回去
             cx.subscribe(&chat, |this, _, _: &AiChatEvent, cx| {
                 this.ai_open = false;

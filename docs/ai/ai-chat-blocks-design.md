@@ -85,10 +85,32 @@ UI 只负责显示，不再二次截断。
 | 折叠状态下又收到同一块的流式增量 | 只在"新的正文块"上追加；流式块不会被折叠 |
 | `TextView` 解析失败 | 框架内部有 `parsed_error`，不会 panic |
 
-## 5. 测试与验收
+## 6. 多轮：为什么"只看到一轮"（2026-10-26 追加）
+
+排查结论（用户报告"其余轮次没显示"）：**数据没丢，是看不见 + 会话归属**。
+
+| # | 原因 | 处置 |
+|---|---|---|
+| A | 对话区钉死 180px 且**没有自动滚到底**，旧轮次在视口外 | ① 高度 180 → 260；② 内容长度变化时 `ScrollHandle::scroll_to_bottom()`（只在变化时调，用户手动上滚不会被拽回） |
+| B | `AiChat` 挂在 `EditorPanel`，而 `OpenTabs.panels` 是 **按笔记路径** 一个面板：切笔记 = 另一个（空的）会话；关标签 = 会话销毁；重启 = 全丢 | 会话**按笔记归属并落盘**（见 §6.1） |
+| C | `finish()` 先压 assistant 后压 user → 发给模型的顺序是 `[a1,q1,a2,q2]`，跨轮错序 | `send()` 开始时压 user、`finish()` 只压 assistant；动作模式（一次性改写）不进历史 |
+| D | `pending: Option<PendingEdit>` 是单值，下一轮直接覆盖 → **上一轮的 diff 消失** | 每轮 `finish` 时把该轮 diff 固化成 `Block::Diff { lines, collapsed, applied }`；`pending` 只服务"当前待应用" |
+| E | diff 默认展开 + 工具结果长 → 占满可视区，把更早的对话挤出去 | `Block::Diff` 默认折叠，标题保留 `+A -B` |
+
+### 6.1 会话持久化
+
+- 归属：**按笔记**（面板即笔记、系统提示里带的是当前笔记正文，语义上会话就是"关于这篇的对话"）。
+- 位置：`state/ai_sessions.rs`，单文件 `app_data_dir()/ai_sessions.json`，
+  `HashMap<PathBuf, Vec<StoredBlock>>`（`StoredBlock` 是 `Block` 的可序列化镜像，
+  折叠状态不落盘，加载后按 §3.1 的默认值重建）。
+- 上限：30 个会话 × 每个 200 块，超出丢最旧的——文件不能无限长。
+- 清空对话条 = 删除该笔记的会话；写盘失败只记 `error`，不影响对话本身。
+- 面板被复用去打开另一篇笔记时（`capture` 拿到不同路径）重新载入对应会话。
+
+## 7. 测试与验收
 
 - 自动化：`tests/core/ai/agent_loop.rs` 已有用例断言 `ToolResult` 事件出现（用了 `..`，
-  加字段不影响）；补一条断言 `content` 非空。
+  加字段不影响）；补一条断言 `content` 非空。`tests/state/ai_sessions.rs` 覆盖裁剪与读写。
 - 人工验收：
   - [ ] 拖选 AI 回复的一段文字 → `Cmd-C` 能粘出来（含代码块）
   - [ ] 点 AI 回复里的代码块右上角 Copy → 粘出的是代码原文

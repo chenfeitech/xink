@@ -34,16 +34,21 @@ use crate::core::ai::prompt::{Action, all_actions};
 use crate::core::ai::snapshot::write_snapshot;
 use crate::core::ai::tools::ToolHost;
 use crate::core::ai::verify::LinkIndex;
-use crate::core::ai::{AiError, ChatMessage, CompletionRequest, Provider, StreamEvent, Usage};
+use crate::core::ai::{
+    AiError, ChatMessage, CompletionRequest, Provider, Role, StreamEvent, Usage,
+};
 use crate::core::config::AiProviderKind;
 use crate::core::index::{IndexSnapshot, LinkRef, Resolution};
 use crate::core::search::{Hit, search_files};
+use crate::state::ai_sessions::{self, StoredBlock};
 use crate::state::workspace::app_data_dir;
 
 /// 等待首个响应字节的预算（Ollama 冷启动实测数秒）
 const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(30);
 /// 对话区最大高度：超过就让对话区自己滚，编辑区不被压扁
-const HISTORY_MAX_H: f32 = 180.;
+///
+/// 180 太小：一轮问答就撑满，更早的轮次全在视口外，看起来像"只有一轮"。
+const HISTORY_MAX_H: f32 = 260.;
 
 /// 对话条发出的事件（目前只有"关闭"）
 pub enum AiChatEvent {
@@ -164,6 +169,18 @@ enum Block {
     },
     /// 结构校验没过，已把问题回灌让模型重写
     Verify { detail: String, collapsed: bool },
+    /// 一轮结束时的改前 / 改后对照
+    ///
+    /// 固化成块是因为 `pending` 是单值：下一轮一来就被覆盖，
+    /// 上一轮的 diff 会凭空消失（设计文档 §6 D）。
+    Diff {
+        lines: Vec<DiffLine>,
+        added: usize,
+        removed: usize,
+        /// 用户点了"应用"：只做标记，块本身留着当过程记录
+        applied: bool,
+        collapsed: bool,
+    },
 }
 
 impl Block {
@@ -200,12 +217,24 @@ impl Block {
         }
     }
 
+    /// diff 块默认收起：长 diff 会把对话挤出可视区（设计文档 §6 E）
+    fn diff(lines: Vec<DiffLine>, added: usize, removed: usize) -> Self {
+        Self::Diff {
+            lines,
+            added,
+            removed,
+            applied: false,
+            collapsed: true,
+        }
+    }
+
     fn is_collapsed(&self) -> bool {
         match self {
             Self::User { collapsed, .. }
             | Self::Assistant { collapsed, .. }
             | Self::Tool { collapsed, .. }
-            | Self::Verify { collapsed, .. } => *collapsed,
+            | Self::Verify { collapsed, .. }
+            | Self::Diff { collapsed, .. } => *collapsed,
         }
     }
 
@@ -214,7 +243,75 @@ impl Block {
             Self::User { collapsed, .. }
             | Self::Assistant { collapsed, .. }
             | Self::Tool { collapsed, .. }
-            | Self::Verify { collapsed, .. } => *collapsed = !*collapsed,
+            | Self::Verify { collapsed, .. }
+            | Self::Diff { collapsed, .. } => *collapsed = !*collapsed,
+        }
+    }
+
+    /// 转成可落盘的形态（折叠状态不存，加载后按默认值重建）
+    fn to_stored(&self) -> StoredBlock {
+        match self {
+            Self::User { text, .. } => StoredBlock::User { text: text.clone() },
+            Self::Assistant { text, .. } => StoredBlock::Assistant { text: text.clone() },
+            Self::Tool { title, output, .. } => StoredBlock::Tool {
+                title: title.clone(),
+                output: output.clone(),
+            },
+            Self::Verify { detail, .. } => StoredBlock::Verify {
+                detail: detail.clone(),
+            },
+            Self::Diff {
+                lines,
+                added,
+                removed,
+                applied,
+                ..
+            } => StoredBlock::Diff {
+                added: *added,
+                removed: *removed,
+                applied: *applied,
+                lines: lines
+                    .iter()
+                    .map(|line| match line {
+                        DiffLine::Same(t) => (' ', t.clone()),
+                        DiffLine::Add(t) => ('+', t.clone()),
+                        DiffLine::Del(t) => ('-', t.clone()),
+                    })
+                    .collect(),
+            },
+        }
+    }
+
+    /// 从落盘形态还原
+    fn from_stored(stored: StoredBlock) -> Self {
+        match stored {
+            StoredBlock::User { text } => Self::user(text),
+            StoredBlock::Assistant { text } => Self::assistant(text),
+            StoredBlock::Tool { title, output } => Self::Tool {
+                title,
+                output,
+                collapsed: true,
+            },
+            StoredBlock::Verify { detail } => Self::verify(detail),
+            StoredBlock::Diff {
+                added,
+                removed,
+                applied,
+                lines,
+            } => Self::Diff {
+                lines: lines
+                    .into_iter()
+                    .map(|(kind, text)| match kind {
+                        '+' => DiffLine::Add(text),
+                        '-' => DiffLine::Del(text),
+                        _ => DiffLine::Same(text),
+                    })
+                    .collect(),
+                added,
+                removed,
+                applied,
+                collapsed: true,
+            },
         }
     }
 
@@ -229,10 +326,12 @@ impl Block {
 
 /// 一个块折叠时收起的那部分正文
 ///
-/// 对话正文按 Markdown 渲染（可读），工具结果按代码块渲染（保真、复制即原文）。
+/// 对话正文按 Markdown 渲染（可读），工具结果按代码块渲染（保真、复制即原文），
+/// diff 带颜色，因此直接按块下标回 `blocks` 取。
 enum Body {
     Markdown(String),
     Code(String),
+    Diff(usize),
 }
 
 /// 把工具结果包成 Markdown 代码块
@@ -285,9 +384,16 @@ pub struct AiChat {
     input: Entity<InputState>,
     /// 对话区的内容块，顺序即发生顺序
     blocks: Vec<Block>,
-    /// diff 块的折叠状态：diff 每帧由 `pending` 重算，不进 `blocks`
-    diff_collapsed: bool,
+    /// 对话区的滚动句柄：内容变长时用它滚到底，否则新的一轮在视口外看不见
+    history_scroll: ScrollHandle,
+    /// 上次渲染时的内容长度（块数 + 总字符数）：只有变了才滚到底，
+    /// 否则用户手动往上翻看历史会被一直拽回底部
+    scroll_len: (usize, usize),
+    /// 当前会话属于哪篇笔记：会话按笔记落盘，切笔记要换一份
+    note_path: Option<PathBuf>,
     /// 发给模型的历史（user / assistant），system 每轮重新组装
+    ///
+    /// 顺序必须是 `q1, a1, q2, a2`：user 在发起时压入、assistant 在收尾时压入。
     history: Vec<ChatMessage>,
     mode: AiMode,
     /// 本次会话用的模型；None = 跟随设置
@@ -308,7 +414,8 @@ pub struct AiChat {
 }
 
 impl AiChat {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// `note_path` 是当前这篇笔记：会话按笔记落盘，建好就把历史读回来
+    pub fn new(window: &mut Window, cx: &mut Context<Self>, note_path: Option<PathBuf>) -> Self {
         let input =
             cx.new(|cx| InputState::new(window, cx).placeholder("问点什么，或让 AI 改这篇笔记…"));
         // 订阅只挂一次：写进 render 会每帧多挂一个
@@ -330,10 +437,12 @@ impl AiChat {
         )
         .detach();
 
-        Self {
+        let mut this = Self {
             input,
             blocks: Vec::new(),
-            diff_collapsed: false,
+            history_scroll: ScrollHandle::new(),
+            scroll_len: (0, 0),
+            note_path: None,
             history: Vec::new(),
             mode: AiMode::Chat,
             model_override: None,
@@ -348,7 +457,11 @@ impl AiChat {
             elapsed_ms: None,
             started: None,
             tool_calls: 0,
+        };
+        if let Some(path) = note_path {
+            this.switch_note(&path);
         }
+        this
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -374,6 +487,7 @@ impl AiChat {
             self.error = Some("没有打开的笔记：先打开一篇笔记".into());
             return None;
         };
+        self.switch_note(&path);
         let Some(panel) = state.tabs.get(&path) else {
             self.error = Some("找不到活动笔记的编辑页".into());
             return None;
@@ -392,16 +506,17 @@ impl AiChat {
         self.input
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.mode = AiMode::Chat;
-        self.blocks.push(Block::user(text.clone()));
-        self.blocks.push(Block::assistant(String::new()));
-        self.diff_collapsed = false;
-
+        // 顺序要紧：`capture` 里可能切笔记（会话按笔记归属，切了就整份重建
+        // `history`），因此必须先切会话、再把这一轮的 user 压进历史。
         let Some((path, selection, whole, _cursor)) = self.capture(cx) else {
-            self.blocks.pop();
-            self.blocks.pop();
             cx.notify();
             return;
         };
+        // user 先入历史、assistant 收尾时再入：顺序必须是 q1,a1,q2,a2。
+        // 反过来的话模型看到的是"先回答后提问"，多轮上下文会错乱（§6 C）。
+        self.history.push(ChatMessage::user(text.clone()));
+        self.blocks.push(Block::user(text.clone()));
+        self.blocks.push(Block::assistant(String::new()));
         let kind = if selection.trim().is_empty() {
             ApplyKind::InsertAtCursor
         } else {
@@ -439,8 +554,8 @@ impl AiChat {
              <<<CONTENT>>>\n{}\n<<<END>>>",
             prepared.text
         ))];
+        // `history` 末尾已经是本轮的 user，直接拼上即可
         messages.extend(self.history.iter().cloned());
-        messages.push(ChatMessage::user(text));
         self.start_request(messages, window, cx);
     }
 
@@ -453,16 +568,14 @@ impl AiChat {
             return;
         }
         self.mode = AiMode::Action(action);
-        self.blocks.push(Block::user(action.label().to_string()));
-        self.blocks.push(Block::assistant(String::new()));
-        self.diff_collapsed = false;
-
+        // 同上：先切会话，再压块
         let Some((path, selection, whole, cursor)) = self.capture(cx) else {
-            self.blocks.pop();
-            self.blocks.pop();
             cx.notify();
             return;
         };
+        // 动作是一次性改写，不带上一轮上下文，因此不进 `history`
+        self.blocks.push(Block::user(action.label().to_string()));
+        self.blocks.push(Block::assistant(String::new()));
         let scope = if selection.trim().is_empty() {
             ContextScope::WholeNote
         } else {
@@ -751,23 +864,73 @@ impl AiChat {
                 pending.after.clear();
             }
             self.pending = None;
+            self.drop_last_user_turn();
+            self.persist();
             cx.notify();
             return;
         }
-        // 记入历史，下一轮才带得走上下文
-        self.history.push(ChatMessage::assistant(output.clone()));
+        // 记入历史：user 已经在发起时压过，这里只补 assistant（q1,a1,q2,a2）
+        if matches!(self.mode, AiMode::Chat) {
+            self.history.push(ChatMessage::assistant(output.clone()));
+        }
         if let Some(pending) = self.pending.as_mut() {
             pending.after = output;
+            // 把这一轮的 diff 固化成块：`pending` 是单值，下一轮一来就被覆盖，
+            // 不固化的话上一轮的对照会凭空消失（§6 D）
+            if !matches!(pending.kind, ApplyKind::InsertAtCursor) {
+                let lines = diff_lines(&pending.before, &pending.after);
+                let (added, removed) = crate::core::ai::diff::diff_stats(&lines);
+                self.blocks.push(Block::diff(lines, added, removed));
+            }
         }
-        if let Some(Block::User { text, .. }) = self
+        self.persist();
+        cx.notify();
+    }
+
+    /// 会话按笔记归属：换了一篇笔记就换一份历史（§6.1）
+    fn switch_note(&mut self, path: &std::path::Path) {
+        if self.note_path.as_deref() == Some(path) {
+            return;
+        }
+        self.note_path = Some(path.to_path_buf());
+        self.blocks = ai_sessions::load_note(path)
+            .into_iter()
+            .map(Block::from_stored)
+            .collect();
+        // 发给模型的上下文从块里重建：只取"我问 / AI 答"的成对轮次
+        self.history = self
             .blocks
             .iter()
-            .rev()
-            .find(|b| matches!(b, Block::User { .. }))
-        {
-            self.history.push(ChatMessage::user(text.clone()));
+            .filter_map(|block| match block {
+                Block::User { text, .. } => Some(ChatMessage::user(text.clone())),
+                Block::Assistant { text, .. } => Some(ChatMessage::assistant(text.clone())),
+                _ => None,
+            })
+            .collect();
+        self.pending = None;
+        self.scroll_len = (0, 0);
+    }
+
+    /// 落盘当前会话：失败只打日志，绝不打断对话
+    fn persist(&mut self) {
+        let Some(path) = self.note_path.clone() else {
+            return;
+        };
+        let stored: Vec<StoredBlock> = self.blocks.iter().map(Block::to_stored).collect();
+        if let Err(err) = ai_sessions::save_note(&path, &stored) {
+            eprintln!("[xink] AI 会话保存失败：{err:?}");
         }
-        cx.notify();
+    }
+
+    /// 这一轮没拿到正文：撤掉发起时压进去的 user
+    ///
+    /// 否则历史末尾会悬着一条问句，下一轮变成"两个问句连着问"。
+    fn drop_last_user_turn(&mut self) {
+        if matches!(self.mode, AiMode::Chat)
+            && matches!(self.history.last(), Some(msg) if msg.role == Role::User)
+        {
+            self.history.pop();
+        }
     }
 
     fn fail(&mut self, err: AiError, cx: &mut Context<Self>) {
@@ -776,6 +939,7 @@ impl AiChat {
         self.elapsed_ms = self.started.map(|t| t.elapsed().as_millis() as u64);
         self.error = Some(err.message());
         self.pending = None;
+        self.drop_last_user_turn();
         cx.notify();
     }
 
@@ -784,6 +948,7 @@ impl AiChat {
         self.task = None;
         self.busy = false;
         self.error = Some(AiError::Canceled.message());
+        self.drop_last_user_turn();
         cx.notify();
     }
 
@@ -795,15 +960,15 @@ impl AiChat {
         }
     }
 
-    fn toggle_diff(&mut self, cx: &mut Context<Self>) {
-        self.diff_collapsed = !self.diff_collapsed;
-        cx.notify();
-    }
-
     fn clear(&mut self, cx: &mut Context<Self>) {
         self.blocks.clear();
-        self.diff_collapsed = false;
         self.history.clear();
+        // 清空 = 连落盘的那份一起删，否则下次打开这篇笔记旧对话又回来了
+        if let Some(path) = self.note_path.clone()
+            && let Err(err) = ai_sessions::clear_note(&path)
+        {
+            eprintln!("[xink] AI 会话删除失败：{err:?}");
+        }
         self.pending = None;
         self.error = None;
         self.notice = None;
@@ -850,7 +1015,19 @@ impl AiChat {
                 }
             });
         }
+        // 对应的 diff 块标成"已应用"：过程记录留着，按钮不再重复出现。
+        // 插入模式没有 diff 块，别去标上一轮的。
+        if !matches!(pending.kind, ApplyKind::InsertAtCursor)
+            && let Some(Block::Diff { applied, .. }) = self
+                .blocks
+                .iter_mut()
+                .rev()
+                .find(|b| matches!(b, Block::Diff { .. }))
+        {
+            *applied = true;
+        }
         self.error = None;
+        self.persist();
         cx.notify();
     }
 
@@ -949,6 +1126,8 @@ impl Render for AiChat {
         // ── 对话区 ──
         let mut pending_stats: Option<String> = None;
         let mut history = div()
+            .id("ai-history")
+            .track_scroll(&self.history_scroll)
             .max_h(px(HISTORY_MAX_H))
             .overflow_y_scrollbar()
             .flex_col()
@@ -980,6 +1159,18 @@ impl Render for AiChat {
                         detail.lines().count()
                     ),
                     Body::Code(detail.clone()),
+                ),
+                Block::Diff {
+                    added,
+                    removed,
+                    applied,
+                    ..
+                } => (
+                    format!(
+                        "改前 / 改后（+{added} -{removed}）{}",
+                        if *applied { "· 已应用" } else { "" }
+                    ),
+                    Body::Diff(ix),
                 ),
             };
 
@@ -1020,45 +1211,49 @@ impl Render for AiChat {
                             .text_xs(),
                     )
                     .into_any_element(),
+                // diff 逐行：颜色即语义，用 div 而非 TextView（不需要复制）
+                Body::Diff(ix) => {
+                    let mut column = div().w_full().flex_col();
+                    if let Some(Block::Diff { lines, .. }) = self.blocks.get(ix) {
+                        for line in lines {
+                            let (text, color) = match line {
+                                DiffLine::Same(t) => (format!("  {t}"), muted),
+                                DiffLine::Add(t) => (format!("+ {t}"), primary),
+                                DiffLine::Del(t) => (format!("- {t}"), warning),
+                            };
+                            column = column.child(div().text_xs().text_color(color).child(text));
+                        }
+                    }
+                    column.into_any_element()
+                }
             });
         }
-        if let Some(pending) = &self.pending {
-            if !pending.after.is_empty() && !matches!(pending.kind, ApplyKind::InsertAtCursor) {
-                let lines = diff_lines(&pending.before, &pending.after);
-                let (added, removed) = crate::core::ai::diff::diff_stats(&lines);
-                pending_stats = Some(format!("+{added} -{removed}"));
-                history = history.child(
-                    div()
-                        .id("ai-diff-block")
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_diff(cx)))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(if self.diff_collapsed { "▸" } else { "▾" }),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(format!("改前 / 改后（+{added} -{removed}）")),
-                        ),
-                );
-                if !self.diff_collapsed {
-                    for line in lines {
-                        let (text, color) = match line {
-                            DiffLine::Same(t) => (format!("  {t}"), muted),
-                            DiffLine::Add(t) => (format!("+ {t}"), primary),
-                            DiffLine::Del(t) => (format!("- {t}"), warning),
-                        };
-                        history = history.child(div().text_xs().text_color(color).child(text));
-                    }
-                }
-            }
+
+        // 应用按钮上的 +A -B 取当前待应用那一轮
+        if let Some(pending) = &self.pending
+            && !pending.after.is_empty()
+            && !matches!(pending.kind, ApplyKind::InsertAtCursor)
+        {
+            let (added, removed) =
+                crate::core::ai::diff::diff_stats(&diff_lines(&pending.before, &pending.after));
+            pending_stats = Some(format!("+{added} -{removed}"));
+        }
+
+        // 内容变长了才滚到底：否则用户往上翻历史会被一直拽回底部
+        let content_len = self
+            .blocks
+            .iter()
+            .map(|block| match block {
+                Block::User { text, .. } | Block::Assistant { text, .. } => text.chars().count(),
+                Block::Tool { output, .. } => output.chars().count(),
+                Block::Verify { detail, .. } => detail.chars().count(),
+                Block::Diff { lines, .. } => lines.len(),
+            })
+            .sum::<usize>();
+        let now = (self.blocks.len(), content_len);
+        if now != self.scroll_len {
+            self.scroll_len = now;
+            self.history_scroll.scroll_to_bottom();
         }
 
         // ── 快捷动作 ──

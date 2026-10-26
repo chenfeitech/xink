@@ -104,7 +104,7 @@ fn migrate_last_vault(legacy_file: &Path) -> Option<VaultRegistry> {
 ///
 /// 状态文件损坏虽然只会回落到默认值，但中途崩溃留下半截文件仍会让用户
 /// 莫名其妙地"丢设置"，所以这里同样按 `.codebuddy/rules/04-notes-domain.md` 走原子写。
-fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -124,7 +124,7 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+pub(crate) fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let json = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&json)?)
 }
