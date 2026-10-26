@@ -86,7 +86,7 @@
 | R11 | 明暗主题切换，跟随系统 | ✅ | `Cmd+Shift+L`，纯逻辑 `ThemeMode::toggled` |
 | R12 | 常用 Markdown 快捷键（`Cmd+B` 加粗、`Cmd+I` 斜体等） | ✅ | `Cmd+B/I/Shift+X/E/K` |
 | R13 | 数据文件（JSON / YAML / TOML）编辑 | ✅ | `docs/editor/json-yaml-editing-requirements.md`（R13.8 波浪线待人工确认） |
-| R14 | 目录树跟随活动笔记：切标签时自动展开、选中并滚动到该笔记 | 📝 设计中 | `docs/file-tree/file-tree-reveal-active-note-requirements.md` |
+| R14 | 目录树跟随活动笔记：切标签时自动展开、选中并滚动到该笔记 | ✅ | 已实施（2026-10-23，待人工验收）；`docs/file-tree/file-tree-reveal-active-note-requirements.md` |
 
 ### P2 — 明确不在本期范围
 
