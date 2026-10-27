@@ -131,7 +131,9 @@ cargo test                 : 603 passed / 0 failed / 3 ignored
 - import：`DockPlacement` → `TabGroup`
 - `PreviewPanel` 增字段 `group: Option<WeakEntity<TabGroup>>`
 - `impl BasePanel` 增 `on_added_to()` 存下 group 句柄
-- `extend_toggle_button(group, zoomed, cx)`：点击 `group.toggle_zoom(window, cx)`；
+- `extend_toggle_button(group, zoomed)`（无 `cx` 参数）：点击用**普通闭包**
+  `on_click(move |_, window, cx: &mut App| group.toggle_zoom(...))`，
+  不用 `cx.listener`（原因见偏差记录第四次）；
   `group` 为 `None` 时按钮不渲染，避免出现死按钮
 - 伸展状态由 `BasePanel::set_zoomed` 回调写入 `self.zoomed`，**不在渲染期读 group**
   （原因见下）
@@ -183,6 +185,13 @@ being updated  (gpui-pre-0.3.9/src/app/entity_map.rs:156)
   项目源码里。用户提供关键词 `Collapse` 后在**依赖源码**中定位。
   教训：查证"某能力是否存在"时，① 不要过早 `head` 截断；
   ② 现象在 UI 上但代码里搜不到时，要想到**框架渲染**这一层。
+- 2026-10-27（第四次）：点击按钮 panic
+  `cannot read PreviewPanel while it is already being updated`。
+  用了 `cx.listener` —— 它在 **PreviewPanel 自己的 update** 里执行，
+  而 `toggle_zoom` 内部要读 `active_panel`（就是本面板），于是重入。
+  改用普通 `on_click(move |_, window, cx: &mut App| ...)` 闭包即可脱出本面板的 update。
+  教训：`cx.listener` 提供的 `this` 很方便，但代价是**整段逻辑都跑在该实体的
+  update 内**；只要回调里要碰"会反过来读自己的容器"，就必须换成普通闭包。
 - 2026-10-27（第三次）：改 Zoom 后在 `title()` 里 `group.read(cx)` 取 node id，
   启动即 panic —— `title()` 是在 TabGroup **update 期间**被调用的，读它就是重入。
   教训：**面板的 `title()` / `tab_name()` 是被容器同步调用的**，

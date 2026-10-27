@@ -536,7 +536,7 @@ impl Panel for PreviewPanel {
         let mut row = div().flex().items_center().gap_2();
 
         // 伸展按钮放**最左**（需求明确）：与编辑区右上角「折叠预览」左右呼应
-        if let Some(button) = extend_toggle_button(self.group.clone(), self.zoomed, cx) {
+        if let Some(button) = extend_toggle_button(self.group.clone(), self.zoomed) {
             row = row.child(button);
         }
 
@@ -586,7 +586,6 @@ impl Panel for PreviewPanel {
 fn extend_toggle_button(
     group: Option<WeakEntity<TabGroup>>,
     zoomed: bool,
-    cx: &mut Context<PreviewPanel>,
 ) -> Option<impl IntoElement> {
     let group = group?.upgrade()?;
 
@@ -613,11 +612,16 @@ fn extend_toggle_button(
                     .ghost()
                     .icon(icon)
                     .tooltip(tooltip)
-                    .on_click(cx.listener(move |_this, _, window, cx| {
-                        // zoom 是容器自己的动作，只能由 group 发起：
-                        // 它才知道当前显示的面板是否可缩放
+                    // 这里**不能**用 `cx.listener`：那会在 PreviewPanel 自己的
+                    // update 里执行，而 `toggle_zoom` 内部要读 `active_panel`
+                    // （就是本面板）→ 重入 panic。用普通闭包拿 `&mut App`，
+                    // 已经不在本面板的 update 里了。
+                    //
+                    // zoom 是容器自己的动作，只能由 group 发起：
+                    // 它才知道当前显示的面板是否可缩放。
+                    .on_click(move |_, window, cx| {
                         group.update(cx, |group, cx| group.toggle_zoom(window, cx));
-                    })),
+                    }),
             ),
     )
 }
