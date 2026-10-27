@@ -1601,9 +1601,6 @@ impl EditorPanel {
         }
     }
 
-    /// 在光标处插入文本（供目录树"插入到当前笔记"使用）。
-    ///
-    /// 插入后走与用户输入相同的同步：更新笔记、防抖保存、重算预览。
     // ── AI 协助接口 ──────────────────────────────────────────
     //
     // 只暴露 AI 需要的最小面：读选中 / 读整篇与光标 / 回填结果。
@@ -1676,10 +1673,10 @@ impl EditorPanel {
             "[xink] AI 对话条：{}",
             if self.ai_open { "打开" } else { "关闭" }
         );
-        if self.ai_open {
-            if let Some(chat) = &self.ai_chat {
-                chat.update(cx, |chat, cx| chat.focus(window, cx));
-            }
+        if self.ai_open
+            && let Some(chat) = &self.ai_chat
+        {
+            chat.update(cx, |chat, cx| chat.focus(window, cx));
         }
         cx.notify();
     }
@@ -2307,6 +2304,9 @@ impl EditorPanel {
         ReviewRow { kind, paired, text }
     }
 
+    /// 在光标处插入文本（供目录树"插入到当前笔记"使用）。
+    ///
+    /// 插入后走与用户输入相同的同步：更新笔记、防抖保存、重算预览。
     pub fn insert_at_cursor(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.note.is_none() {
             return;
@@ -2987,10 +2987,10 @@ impl Render for EditorPanel {
         view = view.child(body);
 
         // AI 对话条：贴在编辑区下方，聊天对象就是当前这篇笔记
-        if self.ai_open {
-            if let Some(chat) = &self.ai_chat {
-                view = view.child(chat.clone());
-            }
+        if self.ai_open
+            && let Some(chat) = &self.ai_chat
+        {
+            view = view.child(chat.clone());
         }
 
         view = view.child(
