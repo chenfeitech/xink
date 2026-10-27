@@ -4,15 +4,18 @@ use crate::core::ai::keychain::{KEY_ENV_VAR, MemorySecretStore, SecretStore, res
 use crate::core::config::{AiConfig, AiProviderKind, KeySource, ModelEntry};
 
 fn cfg_with(kind: AiProviderKind, source: KeySource) -> AiConfig {
-    let mut cfg = AiConfig::default();
-    cfg.enabled = true;
-    let mut model = ModelEntry::default();
-    model.id = "m".into();
-    model.kind = kind;
-    model.api_key_source = source;
-    cfg.models.push(model);
-    cfg.default_model = "m".into();
-    cfg
+    let model = ModelEntry {
+        id: "m".into(),
+        kind,
+        api_key_source: source,
+        ..Default::default()
+    };
+    AiConfig {
+        enabled: true,
+        models: vec![model],
+        default_model: "m".into(),
+        ..Default::default()
+    }
 }
 
 #[test]

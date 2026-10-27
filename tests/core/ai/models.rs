@@ -48,8 +48,10 @@ fn 合并进配置只更新能力字段() {
         }],
     };
     let mut cfg = AiConfig::default();
-    let mut mine = ModelEntry::default();
-    mine.id = "qwen3.5:0.8b".into();
+    let mut mine = ModelEntry {
+        id: "qwen3.5:0.8b".into(),
+        ..Default::default()
+    };
     mine.params.num_ctx = 4096; // 用户改过
     cfg.models.push(mine);
 
