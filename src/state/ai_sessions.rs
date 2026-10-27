@@ -70,13 +70,21 @@ pub fn load_note(path: &Path) -> Vec<StoredBlock> {
 /// 写某篇笔记的会话；空块列表等于删除
 pub fn save_note(path: &Path, blocks: &[StoredBlock]) -> Result<()> {
     let mut all = load_all();
+    apply_note(&mut all, path, blocks);
+    trim(&mut all);
+    write_json_atomic(&file_path(), &all)
+}
+
+/// 把一篇笔记的块写进表里；空列表等于删除
+///
+/// 抽出来是为了能单测：`save_note` 写在真实的应用数据目录，
+/// 测试不能碰（会把用户的 AI 会话历史冲掉）。
+fn apply_note(all: &mut HashMap<PathBuf, Vec<StoredBlock>>, path: &Path, blocks: &[StoredBlock]) {
     if blocks.is_empty() {
         all.remove(path);
     } else {
         all.insert(path.to_path_buf(), blocks.to_vec());
     }
-    trim(&mut all);
-    write_json_atomic(&file_path(), &all)
 }
 
 /// 删除某篇笔记的会话

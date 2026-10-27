@@ -500,3 +500,279 @@ fn data_file_zero_max_bytes_means_unlimited_and_is_kept() {
     c.sanitize();
     assert_eq!(c.editor.data_file.max_format_bytes, 0);
 }
+
+// ── AI 配置 ──────────────────────────────────────────────────
+//
+// 这一组是"设置里填了越界值会怎样"的唯一护栏：AI 配置是 M2/M3 才新增的，
+// 手改 config.json 的人很容易写出 0 / 空 / 巨大值，夹取错了不会报错，
+// 只会表现为"发不出去"或"必然超时"。
+
+fn model(id: &str) -> ModelEntry {
+    ModelEntry {
+        id: id.to_string(),
+        ..ModelEntry::default()
+    }
+}
+
+#[test]
+fn ai_out_of_range_values_are_clamped() {
+    let mut ai = AiConfig {
+        timeout_secs: 0,
+        max_context_chars: 1,
+        max_steps: 0,
+        max_tool_chars: 1,
+        ..AiConfig::default()
+    };
+    ai.sanitize();
+    // 下限 5s 是特意抬高的：手滑设成 0 会导致每次请求必然超时
+    assert_eq!(ai.timeout_secs, 5);
+    assert_eq!(ai.max_context_chars, 1_000);
+    assert_eq!(ai.max_steps, 1);
+    assert_eq!(ai.max_tool_chars, 500);
+
+    ai.timeout_secs = u64::MAX;
+    ai.max_context_chars = usize::MAX;
+    ai.max_steps = 999;
+    ai.max_tool_chars = usize::MAX;
+    ai.sanitize();
+    assert_eq!(ai.timeout_secs, 600);
+    assert_eq!(ai.max_context_chars, 200_000);
+    assert_eq!(ai.max_steps, 64);
+    assert_eq!(ai.max_tool_chars, 20_000);
+}
+
+#[test]
+fn ai_auto_apply_is_always_forced_off() {
+    // 需求 A7.1：AI 的改写必须经人确认，配置里写了 true 也不认
+    let mut ai = AiConfig {
+        auto_apply: true,
+        ..AiConfig::default()
+    };
+    ai.sanitize();
+    assert!(!ai.auto_apply);
+}
+
+#[test]
+fn ai_models_without_an_id_are_dropped() {
+    let mut ai = AiConfig {
+        models: vec![model("keep"), model(""), model("   ")],
+        ..AiConfig::default()
+    };
+    ai.sanitize();
+    let ids: Vec<&str> = ai.models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["keep"], "空 id 的条目多半是手改配置留下的");
+}
+
+#[test]
+fn ai_temperature_nan_and_out_of_range_are_clamped() {
+    let mut ai = AiConfig {
+        models: vec![ModelEntry {
+            params: AiModelParams {
+                temperature: f32::NAN,
+                ..AiModelParams::default()
+            },
+            ..model("m")
+        }],
+        ..AiConfig::default()
+    };
+    ai.sanitize();
+    // NaN 不能靠 `clamp`：它跟谁比都是 false，会原样穿过去
+    assert_eq!(ai.models[0].params.temperature, 0.0);
+
+    ai.models[0].params.temperature = -1.0;
+    ai.sanitize();
+    assert_eq!(ai.models[0].params.temperature, 0.0);
+    ai.models[0].params.temperature = 9.0;
+    ai.sanitize();
+    assert_eq!(ai.models[0].params.temperature, 2.0);
+}
+
+#[test]
+fn ai_num_ctx_is_clamped_by_the_models_own_context_limit() {
+    let mut ai = AiConfig {
+        models: vec![
+            ModelEntry {
+                context_limit: Some(4096),
+                params: AiModelParams {
+                    num_ctx: 1_000_000,
+                    ..AiModelParams::default()
+                },
+                ..model("small")
+            },
+            ModelEntry {
+                params: AiModelParams {
+                    num_ctx: u32::MAX,
+                    ..AiModelParams::default()
+                },
+                ..model("unknown")
+            },
+        ],
+        ..AiConfig::default()
+    };
+    ai.sanitize();
+    // 模型自己声明的上下文上限更小，按它来；没声明的按全局上限
+    assert_eq!(ai.models[0].params.num_ctx, 4096);
+    assert_eq!(ai.models[1].params.num_ctx, 1_048_576);
+
+    ai.models[0].params.num_ctx = 0;
+    ai.sanitize();
+    assert_eq!(ai.models[0].params.num_ctx, 512, "下限不能被压穿");
+}
+
+#[test]
+fn ai_num_predict_is_clamped() {
+    let mut ai = AiConfig {
+        models: vec![ModelEntry {
+            params: AiModelParams {
+                num_predict: 0,
+                ..AiModelParams::default()
+            },
+            ..model("m")
+        }],
+        ..AiConfig::default()
+    };
+    ai.sanitize();
+    assert_eq!(ai.models[0].params.num_predict, 16);
+
+    ai.models[0].params.num_predict = u32::MAX;
+    ai.sanitize();
+    assert_eq!(ai.models[0].params.num_predict, 32_768);
+}
+
+#[test]
+fn ai_default_model_is_cleared_when_it_cannot_be_used() {
+    // "看着配好了却发不出去"是最难查的一类：选中的模型不存在或被停用
+    let mut ai = AiConfig {
+        default_model: "gone".into(),
+        ..AiConfig::default()
+    };
+    ai.sanitize();
+    assert!(ai.default_model.is_empty(), "不存在的模型要清掉选择");
+
+    let mut disabled = model("m");
+    disabled.enabled = false;
+    ai.default_model = "m".into();
+    ai.models = vec![disabled];
+    ai.sanitize();
+    assert!(ai.default_model.is_empty(), "被停用的模型也要清掉选择");
+
+    ai.models = vec![model("m")];
+    ai.default_model = "m".into();
+    ai.sanitize();
+    assert_eq!(ai.default_model, "m", "能用的选择要保留");
+}
+
+#[test]
+fn active_model_requires_enabled_and_a_known_id() {
+    let mut ai = AiConfig::default();
+    assert!(ai.active_model().is_none(), "没选模型时是 None");
+
+    let mut off = model("m");
+    off.enabled = false;
+    ai.models = vec![off];
+    ai.default_model = "m".into();
+    assert!(ai.active_model().is_none(), "停用等于没选");
+
+    ai.models = vec![model("m")];
+    assert!(ai.active_model().is_some());
+}
+
+#[test]
+fn is_ready_needs_both_the_switch_and_a_model() {
+    let mut ai = AiConfig {
+        models: vec![model("m")],
+        default_model: "m".into(),
+        ..AiConfig::default()
+    };
+    assert!(!ai.is_ready(), "总开关没开就不算就绪");
+
+    ai.enabled = true;
+    assert!(ai.is_ready());
+
+    ai.default_model.clear();
+    assert!(!ai.is_ready(), "没有生效的模型就不算就绪");
+}
+
+#[test]
+fn base_url_or_falls_back_to_the_provider_default() {
+    let ai = AiConfig::default();
+    let mut ollama = model("m");
+    ollama.kind = AiProviderKind::Ollama;
+    assert_eq!(ollama.base_url_or(&ai), ai.ollama.base_url);
+
+    let mut compat = model("c");
+    compat.kind = AiProviderKind::OpenAiCompatible;
+    assert!(compat.base_url_or(&ai).is_empty(), "兼容端点没有默认值");
+
+    ollama.base_url = "http://box:11434".into();
+    assert_eq!(ollama.base_url_or(&ai), "http://box:11434", "条目覆盖优先");
+
+    // 纯空格等同空：否则会拼出一个"看起来填了"的无效地址
+    let mut blank = model("b");
+    blank.base_url = "   ".into();
+    assert_eq!(blank.base_url_or(&ai), ai.ollama.base_url);
+}
+
+#[test]
+fn endpoint_for_uses_each_providers_shape() {
+    let ai = AiConfig::default();
+    let mut ollama = model("m");
+    ollama.kind = AiProviderKind::Ollama;
+    assert!(ai.endpoint_for(&ollama).ends_with("/api/chat"));
+
+    let mut compat = model("c");
+    compat.kind = AiProviderKind::OpenAiCompatible;
+    compat.base_url = "https://api.example.com/v1/".into();
+    let endpoint = ai.endpoint_for(&compat);
+    assert_eq!(endpoint, "https://api.example.com/v1/chat/completions");
+    assert!(!endpoint.contains("//chat"), "尾斜杠不能拼出双斜杠");
+}
+
+#[test]
+fn ollama_only_ignores_keys_is_true_without_an_active_model() {
+    let mut ai = AiConfig::default();
+    assert!(ai.ollama_only_ignores_keys(), "没有模型时不该催着填 key");
+
+    let mut compat = model("c");
+    compat.kind = AiProviderKind::OpenAiCompatible;
+    ai.models = vec![compat];
+    ai.default_model = "c".into();
+    assert!(!ai.ollama_only_ignores_keys(), "远程端点要 key");
+
+    ai.models = vec![model("m")];
+    ai.default_model = "m".into();
+    assert!(ai.ollama_only_ignores_keys(), "本地 Ollama 不要 key");
+}
+
+#[test]
+fn model_display_name_falls_back_to_the_id() {
+    let mut m = model("qwen2.5:7b");
+    assert_eq!(m.display_name(), "qwen2.5:7b");
+    m.label = "  ".into();
+    assert_eq!(m.display_name(), "qwen2.5:7b", "纯空格的 label 等同没写");
+    m.label = "我的模型".into();
+    assert_eq!(m.display_name(), "我的模型");
+}
+
+#[test]
+fn capabilities_are_matched_exactly() {
+    let mut m = model("m");
+    m.capabilities = vec!["tools".into()];
+    assert!(m.supports_tools());
+    assert!(!m.supports_thinking());
+
+    // 大小写不一致不算声明过：宁可让用户手动打开，也别猜
+    m.capabilities = vec!["Tools".into()];
+    assert!(!m.supports_tools());
+
+    m.capabilities = vec!["thinking".into()];
+    assert!(m.supports_thinking());
+}
+
+#[test]
+fn clamp_f32_survives_nan_and_infinity() {
+    assert_eq!(clamp_f32(f32::NAN, (0.0, 2.0)), 0.0);
+    assert_eq!(clamp_f32(f32::INFINITY, (0.0, 2.0)), 2.0);
+    assert_eq!(clamp_f32(f32::NEG_INFINITY, (0.0, 2.0)), 0.0);
+    assert_eq!(clamp_f32(1.5, (0.0, 2.0)), 1.5, "区间内的值原样返回");
+}

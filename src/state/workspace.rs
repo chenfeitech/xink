@@ -161,15 +161,24 @@ fn open_notes_path() -> PathBuf {
 /// 写入前做保序去重并按照仍有 active 落在 paths 内校正，
 /// 保证落盘的永远是"可直接恢复"的状态。
 pub fn save_open_notes(paths: &[PathBuf], active: Option<&PathBuf>) -> Result<()> {
+    write_json(&open_notes_path(), &normalize_open_notes(paths, active))
+}
+
+/// 落盘前的规范化：保序去重，并保证 `active` 一定落在 `paths` 内
+///
+/// 抽出来是为了能单测——`save_open_notes` 本身写在真实的应用数据目录，
+/// 测试不能碰（会把用户正打开着的标签清掉）。
+fn normalize_open_notes(paths: &[PathBuf], active: Option<&PathBuf>) -> OpenNotes {
     let paths = dedup_paths(paths);
-    let active = active.filter(|p| paths.iter().any(|open| open == *p));
-    write_json(
-        &open_notes_path(),
-        &OpenNotes {
-            paths,
-            active: active.cloned(),
-        },
-    )
+    let active = active_within(active.cloned(), &paths);
+    OpenNotes { paths, active }
+}
+
+/// `active` 不在 `paths` 里就当没有
+///
+/// 恢复时不能凭空激活一篇根本没打开的笔记，否则启动会打开一篇用户没开过的文件。
+fn active_within(active: Option<PathBuf>, paths: &[PathBuf]) -> Option<PathBuf> {
+    active.filter(|p| paths.contains(p))
 }
 
 /// 读取历史打开的笔记。
@@ -195,7 +204,7 @@ pub fn load_open_notes() -> OpenNotesSnapshot {
     for path in &missing {
         println!("[xink] 历史标签已失效，跳过恢复: {}", path.display());
     }
-    let active = notes.active.filter(|p| paths.contains(p));
+    let active = active_within(notes.active, &paths);
 
     OpenNotesSnapshot { paths, active }
 }

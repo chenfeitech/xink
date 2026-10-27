@@ -194,6 +194,20 @@ fn plan_only_lists_notes_that_would_change() {
 }
 
 #[test]
+fn has_tag_looks_at_body_and_front_matter_but_not_code() {
+    assert!(super::has_tag("#AI\n", "AI"));
+    assert!(super::has_tag("---\ntags: [AI]\n---\n", "AI"));
+    assert!(super::has_tag("---\ntags:\n  - AI\n---\n", "AI"));
+    assert!(!super::has_tag("#别的\n", "AI"));
+    // 代码块里的 `#AI` 不是标签：否则 `批量删除` 会误删示例代码
+    assert!(!super::has_tag("```c\n#AI\n```\n", "AI"));
+    assert!(super::has_tag("```c\n#AI\n```\n\n#AI\n", "AI"));
+    // 整 token 才算：`#AI助手` 里没有 `#AI`
+    assert!(!super::has_tag("#AI助手\n", "AI"));
+    assert!(!super::has_tag("#AI\n", ""), "空标签名不该命中任何东西");
+}
+
+#[test]
 fn task_json_round_trips() {
     let root = dir("roundtrip");
     let mut task = Task::new(

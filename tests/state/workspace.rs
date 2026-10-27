@@ -127,3 +127,47 @@ fn active_pointing_to_removed_vault_is_treated_as_none() {
 fn save_vaults_at(path: &Path, reg: &VaultRegistry) -> Result<()> {
     write_json_atomic(path, reg)
 }
+
+// ── 打开中的笔记 ──────────────────────────────────────────────
+//
+// `save_open_notes` / `load_open_notes` 读写真实的应用数据目录，测试不能碰，
+// 因此把"保序去重 + active 必须落在 paths 内"抽成了纯函数在这里覆盖。
+
+fn path(name: &str) -> PathBuf {
+    PathBuf::from("/vault").join(name)
+}
+
+#[test]
+fn open_notes_are_deduped_in_order() {
+    let notes = normalize_open_notes(&[path("a.md"), path("b.md"), path("a.md")], None);
+    assert_eq!(notes.paths, vec![path("a.md"), path("b.md")]);
+}
+
+#[test]
+fn open_notes_active_must_be_one_of_the_paths() {
+    // active 不在列表里就当没有：否则启动会打开一篇用户根本没开过的笔记
+    let notes = normalize_open_notes(&[path("a.md")], Some(&path("gone.md")));
+    assert!(notes.active.is_none());
+
+    let notes = normalize_open_notes(&[path("a.md"), path("b.md")], Some(&path("b.md")));
+    assert_eq!(notes.active, Some(path("b.md")));
+}
+
+#[test]
+fn open_notes_with_nothing_open_have_no_active() {
+    // 去重后列表为空时，active 也不能留着
+    let notes = normalize_open_notes(&[], Some(&path("a.md")));
+    assert!(notes.paths.is_empty());
+    assert!(notes.active.is_none());
+}
+
+#[test]
+fn active_within_keeps_only_known_paths() {
+    let paths = vec![path("a.md")];
+    assert_eq!(
+        active_within(Some(path("a.md")), &paths),
+        Some(path("a.md"))
+    );
+    assert_eq!(active_within(Some(path("b.md")), &paths), None);
+    assert_eq!(active_within(None, &paths), None);
+}

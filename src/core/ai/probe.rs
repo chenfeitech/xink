@@ -16,7 +16,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::ollama::{ProbeResult, probe as probe_ollama};
-use super::{ChatMessage, CompletionRequest, StreamEvent};
+use super::{AiError, ChatMessage, CompletionRequest, StreamEvent};
 use crate::core::ai::Provider;
 use crate::core::ai::keychain::{MacKeychain, resolve_api_key};
 use crate::core::ai::openai::OpenAiProvider;
@@ -24,8 +24,7 @@ use crate::core::config::{AiConfig, AiModelParams, AiProviderKind, ModelEntry};
 
 /// 测试一个模型：通不通、支不支持工具、花了多久
 pub fn probe_model(cfg: &AiConfig, model: &ModelEntry) -> ProbeResult {
-    // 冷启动（Ollama 第一次加载模型）要几秒，太短的超时只会得到假阴性
-    let timeout = Duration::from_secs(cfg.timeout_secs.max(5));
+    let timeout = probe_timeout(cfg.timeout_secs);
     match model.kind {
         AiProviderKind::Ollama => {
             let base = model.base_url_or(cfg);
@@ -79,24 +78,49 @@ fn probe_compatible(
         },
     );
 
+    probe_outcome(
+        failed,
+        got_text,
+        tool_called,
+        started.elapsed().as_millis() as u64,
+    )
+}
+
+/// 把一次探针的观察结果变成结论（纯判定，抽出来好单测）
+///
+/// 这是"能力声明不可信"这条设计里**唯一**的决策点：判定错了的表现是
+/// "设置里显示支持工具，跑起来却永远不调"，很难查。
+fn probe_outcome(
+    failed: Option<AiError>,
+    got_text: bool,
+    tool_called: bool,
+    elapsed_ms: u64,
+) -> ProbeResult {
     match failed {
         Some(err) => ProbeResult {
             ok: false,
             error: Some(err),
             supports_tools: false,
-            elapsed_ms: started.elapsed().as_millis() as u64,
+            elapsed_ms,
         },
         None => ProbeResult {
             // 既没正文也没工具调用：多半是端点回了空 choices，算不通
             ok: got_text || tool_called,
             error: None,
             supports_tools: tool_called,
-            elapsed_ms: started.elapsed().as_millis() as u64,
+            elapsed_ms,
         },
     }
 }
 
+/// 探针的超时预算：冷启动要几秒，太短只会得到假阴性
+fn probe_timeout(timeout_secs: u64) -> Duration {
+    Duration::from_secs(timeout_secs.max(5))
+}
+
 /// 探针用的空工具：真实调用它没有任何意义，只为看模型会不会调
+///
+/// 与 `tools.rs` 的 schema 形状必须一致，否则探针测的是"另一套协议"。
 fn noop_tool() -> serde_json::Value {
     json!({
         "type": "function",
@@ -107,3 +131,8 @@ fn noop_tool() -> serde_json::Value {
         }
     })
 }
+
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
+#[cfg(test)]
+#[path = "../../../tests/core/ai/probe.rs"]
+mod tests;

@@ -216,3 +216,43 @@ fn duplicate_markdown_rename_adds_index_before_extension() {
         "不叠加成 note-1-1.md"
     );
 }
+
+// ── 删除 ──────────────────────────────────────────────────────
+//
+// `remove_path` 是唯一的破坏性入口（拖入导入失败回滚、库内删除都走它），
+// 删错了不可恢复，因此把"能删什么、删不动时报什么"钉住。
+
+#[test]
+fn remove_path_deletes_a_file_and_a_directory_tree() {
+    let dir = TempDir::new().unwrap();
+    let file = touch(dir.path(), "a.md");
+    remove_path(&file).expect("删文件");
+    assert!(!file.exists());
+
+    let nested = dir.path().join("tree");
+    fs::create_dir_all(nested.join("sub")).unwrap();
+    touch(&nested.join("sub"), "b.md");
+    remove_path(&nested).expect("删目录");
+    assert!(!nested.exists(), "目录要递归删干净");
+}
+
+#[test]
+fn remove_path_reports_missing_paths_instead_of_panicking() {
+    let dir = TempDir::new().unwrap();
+    let gone = dir.path().join("不存在.md");
+    let err = remove_path(&gone).expect_err("删不存在的路径应报错");
+    assert!(err.contains("删除文件失败"), "{err}");
+}
+
+#[test]
+fn remove_path_refuses_to_touch_the_vault_root() {
+    // `Vault::remove` 在调用它之前就挡住了库根：这里是最后一道护栏，
+    // 直接删用户目录会把整个库删掉
+    let dir = TempDir::new().unwrap();
+    let vault = crate::core::vault::Vault::open(dir.path().to_path_buf()).expect("打开库");
+    assert!(
+        vault.remove(dir.path()).is_err(),
+        "删库根必须被拒绝，否则整库消失"
+    );
+    assert!(dir.path().exists(), "被拒绝时目录必须还在");
+}
