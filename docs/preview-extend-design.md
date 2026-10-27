@@ -59,7 +59,7 @@ Center 不是 dock，所以 `toggle_dock(Center)` 是**死路**——不报错�
 |---|---|
 | 改动面 | **小**——一个字段 + 一个 `on_added_to` + 一个按钮，不碰布局逻辑 |
 | toggle 语义 | ✅ 框架原生：`toggle_zoom` = `set_zoomed(!zoomed)`，再点即恢复 |
-| 状态准确性 | ✅ 状态由**容器**持有，按钮每帧从 `zoomed_group()` 读，不存在本地标志与框架不同步 |
+| 状态准确性 | ✅ 由 `BasePanel::set_zoomed` 回调写入 `PreviewPanel.zoomed`——框架把它投递在 update 之外，是给面板留的正式口子。**不能在 `title()` 里 `group.read()`**：`title()` 在 TabGroup update 期间被调用，重入会 panic |
 | 持久化 | ✅ **不持久化**（`load()` 清 zoom），正好符合已拍板的 Q2 |
 | 窗口缩放 | ✅ zoom 恒填满整块区域，窗口变大变小都不用重算尺寸 |
 | 数据风险 | ✅ 无——不动笔记文件，也不动面板实体 |
@@ -120,8 +120,9 @@ Center 不是 dock，所以 `toggle_dock(Center)` 是**死路**——不报错�
 
 - **不持久化**（已拍板 Q2）：zoom 状态由框架的 `TabGroup.zoomed` / `DockArea.zoomed`
   持有，`DockArea::load()` 会清零（`dock_area.rs:824`），重启必回三栏
-- 本项目新增字段只有一个：`PreviewPanel.group: Option<WeakEntity<TabGroup>>`，
-  **纯运行时句柄，不入 `dump()`**，不写 `layout.json`
+- 本项目新增字段只有两个，都是**纯运行时、不入 `dump()`、不写 `layout.json`**：
+  - `PreviewPanel.group: Option<WeakEntity<TabGroup>>` —— 触发 zoom 用
+  - `PreviewPanel.zoomed: bool` —— 图标状态用，由 `BasePanel::set_zoomed` 写入
 - 旧数据兼容：不涉及（无新持久化字段，`layout.json` 格式不变）
 
 ## 5 交互流程

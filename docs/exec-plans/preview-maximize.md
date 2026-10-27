@@ -131,11 +131,25 @@ cargo test                 : 603 passed / 0 failed / 3 ignored
 - import：`DockPlacement` → `TabGroup`
 - `PreviewPanel` 增字段 `group: Option<WeakEntity<TabGroup>>`
 - `impl BasePanel` 增 `on_added_to()` 存下 group 句柄
-- `extend_toggle_button(group, cx)`：
-  状态判据 `dock_area.zoomed_group() == Some(group.node())`（**每帧问容器，
-  不维护本地标志**，杜绝不同步）；点击 `group.toggle_zoom(window, cx)`；
+- `extend_toggle_button(group, zoomed, cx)`：点击 `group.toggle_zoom(window, cx)`；
   `group` 为 `None` 时按钮不渲染，避免出现死按钮
+- 伸展状态由 `BasePanel::set_zoomed` 回调写入 `self.zoomed`，**不在渲染期读 group**
+  （原因见下）
 - 按钮仍挂在 `title()` 最左端（见 §7）
+
+### 第三轮修正：渲染期读 group 会 panic
+
+上线后启动即崩溃：
+
+```text
+cannot read gpui_base::dock::tab_group::TabGroup while it is already
+being updated  (gpui-pre-0.3.9/src/app/entity_map.rs:156)
+```
+
+原因：`title()` 是 TabGroup **正在 update** 时被 skin 同步调用的（构建标题栏），
+此时 `group.read(cx)` 属于重入。改为由 `BasePanel::set_zoomed` 回调维护
+`PreviewPanel.zoomed`——框架把它投递在 update 之外（`tab_group.rs:410-414`），
+正是给面板留的口子。顺带在 `on_removed` 里清掉 group 句柄与状态。
 
 ## 6 下一步
 
@@ -169,6 +183,10 @@ cargo test                 : 603 passed / 0 failed / 3 ignored
   项目源码里。用户提供关键词 `Collapse` 后在**依赖源码**中定位。
   教训：查证"某能力是否存在"时，① 不要过早 `head` 截断；
   ② 现象在 UI 上但代码里搜不到时，要想到**框架渲染**这一层。
+- 2026-10-27（第三次）：改 Zoom 后在 `title()` 里 `group.read(cx)` 取 node id，
+  启动即 panic —— `title()` 是在 TabGroup **update 期间**被调用的，读它就是重入。
+  教训：**面板的 `title()` / `tab_name()` 是被容器同步调用的**，
+  里面只能碰面板自己的状态，不能回头读容器实体。
 - 2026-10-27（第二次，同类错误）：断言「Center 可以折叠，只要 `is_collapsible()`」
   ——只读了 `toggle_dock` 的**注释和前几行约束**，没往下读函数体第一行
   `docks.get_mut(&placement) else { return }`。而 Center **不在 `docks` 表里**
