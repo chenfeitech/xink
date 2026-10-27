@@ -248,3 +248,26 @@ fn dark_and_light_do_not_share_cache_entries() {
 
     assert!(!Arc::ptr_eq(&dark, &light), "明暗不同不应命中同一条缓存");
 }
+
+#[test]
+fn parse_color_accepts_rgb_and_rgba_only() {
+    let c = parse_color("#ff8000").expect("6 位应能解析");
+    assert_eq!((c.r, c.g, c.b, c.a), (255, 128, 0, 255));
+
+    let c = parse_color("#ff800080").expect("8 位带 alpha");
+    assert_eq!((c.r, c.g, c.b, c.a), (255, 128, 0, 128));
+
+    // 写错不报错，只是这条不着色——所以只能靠测试兜住
+    assert_eq!(parse_color("ff8000"), None, "缺 #");
+    assert_eq!(parse_color("#ff800"), None, "5 位不认");
+    assert_eq!(parse_color("#ff8000ff00"), None, "9 位不认");
+    assert_eq!(parse_color("#gggggg"), None, "非法字符");
+    assert_eq!(parse_color(""), None);
+}
+
+#[test]
+fn parse_color_ignores_case() {
+    let a = parse_color("#FF8000").expect("大写");
+    let b = parse_color("#ff8000").expect("小写");
+    assert_eq!((a.r, a.g, a.b), (b.r, b.g, b.b));
+}

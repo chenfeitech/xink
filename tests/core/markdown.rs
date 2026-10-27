@@ -662,3 +662,81 @@ fn image_data_url_re_encodes_when_file_changes() {
 
     assert_ne!(before, after, "内容变了不该复用旧的 data URL");
 }
+
+// ── URL / 路径解码 ────────────────────────────────────────────
+//
+// 图片能不能显示、点图片能不能定位到原图，全靠这几个函数；写错的表现是
+// "图片不显示"或"点了没反应"，本地很难自查。
+
+#[test]
+fn file_url_round_trips_to_a_path() {
+    assert_eq!(
+        path_from_file_url("file:///notes/assets/cover.png"),
+        Some(PathBuf::from("/notes/assets/cover.png"))
+    );
+    // 截图文件名很常见：`%20` 必须还原成空格
+    assert_eq!(
+        path_from_file_url("file:///notes/a%20b.png"),
+        Some(PathBuf::from("/notes/a b.png"))
+    );
+    assert_eq!(
+        path_from_file_url("https://x.io/a.png"),
+        None,
+        "远程不算文件"
+    );
+    assert_eq!(path_from_file_url(""), None);
+}
+
+#[test]
+fn percent_decoding_handles_bad_and_utf8_input() {
+    assert_eq!(decode_percent("a%20b"), "a b");
+    assert_eq!(decode_percent("%E4%B8%AD"), "中", "多字节要能还原");
+    assert_eq!(decode_percent("a%zzb"), "a%zzb", "非法转义原样保留，不能崩");
+    assert_eq!(decode_percent("100%"), "100%", "结尾的孤立 % 不能吞掉字符");
+    assert_eq!(decode_percent("a%2Fb"), "a/b", "与 encode_path 对称");
+    assert_eq!(decode_percent("a%2fb"), "a/b", "小写十六进制也要认");
+    assert_eq!(decode_percent("a+b"), "a+b", "+ 不是空格（不是 form 编码）");
+}
+
+#[test]
+fn remote_urls_are_left_alone() {
+    assert!(is_remote_url("https://x.io/a.png"));
+    assert!(is_remote_url("http://x.io/a.png"));
+    assert!(!is_remote_url("file:///a.png"));
+    assert!(!is_remote_url("assets/a.png"));
+}
+
+#[test]
+fn mime_looks_at_the_lowercased_extension() {
+    assert_eq!(
+        mime_for(Path::new("a.PNG")),
+        Some("image/png"),
+        "扩展名要忽略大小写"
+    );
+    assert_eq!(mime_for(Path::new("a.JPEG")), Some("image/jpeg"));
+    assert_eq!(mime_for(Path::new("a.svg")), Some("image/svg+xml"));
+    assert_eq!(mime_for(Path::new("a.webp")), Some("image/webp"));
+    assert_eq!(mime_for(Path::new("a.txt")), None, "未知扩展名不猜");
+    assert_eq!(mime_for(Path::new("noext")), None);
+}
+
+#[test]
+fn thematic_break_needs_three_identical_marks() {
+    for line in ["---", "***", "___", "  ---  ", "-----"] {
+        assert!(is_thematic_break(line), "{line} 应是分隔线");
+    }
+    // 三个不同 / 不足三个 / 混了别的字符，都不算
+    for line in ["--", "-*-", "---x", "# 标题", ""] {
+        assert!(!is_thematic_break(line), "{line} 不该是分隔线");
+    }
+}
+
+#[test]
+fn replace_last_only_touches_the_final_occurrence() {
+    // alt 文本里常常出现与 URL 相同的字符串：`![a.png](a.png)`
+    assert_eq!(
+        replace_last("![a.png](a.png)", "a.png", "b.png"),
+        "![a.png](b.png)"
+    );
+    assert_eq!(replace_last("no match", "x", "y"), "no match");
+}

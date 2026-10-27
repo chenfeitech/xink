@@ -1,6 +1,6 @@
 //! `/api/tags` 解析与缓存
 
-use crate::core::ai::models::{DiscoveredModel, ModelCache, parse_tags};
+use crate::core::ai::models::{DiscoveredModel, ModelCache, now_ms, parse_tags};
 use crate::core::config::{AiConfig, ModelEntry};
 
 const TAGS: &str = r#"{"models":[
@@ -56,4 +56,31 @@ fn 合并进配置只更新能力字段() {
     assert_eq!(cache.merge_into(&mut cfg.models), 0, "已存在的不应新增");
     assert_eq!(cfg.models[0].context_limit, Some(262144));
     assert_eq!(cfg.models[0].params.num_ctx, 4096, "用户参数不能被覆盖");
+}
+
+#[test]
+fn cache_age_is_zero_for_a_future_timestamp() {
+    // 时钟回拨 / 手改缓存文件：`saturating_sub` 不能下溢成一个天文数字
+    let cache = ModelCache {
+        fetched_at_ms: u64::MAX,
+        base_url: String::new(),
+        models: Vec::new(),
+    };
+    assert_eq!(cache.age_secs(), 0);
+
+    let fresh = ModelCache {
+        fetched_at_ms: now_ms(),
+        ..cache
+    };
+    assert!(fresh.age_secs() <= 1, "刚抓的就该是 0 秒");
+}
+
+#[test]
+fn cache_age_counts_full_seconds() {
+    let cache = ModelCache {
+        fetched_at_ms: now_ms() - 5_000,
+        base_url: String::new(),
+        models: Vec::new(),
+    };
+    assert_eq!(cache.age_secs(), 5);
 }

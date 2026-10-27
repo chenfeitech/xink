@@ -85,6 +85,17 @@ cargo test core::               # 只跑 core 层
 > `tags::toggle_selected(current: Option<&str>, tag: &str) -> Option<String>`，
 > 但这两个都是"仅为可测性"的重构，等它们真出过 bug 再做更划算。
 
+### 还有两类"测不了"，别硬写
+
+1. **写真实 `app_data_dir()` 的**（`state/ai_sessions.rs`、`state/workspace.rs` 的
+   `save_open_notes` / `load_open_notes`）：测试一旦跑起来就会**覆盖用户正打开着的
+   标签与 AI 会话历史**。做法是**把其中的纯规则抽出来测**（已抽 `apply_note`、
+   `normalize_open_notes` / `active_within`），函数本身留给人工验收。
+2. **发真实 HTTP 的**（`core/ai/probe.rs` 的 `probe_model`）：同理，抽出
+   `probe_outcome` / `probe_timeout` 覆盖判定与超时下限。
+
+抽函数只做**原样搬移**（3~15 行、行为不变），不为测试改设计。
+
 ### 另有 12 节只能靠人眼
 
 滚动手感、着色对不对、气泡靠哪边……这些自动化不了，统一收在

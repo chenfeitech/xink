@@ -537,3 +537,55 @@ fn stays_consistent_after_a_rename() {
     assert!(index.note(&a).is_none());
     assert!(index.note(&c).is_some());
 }
+
+// ── 双链目标解析（"唯一命中才给"）────────────────────────────
+//
+// `resolve_path` 是预览改写双链时用的版本：歧义与缺失都当解析不到，
+// 宁可显示成普通文本，也不让点击落到"猜一个"的笔记上。
+
+#[test]
+fn resolve_path_takes_only_unique_hits() {
+    let dir = tmp();
+    let root = dir.path();
+    let target = note(root, "sub/target.md", "# 真正的标题\n");
+
+    let index = index_of(root);
+    assert_eq!(index.resolve_path("sub/target"), Some(target.clone()));
+    assert_eq!(index.resolve_path("sub/target.md"), Some(target.clone()));
+    assert_eq!(
+        index.resolve_path("target"),
+        Some(target.clone()),
+        "文件名可唯一定位"
+    );
+    assert_eq!(
+        index.resolve_path("真正的标题"),
+        Some(target),
+        "标题也能命中"
+    );
+    assert_eq!(index.resolve_path("不存在"), None);
+    assert_eq!(index.resolve_path(""), None);
+    assert_eq!(index.resolve_path(".."), None, "越界目标不能解析");
+}
+
+#[test]
+fn resolve_path_refuses_to_guess_between_duplicates() {
+    // 同名不同目录：宁可解析不到，也不能挑一个
+    let dir = tmp();
+    let root = dir.path();
+    note(root, "x/a.md", "");
+    note(root, "y/a.md", "");
+
+    let index = index_of(root);
+    assert_eq!(index.resolve_path("a"), None, "歧义必须当解析不到");
+    assert_eq!(
+        index.resolve_path("x/a"),
+        Some(root.join("x/a.md")),
+        "带目录就能唯一"
+    );
+}
+
+#[test]
+fn resolve_path_on_an_empty_index_finds_nothing() {
+    let index = NoteIndex::new();
+    assert_eq!(index.resolve_path("a"), None);
+}

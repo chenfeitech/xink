@@ -402,3 +402,42 @@ fn rename_of_a_file_without_extension_adds_nothing() {
     let renamed = vault.rename(&path, "README2").unwrap();
     assert_eq!(renamed.file_name().unwrap(), "README2");
 }
+
+#[test]
+fn registry_find_looks_up_by_id() {
+    let dir = tmp();
+    let a = VaultEntry::new(lib(dir.path()), "a");
+    let reg = VaultRegistry {
+        vaults: vec![a.clone()],
+        active: Some(a.id.clone()),
+    };
+    assert_eq!(reg.find(&a.id).map(|e| e.name.as_str()), Some("a"));
+    assert!(reg.find("不存在的 id").is_none());
+    assert!(reg.find("").is_none(), "空 id 不该命中");
+}
+
+#[test]
+fn active_entry_is_none_when_the_choice_is_gone() {
+    let dir = tmp();
+    let a = VaultEntry::new(lib(dir.path()), "a");
+    // id 指向已被移除的库：与"没选库"一样处理，不能返回一个空壳
+    let stale = VaultRegistry {
+        vaults: vec![a.clone()],
+        active: Some("已被移除的 id".to_string()),
+    };
+    assert!(stale.active_entry().is_none());
+    assert!(stale.active_root().is_none());
+
+    let none = VaultRegistry {
+        vaults: vec![a.clone()],
+        active: None,
+    };
+    assert!(none.active_entry().is_none());
+
+    let ok = VaultRegistry {
+        vaults: vec![a.clone()],
+        active: Some(a.id.clone()),
+    };
+    assert_eq!(ok.active_entry().map(|e| e.name.as_str()), Some("a"));
+    assert_eq!(ok.active_root(), Some(a.path.clone()));
+}

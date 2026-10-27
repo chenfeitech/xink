@@ -326,3 +326,62 @@ fn rope_common_affixes_stays_on_char_boundaries() {
     let (prefix, suffix) = rope_common_affixes(&rope, &Rope::from_str(""));
     assert_eq!((prefix, suffix), (0, 0));
 }
+
+// ── 增量同步的字节边界 ────────────────────────────────────────
+//
+// `rope_common_affixes` 是"把编辑同步进 Rope"的核心：算错的表现是
+// 中文/emoji 被打断产生乱码，或者每次输入都全量重排（大文件卡）。
+// 下面测的是它依赖的几个原语。
+
+#[test]
+fn line_count_is_at_least_one() {
+    let dir = tmp();
+    let path = dir.path().join("empty.md");
+    fs::write(&path, "").unwrap();
+    let mut note = Note::load(path.clone()).expect("打开空文件");
+    assert_eq!(note.line_count(), 1, "空文件也算一行");
+
+    set(&mut note, "a\nb\nc\n");
+    assert_eq!(note.line_count(), 4, "末尾换行后还有一个空行");
+    set(&mut note, "a\nb\nc");
+    assert_eq!(note.line_count(), 3, "没有末尾换行就不算最后一行");
+}
+
+#[test]
+fn affixes_handle_ragged_and_short_inputs() {
+    // 短于 8 字节：走不到快进分支
+    assert_eq!(first_mismatch(b"ab", b"ac"), 1);
+    assert_eq!(last_mismatch(b"ab", b"cb"), 1);
+    // 两侧长度不同：只能比到较短的那边
+    assert_eq!(first_mismatch(b"abcd", b"ab"), 2);
+    assert_eq!(last_mismatch(b"abcd", b"cd"), 2);
+    // 完全相同
+    assert_eq!(first_mismatch(b"abcdefghij", b"abcdefghij"), 10);
+    assert_eq!(last_mismatch(b"abcdefghij", b"abcdefghij"), 10);
+    // 一边为空
+    assert_eq!(first_mismatch(b"", b"abc"), 0);
+    assert_eq!(last_mismatch(b"abc", b""), 0);
+}
+
+#[test]
+fn affixes_step_by_eight_bytes() {
+    // 快进分支：前 8 字节相同，第 9 个不同
+    let a = b"01234567x";
+    let b = b"01234567y";
+    assert_eq!(first_mismatch(a, b), 8);
+    assert_eq!(last_mismatch(a, b), 0);
+    // 16 字节全同，第 17 个不同
+    let a = b"0123456789abcdefZ";
+    let b = b"0123456789abcdefY";
+    assert_eq!(first_mismatch(a, b), 16);
+}
+
+#[test]
+fn snap_down_stops_at_the_nearest_boundary() {
+    // 最多回退 3 字节：UTF-8 字符最长 4 字节，3 步足够落回边界
+    let is_boundary = |n: usize| n.is_multiple_of(3);
+    assert_eq!(snap_down_to_boundary(10, is_boundary), 9);
+    assert_eq!(snap_down_to_boundary(9, is_boundary), 9, "已经是边界就不动");
+    assert_eq!(snap_down_to_boundary(2, is_boundary), 0, "退到底就认 0");
+    assert_eq!(snap_down_to_boundary(0, is_boundary), 0);
+}

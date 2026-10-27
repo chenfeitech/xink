@@ -187,3 +187,52 @@ fn kind_metadata_exposes_lang_and_notice() {
     assert!(DataKind::Yaml.notice().is_some());
     assert!(DataKind::Json.notice().is_none());
 }
+
+// ── 格式化与错误定位 ──────────────────────────────────────────
+//
+// 数据文件预览的"格式化"按钮与错误提示都在这里：缩进写错会把文件撑爆，
+// 行列写错会让用户找不到错在哪。
+
+#[test]
+fn pretty_json_clamps_the_indent() {
+    let value: JsonValue = serde_json::from_str("{\"a\":1}").expect("解析");
+    // 缩进被夹到 1–8：配置填 0 或 99 都不能把文件撑爆
+    let zero = pretty_json(&value, 0).expect("缩进 0 应被夹到 1");
+    let one = pretty_json(&value, 1).expect("缩进 1");
+    assert_eq!(zero, one);
+
+    let huge = pretty_json(&value, 99).expect("缩进 99 应被夹到 8");
+    let eight = pretty_json(&value, 8).expect("缩进 8");
+    assert_eq!(huge, eight);
+    assert!(huge.contains('\n'), "格式化后应是多行");
+}
+
+#[test]
+fn multi_doc_separator_is_only_counted_after_the_first_line() {
+    // 第 0 行的 `---` 是 front-matter，不是多文档分隔符
+    assert_eq!(multi_doc_line("---\na: 1\n"), None);
+    assert_eq!(multi_doc_line("a: 1\n---\nb: 2\n"), Some(1));
+    assert_eq!(multi_doc_line("a: 1\n---\n"), Some(1));
+    // 后面带空格的分隔符也算（手改文件时很常见）
+    assert_eq!(multi_doc_line("a: 1\n---  \nb: 2\n"), Some(1));
+    assert_eq!(multi_doc_line("a: 1\n----\n"), None, "四个横线不是分隔符");
+    assert_eq!(multi_doc_line(""), None);
+}
+
+#[test]
+fn errors_are_reported_one_based() {
+    // 内部存 0-based，给人看要 +1：否则"第 0 行"这种提示没法用
+    let error = ValidationError {
+        line: 0,
+        column: 0,
+        message: "坏掉了".into(),
+    };
+    assert_eq!(error.display_position(), "第 1 行第 1 列");
+
+    let error = ValidationError {
+        line: 41,
+        column: 6,
+        message: "坏掉了".into(),
+    };
+    assert_eq!(error.display_position(), "第 42 行第 7 列");
+}
