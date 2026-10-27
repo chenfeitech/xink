@@ -6,9 +6,9 @@ use std::time::Instant;
 use gpui_kit::base::Theme as BaseTheme;
 use gpui_kit::base::{ScrollbarHandle, TextView, TextViewState, TextViewStyle};
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
-use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
+use gpui_kit::component::dock::{BasePanel, DockPlacement, Panel, PanelEvent};
 use gpui_kit::component::menu::PopupMenuItem;
-use gpui_kit::component::{ActiveTheme, Sizable};
+use gpui_kit::component::{ActiveTheme, IconName, Sizable};
 use gpui_kit::*;
 use gpui_kit::{ListOffset, ListState};
 
@@ -521,6 +521,40 @@ impl Panel for PreviewPanel {
         }
 
         row.child(density_menu(crate::app::config(cx).preview.density))
+    }
+
+    /// 标题栏按钮：折叠 / 展开编辑区（中间 dock）。
+    ///
+    /// 与编辑区右上角那个「折叠预览」的按钮**同源**——都是
+    /// `DockArea::toggle_dock`，只是折叠的 placement 不同：
+    /// 那边折 `Right`（预览），这边折 `Center`（编辑）。
+    /// 折叠中间 dock 后预览区向左伸展填补；再点即恢复（框架原生 toggle）。
+    fn toolbar_buttons(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Vec<Button>> {
+        let dock_area = cx.try_global::<AppState>()?.dock_area.clone();
+        let open = dock_area.read(cx).is_dock_open(DockPlacement::Center);
+
+        let button = Button::new("preview-extend-toggle")
+            .icon(if open {
+                IconName::PanelLeft
+            } else {
+                IconName::PanelLeftOpen
+            })
+            .tooltip(if open {
+                "向左伸展：遮蔽编辑区，只留预览"
+            } else {
+                "恢复：回到三栏布局"
+            })
+            .on_click(cx.listener(move |_this, _, window, cx| {
+                dock_area.update(cx, |area, cx| {
+                    area.toggle_dock(DockPlacement::Center, window, cx);
+                });
+            }));
+
+        Some(vec![button])
     }
 }
 
