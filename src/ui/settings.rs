@@ -25,11 +25,23 @@ use gpui_kit::*;
 use crate::app::AppState;
 use crate::core::ai::skills;
 use crate::core::config::{
-    AppConfig, FontWeight, ImageDisplay, LinkOpen, OutputLang, PreviewDensity, ScrollSyncMode,
-    ThemeMode,
+    AiActionApply, AiActionConfig, AiActionScope, AppConfig, FontWeight, ImageDisplay, LinkOpen,
+    OutputLang, PreviewDensity, ScrollSyncMode, ThemeMode, builtin_actions,
 };
 use crate::core::keymap;
 use crate::core::theme::PRESET_THEMES;
+
+/// 自定义动作的 id：内置 id 是固定字符串，这里用毫秒时间戳避开它们
+///
+/// 不做"名字转拼音"——没有依赖能可靠转中文，而 id 只在配置文件里出现，
+/// 界面上一律显示 `name`。
+fn custom_action_id() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("custom-{millis}")
+}
 
 // ── 分类 ──────────────────────────────────────────────────────
 
@@ -1244,6 +1256,14 @@ pub struct SettingsView {
     /// 已发现的 skill 与被跳过的项：发现要读盘，缓存住，
     /// 只在首次渲染或点了"重新扫描"时读一次
     skills_cache: Option<(Vec<skills::Skill>, Vec<skills::SkillIssue>)>,
+    /// 快捷动作编辑区：正在编辑的动作 id（`None` 表示不在编辑）
+    action_edit_id: Option<String>,
+    /// 编辑区当前是"新增"还是"改已有的一条"
+    action_is_new: bool,
+    action_name: Entity<InputState>,
+    action_prompt: Entity<InputState>,
+    /// 快捷动作区的提示 / 错误
+    action_notice: Option<String>,
 }
 
 /// 设置窗口各部分的固定尺寸。
@@ -1288,6 +1308,9 @@ impl SettingsView {
             cx.new(|cx| InputState::new(window, cx).placeholder("模型名，如 qwen3.5:0.8b"));
         let new_model_base =
             cx.new(|cx| InputState::new(window, cx).placeholder("地址（留空用全局地址）"));
+        let action_name = cx.new(|cx| InputState::new(window, cx).placeholder("动作名，如 润色"));
+        let action_prompt = cx
+            .new(|cx| InputState::new(window, cx).placeholder("给模型的指令，可用 {{known_tags}}"));
 
         let mut this = Self {
             tab: SettingsTab::Basic,
@@ -1301,6 +1324,11 @@ impl SettingsView {
             model_notice: None,
             confirm_clear_snapshots: false,
             snapshot_notice: None,
+            action_edit_id: None,
+            action_is_new: false,
+            action_name,
+            action_prompt,
+            action_notice: None,
             skills_cache: None,
         };
 
@@ -1376,6 +1404,320 @@ impl SettingsView {
     ///
     /// 写入一律走 `crate::app::update_config`（校正 + 落盘 + 重绘），
     /// 不直接改全局，避免与"改完立即生效"的既有约定脱节。
+    /// 「快捷动作」管理块
+    ///
+    /// 动作是列表、且每项的提示词是自由文本，元数据表（一行一项、取值与写入
+    /// 都是固定字段）表达不了，因此和「模型」一样单独渲染。
+    fn render_actions(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let cfg = crate::app::config(cx);
+        let muted = cx.theme().muted_foreground;
+        let border = cx.theme().border;
+
+        let mut block = div()
+            .flex_col()
+            .gap_1()
+            .pt_3()
+            .mt_2()
+            .border_t_1()
+            .border_color(border)
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight(600.))
+                    .child("快捷动作"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("提示词里写 {{known_tags}} 会带上库内已有的标签"),
+            );
+
+        for action in cfg.ai.actions.clone() {
+            // 每个按钮都要一份 id：闭包是 `move`，共用一个会被第一个按钮吃掉
+            let id_scope = action.id.clone();
+            let id_apply = action.id.clone();
+            let id_toggle = action.id.clone();
+            let id_edit = action.id.clone();
+            let id_del = action.id.clone();
+            let prompt_preview: String = action.prompt.chars().take(40).collect();
+            let disabled = !action.enabled;
+            let row = div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .py_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .w(px(80.))
+                        .text_color(if disabled {
+                            muted
+                        } else {
+                            cx.theme().foreground
+                        })
+                        .child(action.name.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(prompt_preview),
+                )
+                // 范围：有选中用选中，还是始终整篇
+                .child(
+                    Button::new(SharedString::from(format!("act-scope-{id_scope}")))
+                        .xsmall()
+                        .ghost()
+                        .label(if action.scope == AiActionScope::Selection {
+                            "选中优先"
+                        } else {
+                            "整篇"
+                        })
+                        .tooltip("作用范围：优先用选中的文本，还是忽略选中始终整篇")
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let id = id_scope.clone();
+                            crate::app::update_config(cx, move |cfg| {
+                                if let Some(a) = cfg.ai.actions.iter_mut().find(|a| a.id == id) {
+                                    a.scope = match a.scope {
+                                        AiActionScope::Selection => AiActionScope::Whole,
+                                        AiActionScope::Whole => AiActionScope::Selection,
+                                    };
+                                }
+                            });
+                        })),
+                )
+                // 落法：替换原文对应部分，还是插到光标处
+                .child(
+                    Button::new(SharedString::from(format!("act-apply-{id_apply}")))
+                        .xsmall()
+                        .ghost()
+                        .label(if action.apply == AiActionApply::Replace {
+                            "替换"
+                        } else {
+                            "插入"
+                        })
+                        .tooltip("结果落法：替换原文，还是插到光标处不动原文")
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let id = id_apply.clone();
+                            crate::app::update_config(cx, move |cfg| {
+                                if let Some(a) = cfg.ai.actions.iter_mut().find(|a| a.id == id) {
+                                    a.apply = match a.apply {
+                                        AiActionApply::Replace => AiActionApply::Insert,
+                                        AiActionApply::Insert => AiActionApply::Replace,
+                                    };
+                                }
+                            });
+                        })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("act-toggle-{id_toggle}")))
+                        .xsmall()
+                        .ghost()
+                        .label(if disabled { "启用" } else { "停用" })
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let id = id_toggle.clone();
+                            crate::app::update_config(cx, move |cfg| {
+                                if let Some(a) = cfg.ai.actions.iter_mut().find(|a| a.id == id) {
+                                    a.enabled = !a.enabled;
+                                }
+                            });
+                        })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("act-edit-{id_edit}")))
+                        .xsmall()
+                        .ghost()
+                        .label("编辑")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let Some(action) = crate::app::config(cx).ai.action(&id_edit).cloned()
+                            else {
+                                this.action_notice = Some("动作已不存在".into());
+                                return;
+                            };
+                            this.action_edit_id = Some(action.id.clone());
+                            this.action_is_new = false;
+                            this.action_notice = None;
+                            let name = action.name.clone();
+                            let prompt = action.prompt.clone();
+                            this.action_name
+                                .update(cx, |input, cx| input.set_value(name, window, cx));
+                            this.action_prompt
+                                .update(cx, |input, cx| input.set_value(prompt, window, cx));
+                        })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("act-del-{id_del}")))
+                        .xsmall()
+                        .ghost()
+                        .label("删除")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let id = id_del.clone();
+                            crate::app::update_config(cx, move |cfg| {
+                                cfg.ai.actions.retain(|a| a.id != id);
+                            });
+                            // 删的正是编辑中的那条：收起编辑区
+                            if this.action_edit_id.as_deref() == Some(id_del.as_str()) {
+                                this.action_edit_id = None;
+                            }
+                            this.action_notice = Some("已删除，可点「恢复内置默认」还原".into());
+                        })),
+                );
+            block = block.child(row);
+        }
+
+        if cfg.ai.actions.is_empty() {
+            block = block.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("一个动作都没有：点「+ 新增」自己加，或「恢复内置默认」"),
+            );
+        }
+
+        // ── 编辑 / 新增 ──
+        if self.action_edit_id.is_some() || self.action_is_new {
+            block = block
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().w(px(80.)).text_xs().text_color(muted).child("名称"))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&self.action_name).small()),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().w(px(80.)).text_xs().text_color(muted).child("提示词"))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&self.action_prompt).small()),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            Button::new("act-save")
+                                .small()
+                                .outline()
+                                .label(if self.action_is_new {
+                                    "新增"
+                                } else {
+                                    "保存"
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let name = this.action_name.read(cx).value().trim().to_string();
+                                    let prompt =
+                                        this.action_prompt.read(cx).value().trim().to_string();
+                                    if name.is_empty() || prompt.is_empty() {
+                                        this.action_notice = Some("名称与提示词都不能为空".into());
+                                        return;
+                                    }
+                                    let id = if this.action_is_new {
+                                        // 用名字的拼音不现实，直接取时间戳式的唯一 id
+                                        custom_action_id()
+                                    } else {
+                                        this.action_edit_id.clone().unwrap_or_default()
+                                    };
+                                    crate::app::update_config(cx, move |cfg| {
+                                        if let Some(a) =
+                                            cfg.ai.actions.iter_mut().find(|a| a.id == id)
+                                        {
+                                            a.name = name;
+                                            a.prompt = prompt;
+                                        } else {
+                                            cfg.ai.actions.push(AiActionConfig {
+                                                id,
+                                                name,
+                                                prompt,
+                                                scope: AiActionScope::Selection,
+                                                apply: AiActionApply::Replace,
+                                                enabled: true,
+                                            });
+                                        }
+                                    });
+                                    this.action_edit_id = None;
+                                    this.action_is_new = false;
+                                    this.action_notice = Some("已保存".into());
+                                })),
+                        )
+                        .child(
+                            Button::new("act-cancel")
+                                .small()
+                                .ghost()
+                                .label("取消")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.action_edit_id = None;
+                                    this.action_is_new = false;
+                                    this.action_notice = None;
+                                    cx.notify();
+                                })),
+                        ),
+                );
+        }
+
+        block = block.child(
+            div()
+                .flex()
+                .gap_2()
+                .pt_1()
+                .child(
+                    Button::new("act-new")
+                        .small()
+                        .ghost()
+                        .label("+ 新增")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.action_edit_id = None;
+                            this.action_is_new = true;
+                            this.action_notice = None;
+                            this.action_name
+                                .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+                            this.action_prompt
+                                .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+                        })),
+                )
+                .child(
+                    Button::new("act-reset")
+                        .small()
+                        .ghost()
+                        .label("恢复内置默认")
+                        .tooltip("把内置 6 项补回来（已存在的同名 id 会跳过）")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            crate::app::update_config(cx, |cfg| {
+                                let have: std::collections::HashSet<String> =
+                                    cfg.ai.actions.iter().map(|a| a.id.clone()).collect();
+                                for builtin in builtin_actions() {
+                                    if !have.contains(&builtin.id) {
+                                        cfg.ai.actions.push(builtin);
+                                    }
+                                }
+                            });
+                            this.action_notice = Some("已补回内置动作".into());
+                        })),
+                ),
+        );
+
+        if let Some(notice) = &self.action_notice {
+            block = block.child(div().text_xs().text_color(muted).child(notice.clone()));
+        }
+
+        block
+    }
+
     fn render_models(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
         let cfg = crate::app::config(cx);
         let muted = cx.theme().muted_foreground;
@@ -2024,6 +2366,7 @@ impl Render for SettingsView {
         // AI 分类额外挂一块「模型管理」：模型是列表、要能拉取与增删，
         // 元数据表（一行一项、取值/写入都是固定字段）表达不了，因此单独渲染。
         if self.tab == SettingsTab::Ai && query.is_empty() {
+            content = content.child(self.render_actions(window, cx));
             content = content.child(self.render_models(window, cx));
             // 同一分类下再挂一块「快照」：列表类信息，元数据表表达不了
             content = content.child(self.render_snapshots(cx));

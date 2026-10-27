@@ -104,7 +104,7 @@
 |---|---|
 | 对话条 | 编辑器下方的对话区（`Cmd+Shift+A` 开关）；气泡布局，会话**按笔记落盘**（`ai_sessions.json`），换笔记自动切换、**重启后仍在**，正文可复制，工具调用过程分块折叠 |
 | 结果落地 | 生成后给三个落法：**插入到光标处**（对话默认）、**替换原文**（删掉整篇换成生成结果，需二次确认）、**不采用**；改动前一律先写快照 |
-| 快捷动作 | 8 个内置动作：润色、扩写、精简、翻译、改写标题、生成摘要、生成标签、续写；命令面板里也能用 `AI:` 前缀唤起 |
+| 快捷动作 | 内置 6 项：润色、精简、翻译、改写标题、生成摘要、生成标签；命令面板里也能用 `AI:` 前缀唤起。**可配置**：设置 → AI → 快捷动作，能新增、改提示词、改作用范围与落法、停用或删除（设计见 `docs/ai/ai-actions-config-design.md`） |
 | 修订评审 | AI **不直接改文件**：先在编辑区内做行级 diff 对照，按修改块**逐块「接受 / 拒绝」**，确认后才落盘 |
 | 改前快照 | 接受改动前把原文另存到应用数据目录的 `ai-history/`（上限 200 份，超了删最旧的）——项目没有撤销栈，这是人工回退的兜底 |
 | 模型后端 | 两类：Ollama（native `/api/chat`）与 OpenAI 兼容端点；`base_url` 整体可配，换厂商即换地址 |
@@ -146,6 +146,7 @@
 | AI | 连接 | 启用开关、Ollama 地址与 `keep_alive` / `num_ctx` |
 | AI | 生成 | 超时、上下文字符上限、最大步数、输出语言 |
 | AI | 扩展 | Skills 开关；模型条目管理与连接测试 |
+| AI | 快捷动作 | 每项的名称、提示词（支持 `{{known_tags}}`）、作用范围（选中优先 / 整篇）、落法（替换 / 插入）；可新增、停用、删除，可恢复内置默认 |
 | 预览 | 渲染 | 代码高亮主题、图片显示方式与宽度、链接打开方式 |
 | 预览 | 排版 | 字体、版面密度、正文最大宽度 |
 | 预览 | 同步 | 编辑区与预览滚动同步 |
@@ -358,6 +359,7 @@ src/
 | [`docs/preview/preview-layout-design.md`](docs/preview/preview-layout-design.md) | 预览版面设计 |
 | [`docs/ai/ai-assistant-requirements.md`](docs/ai/ai-assistant-requirements.md) | AI 协助需求（R14） |
 | [`docs/ai/ai-assistant-design.md`](docs/ai/ai-assistant-design.md) | AI 协助设计（provider / agent loop / 修订评审 / 快照） |
+| [`docs/ai/ai-actions-config-design.md`](docs/ai/ai-actions-config-design.md) | 快捷动作可配置化（枚举 → 配置数据） |
 | [`docs/preview-extend-design.md`](docs/preview-extend-design.md) | 预览区向左伸展的设计与方案取舍 |
 | [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) | 人工验收清单（只能靠跑起来看的项） |
 | `.codebuddy/rules/` | 开发铁律（开工前必读，含会导致编译失败的硬约束） |

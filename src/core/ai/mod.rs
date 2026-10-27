@@ -44,7 +44,7 @@ pub use keychain::{MacKeychain, MemorySecretStore, SecretStore, resolve_api_key}
 #[allow(unused_imports)]
 pub use models::{DiscoveredModel, ModelCache, parse_tags};
 #[allow(unused_imports)]
-pub use prompt::{Action, all_actions};
+pub use prompt::KNOWN_TAGS_PLACEHOLDER;
 #[allow(unused_imports)]
 pub use snapshot::{snapshot_name, write_snapshot};
 

@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -543,6 +543,133 @@ pub struct OllamaConfig {
     pub num_ctx: u32,
 }
 
+/// 一个快捷动作的范围：有选中时用选中，还是始终整篇
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiActionScope {
+    /// 有选中就用选中，没有选中才用整篇
+    #[default]
+    Selection,
+    /// 忽略选中，始终作用于整篇
+    Whole,
+}
+
+/// 结果的落法：替换原文对应部分，还是插到光标处
+///
+/// 「生成摘要 / 生成标签」这类是**往里加内容**，判成替换会把原文其余部分
+/// 删掉，所以它们默认走 `Insert`。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiActionApply {
+    /// 替换（有选中替换选中，否则替换整篇）
+    #[default]
+    Replace,
+    /// 插入到光标处，不动原文
+    Insert,
+}
+
+/// 一个快捷动作
+///
+/// 内置动作不再是代码里的枚举，而是配置数据：可新增、可改提示词、可删除。
+/// 提示词里的 `{{known_tags}}` 会被替换成库内已有的标签（没有就不注入），
+/// 这样"生成标签"复用既有标签的能力不再依赖硬编码的动作 id。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiActionConfig {
+    /// 唯一标识。内置项沿用 `polish` / `condense` / …，自定义项用户自取
+    pub id: String,
+    /// 按钮与命令面板上显示的名字
+    pub name: String,
+    /// 发给模型的指令
+    pub prompt: String,
+    pub scope: AiActionScope,
+    pub apply: AiActionApply,
+    /// 停用后不出现在对话条与命令面板，但配置仍保留
+    pub enabled: bool,
+}
+
+impl Default for AiActionConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            prompt: String::new(),
+            scope: AiActionScope::default(),
+            apply: AiActionApply::default(),
+            enabled: true,
+        }
+    }
+}
+
+/// 内置动作的默认配置（6 项）
+///
+/// 提示词原文来自旧的 `prompt::Action::instruction()`；「扩写」「续写」
+/// 按需求精简掉，**不再保留**——要用就自己新建一条并写提示词。
+pub fn builtin_actions() -> Vec<AiActionConfig> {
+    vec![
+        AiActionConfig {
+            id: "polish".into(),
+            name: "润色".into(),
+            prompt: "润色下面这段笔记：修正语病与不通顺的表达，保持原意、\
+                     保持原有的 Markdown 结构，不要新增事实。"
+                .into(),
+            scope: AiActionScope::Selection,
+            apply: AiActionApply::Replace,
+            enabled: true,
+        },
+        AiActionConfig {
+            id: "condense".into(),
+            name: "精简".into(),
+            prompt: "精简下面这段笔记：保留全部关键信息，压缩到原来的一半以内，\
+                     保持 Markdown 结构。"
+                .into(),
+            scope: AiActionScope::Selection,
+            apply: AiActionApply::Replace,
+            enabled: true,
+        },
+        AiActionConfig {
+            id: "translate".into(),
+            name: "翻译".into(),
+            prompt: "翻译下面这段笔记：保持 Markdown 结构与专有名词原样，\
+                     只翻译自然语言部分。"
+                .into(),
+            scope: AiActionScope::Selection,
+            apply: AiActionApply::Replace,
+            enabled: true,
+        },
+        AiActionConfig {
+            id: "retitle".into(),
+            name: "改写标题".into(),
+            prompt: "为下面这篇笔记拟一个标题：只输出一行标题文本，\
+                     不要 Markdown 标记，不要解释。"
+                .into(),
+            scope: AiActionScope::Whole,
+            apply: AiActionApply::Replace,
+            enabled: true,
+        },
+        AiActionConfig {
+            id: "summarize".into(),
+            name: "生成摘要".into(),
+            prompt: "为下面这篇笔记写一段摘要：3 句话以内，只输出摘要正文。".into(),
+            scope: AiActionScope::Whole,
+            apply: AiActionApply::Insert,
+            enabled: true,
+        },
+        AiActionConfig {
+            id: "tag".into(),
+            name: "生成标签".into(),
+            prompt: "为下面这篇笔记生成标签：只输出一行以逗号分隔的标签，3–5 个，\
+                     不要 `#` 前缀，不要解释。\
+                     优先从库里已有的标签中选择：{{known_tags}}；\
+                     确实都不合适时才造新标签。"
+                .into(),
+            scope: AiActionScope::Whole,
+            apply: AiActionApply::Insert,
+            enabled: true,
+        },
+    ]
+}
+
 /// AI 配置
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -571,6 +698,8 @@ pub struct AiConfig {
     pub skills_enabled: bool,
     pub disabled_skills: Vec<String>,
     pub memory_enabled: bool,
+    /// 快捷动作列表（可新增 / 改提示词 / 删除）
+    pub actions: Vec<AiActionConfig>,
 }
 
 impl Default for AiModelParams {
@@ -678,6 +807,7 @@ impl Default for AiConfig {
             skills_enabled: true,
             disabled_skills: Vec::new(),
             memory_enabled: false,
+            actions: builtin_actions(),
         }
     }
 }
@@ -761,6 +891,48 @@ impl AiConfig {
         if !self.default_model.is_empty() && self.active_model().is_none() {
             self.default_model.clear();
         }
+        self.sanitize_actions();
+    }
+
+    /// 生效的快捷动作（停用 / 残缺的都不出现）
+    pub fn active_actions(&self) -> impl Iterator<Item = &AiActionConfig> {
+        self.actions
+            .iter()
+            .filter(|a| a.enabled && !a.id.is_empty())
+    }
+
+    /// 按 id 取一个启用的动作
+    pub fn action(&self, id: &str) -> Option<&AiActionConfig> {
+        self.active_actions().find(|a| a.id == id)
+    }
+
+    fn sanitize_actions(&mut self) {
+        // id 空、或名字与提示词都空：多半是手改配置留下的残条
+        self.actions.retain(|a| {
+            !a.id.trim().is_empty() && !(a.name.trim().is_empty() && a.prompt.trim().is_empty())
+        });
+        // id 重复会让"点这个按钮跑成那个动作"，只留第一条
+        let mut seen = HashSet::new();
+        self.actions.retain(|a| seen.insert(a.id.clone()));
+        for action in &mut self.actions {
+            action.name = action
+                .name
+                .trim()
+                .chars()
+                .take(limit::AI_ACTION_NAME)
+                .collect();
+            action.prompt = action
+                .prompt
+                .trim()
+                .chars()
+                .take(limit::AI_ACTION_PROMPT)
+                .collect();
+            // 名字空就用 id 顶上，免得按钮上什么都不显示
+            if action.name.is_empty() {
+                action.name = action.id.clone();
+            }
+        }
+        self.actions.truncate(limit::AI_ACTIONS);
     }
 }
 
@@ -787,6 +959,10 @@ mod limit {
     pub const AI_NUM_PREDICT: (u32, u32) = (16, 32_768);
     pub const AI_TEMPERATURE: (f32, f32) = (0.0, 2.0);
     pub const AI_NUM_CTX: (u32, u32) = (512, 1_048_576);
+    /// 快捷动作：名字 / 提示词长度与条数上限
+    pub const AI_ACTION_NAME: usize = 32;
+    pub const AI_ACTION_PROMPT: usize = 2_000;
+    pub const AI_ACTIONS: usize = 32;
 }
 
 fn clamp_f32(v: f32, (min, max): (f32, f32)) -> f32 {

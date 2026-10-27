@@ -98,7 +98,7 @@ fn collect_candidates_scans_a_real_vault() {
         .filter(|c| matches!(c.ai, Some(AiTarget::Action(_))))
         .map(|c| c.label.as_str())
         .collect();
-    assert_eq!(actions.len(), crate::core::ai::prompt::all_actions().len());
+    assert_eq!(actions.len(), crate::core::config::builtin_actions().len());
     assert!(
         actions.iter().all(|l| l.starts_with("AI: ")),
         "AI 动作要能用 `AI:` 前缀过滤出来：{actions:?}"
@@ -156,7 +156,7 @@ fn collect_candidates_lists_enabled_skills() {
             .iter()
             .filter(|c| matches!(c.ai, Some(AiTarget::Action(_))))
             .count(),
-        crate::core::ai::prompt::all_actions().len()
+        crate::core::config::builtin_actions().len()
     );
 
     // 只停用 demo：只有它消失

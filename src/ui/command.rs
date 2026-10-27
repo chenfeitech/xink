@@ -15,7 +15,6 @@ use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::*;
 
 use crate::app::AppState;
-use crate::core::ai::prompt::{Action, all_actions};
 use crate::core::ai::skills;
 use crate::core::config::AiConfig;
 use crate::core::fuzzy::fuzzy_match;
@@ -35,12 +34,12 @@ const LIST_MAX_HEIGHT: f32 = 360.;
 
 /// 一条 AI 候选指向什么
 ///
-/// 内置动作是编译期固定的枚举，skill 是运行时从磁盘发现的，
-/// 一个 `Option<Action>` 装不下后者，因此拆成两种。
+/// 快捷动作现在也是配置数据（可增删），与 skill 一样只按 id 记住，
+/// 正文在执行时再取——因此两者拆成两种目标。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AiTarget {
-    /// 内置动作
-    Action(Action),
+    /// 快捷动作，按 id 索引
+    Action(String),
     /// skill，按 name 索引（执行时再去发现一遍，拿它的正文）
     Skill(String),
 }
@@ -221,8 +220,8 @@ impl CommandPalette {
         close_palette(window, cx);
         // AI 入口不打开文件：对当前笔记跑它（没打开笔记时函数自己会提示）
         match candidate.ai {
-            Some(AiTarget::Action(action)) => {
-                crate::app::run_ai_action(action, window, cx);
+            Some(AiTarget::Action(id)) => {
+                crate::app::run_ai_action(&id, window, cx);
                 return;
             }
             Some(AiTarget::Skill(name)) => {
@@ -379,12 +378,13 @@ fn collect_candidates(root: &Path, cfg: &AiConfig) -> Result<Vec<Candidate>, Str
 
     let mut out = Vec::new();
     flatten(root, &tree, &mut out);
-    // 内置 AI 动作（需求 A9.1）：`AI:` 前缀能过滤出来，它们作用于当前笔记
-    for action in all_actions().iter().copied() {
+    // 快捷 AI 动作（需求 A9.1）：`AI:` 前缀能过滤出来，它们作用于当前笔记。
+    // 列表来自配置，用户新增 / 停用的都会立刻反映。
+    for action in cfg.active_actions() {
         out.push(Candidate {
-            label: format!("AI: {}", action.label()),
+            label: format!("AI: {}", action.name),
             path: PathBuf::new(),
-            ai: Some(AiTarget::Action(action)),
+            ai: Some(AiTarget::Action(action.id.clone())),
             hint: None,
         });
     }

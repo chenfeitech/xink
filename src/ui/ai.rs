@@ -34,7 +34,6 @@ pub mod plan;
 
 use crate::core::ai::ollama::OllamaProvider;
 use crate::core::ai::openai::OpenAiProvider;
-use crate::core::ai::prompt::{Action, all_actions};
 use crate::core::ai::skills;
 use crate::core::ai::snapshot::write_snapshot;
 use crate::core::ai::tools::ToolHost;
@@ -43,6 +42,7 @@ use crate::core::ai::{
     AiError, ChatMessage, CompletionRequest, Provider, Role, StreamEvent, Usage,
 };
 use crate::core::config::AiProviderKind;
+use crate::core::config::{AiActionApply, AiActionConfig, AiActionScope};
 use crate::core::index::{IndexSnapshot, LinkRef, Resolution};
 use crate::core::search::{Hit, search_files};
 use crate::state::ai_sessions::{self, StoredBlock};
@@ -194,8 +194,11 @@ impl LinkIndex for VaultHost {
 enum AiMode {
     /// 自由对话
     Chat,
-    /// 内置动作（改写类）
-    Action(Action),
+    /// 快捷动作：只留 id，提示词在执行时从配置里取
+    ///
+    /// 动作是可编辑的配置数据，面板打开到执行之间可能被改过，
+    /// 存整条配置会跑到过期内容上。
+    Action(String),
     /// 用户选的 skill：只留名字，正文在执行时重新发现
     Skill(String),
 }
@@ -620,36 +623,46 @@ impl AiChat {
     ///
     /// 命令面板的 `AI:` 入口（需求 A9.1）经 `EditorPanel::run_ai_action`
     /// 调用它，因此是 pub。
-    pub fn run_action(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn run_action(
+        &mut self,
+        action: &AiActionConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.busy {
             return;
         }
-        self.mode = AiMode::Action(action);
+        self.mode = AiMode::Action(action.id.clone());
         // 同上：先切会话，再压块
         let Some((path, selection, whole, cursor)) = self.capture(cx) else {
             cx.notify();
             return;
         };
         // 动作是一次性改写，不带上一轮上下文，因此不进 `history`
-        self.blocks.push(Block::user(action.label().to_string()));
+        self.blocks.push(Block::user(action.name.clone()));
         self.blocks.push(Block::assistant(String::new()));
-        let scope = if selection.trim().is_empty() {
-            ContextScope::WholeNote
-        } else {
+        // 范围由动作自己声明：Whole 忽略选中，始终作用于整篇
+        let use_selection =
+            !selection.trim().is_empty() && action.scope == AiActionScope::Selection;
+        let scope = if use_selection {
             ContextScope::Selection
+        } else {
+            ContextScope::WholeNote
         };
         let cfg = config(cx);
         let prepared = assemble(scope, &selection, &whole, cursor, cfg.ai.max_context_chars);
         self.notice = prepared.notice.clone();
         self.input_tokens = Some(crate::core::ai::estimate_tokens(&prepared.text));
-        // 生成类动作（续写 / 摘要 / 标签）天然是"往里加内容"，
-        // 不该判成替换整篇——那会把原文其余部分删掉。
-        let kind = if matches!(action, Action::Continue | Action::Summarize | Action::Tag) {
-            ApplyKind::InsertAtCursor
-        } else if selection.trim().is_empty() {
-            ApplyKind::ReplaceWhole
-        } else {
-            ApplyKind::ReplaceSelection
+        // 落法同样由动作声明：Insert 是"往里加内容"，判成替换会删掉其余部分
+        let kind = match action.apply {
+            AiActionApply::Insert => ApplyKind::InsertAtCursor,
+            AiActionApply::Replace => {
+                if use_selection {
+                    ApplyKind::ReplaceSelection
+                } else {
+                    ApplyKind::ReplaceWhole
+                }
+            }
         };
         self.pending = Some(PendingEdit {
             path,
@@ -1550,16 +1563,29 @@ impl Render for AiChat {
 
         // ── 快捷动作 ──
         let mut actions = div().flex().flex_wrap().gap_1().px_2().pb_1();
-        for action in all_actions() {
-            let action = *action;
+        // 从配置读，而不是代码里的枚举：用户新增 / 停用 / 改名都会立刻反映
+        for action in config(cx).ai.active_actions() {
+            let id = action.id.clone();
+            let name = action.name.clone();
+            let prompt = action.prompt.clone();
+            let label = SharedString::from(name);
+            let id_for_btn = SharedString::from(format!("ai-act-{id}"));
             actions = actions.child(
-                Button::new(SharedString::from(format!("ai-act-{}", action.id())))
+                Button::new(id_for_btn)
                     .xsmall()
                     .ghost()
-                    .label(action.label())
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.run_action(action, window, cx)),
-                    ),
+                    .label(label)
+                    .tooltip(prompt)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        // 执行时才按 id 重新查一次配置：面板渲染到点击之间
+                        // 用户可能在设置里改过或删过这一条
+                        let Some(action) = config(cx).ai.action(&id).cloned() else {
+                            this.error = Some(format!("动作已不存在：{id}"));
+                            cx.notify();
+                            return;
+                        };
+                        this.run_action(&action, window, cx);
+                    })),
             );
         }
 

@@ -776,3 +776,66 @@ fn clamp_f32_survives_nan_and_infinity() {
     assert_eq!(clamp_f32(f32::NEG_INFINITY, (0.0, 2.0)), 0.0);
     assert_eq!(clamp_f32(1.5, (0.0, 2.0)), 1.5, "区间内的值原样返回");
 }
+
+// ── 快捷动作 ──────────────────────────────────────────────────
+
+#[test]
+fn 默认带六个内置动作() {
+    let c = AppConfig::default();
+    assert_eq!(c.ai.actions.len(), 6);
+    assert!(c.ai.action("polish").is_some());
+    assert!(c.ai.action("tag").is_some());
+    // 精简掉的两个不再存在
+    assert!(c.ai.action("expand").is_none());
+    assert!(c.ai.action("continue").is_none());
+}
+
+#[test]
+fn 旧配置没有_actions_字段时补默认值() {
+    // `AiConfig` 是 `#[serde(default)]`：老 config.json 里没有这个字段，
+    // 反序列化要自动补上内置 6 项，而不是变成空列表
+    let json = r#"{"enabled":true}"#;
+    let ai: crate::core::config::AiConfig =
+        serde_json::from_str(json).expect("缺字段不该反序列化失败");
+    assert_eq!(ai.actions.len(), 6);
+}
+
+#[test]
+fn 停用的动作不参与生效列表() {
+    let mut c = AppConfig::default();
+    let id = c.ai.actions[0].id.clone();
+    c.ai.actions[0].enabled = false;
+    assert!(c.ai.action(&id).is_none());
+    assert_eq!(c.ai.active_actions().count(), 5);
+}
+
+#[test]
+fn 动作_重复_id_只留第一条() {
+    let mut c = AppConfig::default();
+    let mut dup = c.ai.actions[0].clone();
+    dup.name = "重名".into();
+    c.ai.actions.push(dup);
+    c.sanitize();
+    let first = c.ai.actions[0].id.clone();
+    assert_eq!(
+        c.ai.actions.iter().filter(|a| a.id == first).count(),
+        1,
+        "重复 id 会让按钮跑错动作"
+    );
+}
+
+#[test]
+fn 动作_空_id_与残缺条目被清掉() {
+    let mut c = AppConfig::default();
+    c.ai.actions.push(AiActionConfig::default()); // id 与名字都空
+    c.sanitize();
+    assert!(c.ai.actions.iter().all(|a| !a.id.is_empty()));
+}
+
+#[test]
+fn 动作_名字空时用_id_顶上() {
+    let mut c = AppConfig::default();
+    c.ai.actions[0].name = "  ".into();
+    c.sanitize();
+    assert!(!c.ai.actions[0].name.trim().is_empty(), "按钮上不能没名字");
+}

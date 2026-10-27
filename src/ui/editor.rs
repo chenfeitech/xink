@@ -21,8 +21,7 @@ use crate::actions::{
 };
 use crate::app::{ActiveDocChanged, AppState, EditorScrolled, PreviewScrolled};
 use crate::core::ai::patch::{self, Hunk, ReviewBlock, ReviewKind, ReviewLine};
-use crate::core::ai::prompt::Action as AiAction;
-use crate::core::config::{DataFileConfig, IndentConfig, ScrollSyncMode};
+use crate::core::config::{AiActionConfig, DataFileConfig, IndentConfig, ScrollSyncMode};
 use crate::core::datafile::{DataKind, Parsed, ValidationError, data_kind};
 use crate::core::markdown::{
     ImageOptions, SpanKind, decoration_spans, resolve_image_urls, rewrite_wikilinks,
@@ -1622,7 +1621,12 @@ impl EditorPanel {
     /// 直接跑一个 AI 动作：命令面板的 `AI:` 入口走这里（需求 A9.1）
     ///
     /// 对话条没开就先开——不然用户看不到 AI 在做什么，结果却已经写进来了。
-    pub fn run_ai_action(&mut self, action: AiAction, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn run_ai_action(
+        &mut self,
+        action: &AiActionConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.note.is_none() {
             self.status = "没有打开的笔记：AI 动作要作用在一篇笔记上".into();
             cx.notify();
