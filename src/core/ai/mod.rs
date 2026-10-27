@@ -25,6 +25,7 @@ pub mod prompt;
 pub mod skills;
 pub mod snapshot;
 pub mod sse;
+pub mod tasks;
 pub mod tools;
 pub mod verify;
 

@@ -1,6 +1,6 @@
 # 文档索引
 
-> `docs/` 共 50 份 Markdown，按领域分组如下。
+> `docs/` 共 51 份 Markdown，按领域分组如下。
 > **状态以当前 `src/` 代码为准**（核对日期 2026-10-26），不是文档自述。
 > 新增文档请按 §7 的命名约定命名，并回到本文件登记一行。
 
@@ -102,6 +102,7 @@
 | [ai-chat-blocks-design.md](./ai/ai-chat-blocks-design.md) | 对话条：正文改用 `TextView`（可选中 / `Cmd-C` 可复制）+ 交互过程分块折叠（我 / AI / 工具 / 校验 / diff） | `ui/ai.rs`、`core/ai/agent_loop.rs` | ✅ 已实施（2026-10-26，待人工验收） |
 | [ai-review-hunks-design.md](./ai/ai-review-hunks-design.md) | AI 修订评审：按 hunk 展示原文 / 改后文，逐块「接受修订」「拒绝修订」；落法改为结果驱动（不再只有"替换整篇"） | `core/ai/patch.rs`、`ui/editor.rs`、`ui/ai.rs` | ✅ **已实施**（2026-10-26，待人工验收） |
 | [ai-skills-design.md](./ai/ai-skills-design.md) | M2 Skills：`SKILL.md` 发现 / 解析 / 库内+用户级两级来源、命令面板 `AI:` 入口、`references/` 按需加载、设置里启停 | `core/ai/skills.rs`、`core/ai/{prompt,tools}.rs`、`ui/{command,ai,editor,settings}.rs` | ✅ **已实施**（2026-10-26，待人工验收） |
+| [ai-m3-library-tasks-design.md](./ai/ai-m3-library-tasks-design.md) | M3 库级任务：只读执行计划（逐条可取消）+ 批量改盘（快照 / 原子写 / 索引刷新）+ 分批停下与中断恢复；P1 先做规则可判定的批量标签动作 | `core/ai/tasks.rs`、`ui/ai/plan.rs`（待建）、`ui/tags.rs`（入口待建） | 🚧 **已确认，T1 已实施**（2026-10-27） |
 
 ## 9. 规范与其它（docs/ 根目录）
 
