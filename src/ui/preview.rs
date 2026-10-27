@@ -501,7 +501,14 @@ impl BasePanel for PreviewPanel {
 impl Panel for PreviewPanel {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 密度菜单与"预览"同一行：水平对齐、间距由 gap 统一控制
-        let mut row = div().flex().items_center().gap_2().child("预览");
+        let mut row = div().flex().items_center().gap_2();
+
+        // 伸展按钮放**最左**（需求明确）：与编辑区右上角「折叠预览」左右呼应
+        if let Some(button) = extend_toggle_button(cx) {
+            row = row.child(button);
+        }
+
+        row = row.child("预览");
 
         // 调试信息：把"两端对不对得上"变成可读数字（设置里可开关）
         if let (true, Some((editor, preview))) = (
@@ -522,40 +529,53 @@ impl Panel for PreviewPanel {
 
         row.child(density_menu(crate::app::config(cx).preview.density))
     }
+}
 
-    /// 标题栏按钮：折叠 / 展开编辑区（中间 dock）。
-    ///
-    /// 与编辑区右上角那个「折叠预览」的按钮**同源**——都是
-    /// `DockArea::toggle_dock`，只是折叠的 placement 不同：
-    /// 那边折 `Right`（预览），这边折 `Center`（编辑）。
-    /// 折叠中间 dock 后预览区向左伸展填补；再点即恢复（框架原生 toggle）。
-    fn toolbar_buttons(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Vec<Button>> {
-        let dock_area = cx.try_global::<AppState>()?.dock_area.clone();
-        let open = dock_area.read(cx).is_dock_open(DockPlacement::Center);
+/// 预览区标题**左侧**的伸展按钮：折叠 / 展开编辑区（中间 dock）。
+///
+/// 与编辑区右上角那个「折叠预览」的按钮**同源**——都是
+/// `DockArea::toggle_dock`，只是折叠的 placement 不同：
+/// 那边折 `Right`（预览），这边折 `Center`（编辑）。
+/// 折叠中间 dock 后预览区向左伸展填补；再点即恢复（框架原生 toggle）。
+///
+/// 为什么挂在 `title()` 里而不是 `toolbar_buttons()`：
+/// `toolbar_buttons` / `title_suffix` 都固定在标题栏 trailing（右侧），
+/// 框架没有左侧的自定义按钮入口
+/// （`gpui-component-0.8.0/src/dock/panel.rs:93-108`）。
+fn extend_toggle_button(cx: &mut Context<PreviewPanel>) -> Option<impl IntoElement> {
+    let dock_area = cx.try_global::<AppState>()?.dock_area.clone();
+    let open = dock_area.read(cx).is_dock_open(DockPlacement::Center);
 
-        let button = Button::new("preview-extend-toggle")
-            .icon(if open {
-                IconName::PanelLeft
-            } else {
-                IconName::PanelLeftOpen
-            })
-            .tooltip(if open {
-                "向左伸展：遮蔽编辑区，只留预览"
-            } else {
-                "恢复：回到三栏布局"
-            })
-            .on_click(cx.listener(move |_this, _, window, cx| {
-                dock_area.update(cx, |area, cx| {
-                    area.toggle_dock(DockPlacement::Center, window, cx);
-                });
-            }));
+    let icon = if open {
+        IconName::PanelLeft
+    } else {
+        IconName::PanelLeftOpen
+    };
+    let tooltip = if open {
+        "向左伸展：遮蔽编辑区，只留预览"
+    } else {
+        "恢复：回到三栏布局"
+    };
 
-        Some(vec![button])
-    }
+    Some(
+        div()
+            // 独占点击：与密度菜单同理（见 `density_menu`），
+            // 避免点按钮时顺带触发标签选中
+            .occlude()
+            .flex_none()
+            .child(
+                Button::new("preview-extend-toggle")
+                    .xsmall()
+                    .ghost()
+                    .icon(icon)
+                    .tooltip(tooltip)
+                    .on_click(cx.listener(move |_this, _, window, cx| {
+                        dock_area.update(cx, |area, cx| {
+                            area.toggle_dock(DockPlacement::Center, window, cx);
+                        });
+                    })),
+            ),
+    )
 }
 
 impl Render for PreviewPanel {
