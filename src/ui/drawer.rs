@@ -24,7 +24,7 @@ const DRAWER_WIDTH: f32 = 260.;
 const DRAWER_OPACITY: f32 = 0.88;
 
 /// 抽屉里能装的三类内容
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DrawerKind {
     Outline,
     Backlink,
@@ -144,3 +144,8 @@ fn clear_opened(cx: &mut App) {
         cx.notify();
     });
 }
+
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
+#[cfg(test)]
+#[path = "../../tests/ui/drawer.rs"]
+mod tests;

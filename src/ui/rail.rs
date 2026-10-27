@@ -32,14 +32,26 @@ impl RailState {
 
     /// 点击某个入口：同项再点即收起，异项直接替换
     fn toggle(&mut self, kind: DrawerKind, window: &mut Window, cx: &mut Context<Self>) {
-        if self.opened == Some(kind) {
-            self.opened = None;
+        let next = next_opened(self.opened, kind);
+        if next.is_none() {
             drawer::close(window, cx);
         } else {
-            self.opened = Some(kind);
             drawer::open(kind, window, cx);
         }
+        self.opened = next;
         cx.notify();
+    }
+}
+
+/// 点击某个入口后该展开哪个抽屉（纯状态迁移，抽出来好单测）
+///
+/// 三条：没开 → 开它；开的正是它 → 关掉；开的是别的 → 直接换。
+/// 不存在"两个抽屉同时展开"，因此用 `Option` 而不是集合。
+fn next_opened(current: Option<DrawerKind>, kind: DrawerKind) -> Option<DrawerKind> {
+    if current == Some(kind) {
+        None
+    } else {
+        Some(kind)
     }
 }
 
@@ -114,3 +126,8 @@ fn rail_button(
             entity.update(cx, |state, cx| state.toggle(kind, window, cx));
         })
 }
+
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
+#[cfg(test)]
+#[path = "../../tests/ui/rail.rs"]
+mod tests;

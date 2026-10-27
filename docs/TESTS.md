@@ -52,3 +52,40 @@ cargo test                      # 跑全部
 cargo test datafile             # 按名字过滤
 cargo test core::               # 只跑 core 层
 ```
+
+## 覆盖现状：UI 层能测什么
+
+**结论：渲染与一切需要 `App` / `Window` / `Entity` 的东西都测不了。**
+全仓从未用过 `TestAppContext` / `VisualTestContext`，所以 UI 层只有两类东西能测：
+
+1. **查表类的静态数据**（设置的元数据表、抽屉的 id / 标签 / SVG）——写错了
+   在界面上只表现为"图标不显示""某一行不见了"，很容易漏；
+2. **纯函数与纯状态迁移**（路径换算、行→比例、高度算术、开合迁移）。
+
+### 已覆盖（`src/ui/` 下 12 个模块有挂载）
+
+`ai` `command` `completion` `drawer` `editor` `file_tree` `outline`
+`preview` `rail` `settings` `theme` `vault_manager`
+
+`completion` / `drawer` / `preview` / `rail` / `vault_manager` 这 5 个是 2026-10-27 补的，
+测的都是上面两类；其中 `rail` 的 `next_opened`、以及顺手修正的
+`completion::link_target` 注释（原文写"优先文件名"，实现其实是"库内一律相对路径"）
+都是为了把逻辑从 `Context<Self>` 里掏出来才顺带做的。
+
+### 未覆盖（4 个，都有原因，不要硬凑测试）
+
+| 模块 | 为什么没测 |
+|---|---|
+| `backlink.rs` | 唯一的字符串逻辑（标题回落到 `file_stem`）在渲染闭包里；数据侧 `index.backlinks()` 已由 `tests/core/index.rs` 覆盖 |
+| `search.rs` | 命中片段 / 截断在 `core/search.rs`（已有 `tests/core/search.rs`）；UI 侧只有 `Context<Self>` + `background_spawn` |
+| `tabs.rs` | 标签去重 / 激活切换是纯状态机，但被 `panels: HashMap<_, WeakEntity<EditorPanel>>` 卡住——`insert` 是唯一入口且必须传 `&Entity`。要测就得先拆一个 `push_key`，属于为测试而重构，暂不做 |
+| `tags.rs` | 状态迁移全在 `cx.listener` 闭包里；数据侧 `index.tags()` / `notes_with_tag()` 已由 `tests/core/index.rs` 覆盖 |
+
+> 真要给后两个补，成本最低的抽法分别是 `tabs::push_key` 与
+> `tags::toggle_selected(current: Option<&str>, tag: &str) -> Option<String>`，
+> 但这两个都是"仅为可测性"的重构，等它们真出过 bug 再做更划算。
+
+### 另有 12 节只能靠人眼
+
+滚动手感、着色对不对、气泡靠哪边……这些自动化不了，统一收在
+**[ACCEPTANCE.md](./ACCEPTANCE.md)**，别再散落到各设计文档里。

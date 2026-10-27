@@ -466,3 +466,8 @@ pub fn delete_vault(id: &str, cx: &mut App) {
     }
     commit(registry, cx);
 }
+
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
+#[cfg(test)]
+#[path = "../../tests/ui/vault_manager.rs"]
+mod tests;

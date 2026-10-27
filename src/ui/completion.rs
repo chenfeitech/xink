@@ -186,7 +186,11 @@ fn close(window: &mut Window, cx: &mut App) {
     window.close_dialog(cx);
 }
 
-/// 写入双链时用的目标文本：文件名能唯一定位就用文件名，否则退回相对路径
+/// 写入双链时用的目标文本
+///
+/// **库内一律写相对路径**，只有"没有库根"或"路径不在库内"才退回文件名
+/// （`stem`，再没有就用标题）。相对路径能唯一定位，同名不同目录也分得开；
+/// 早期注释写的是"优先文件名"，与实现不符，以实现为准并写进了单测。
 fn link_target(root: Option<&Path>, path: &Path, title: &str) -> String {
     let stem = path
         .file_stem()
@@ -199,3 +203,8 @@ fn link_target(root: Option<&Path>, path: &Path, title: &str) -> String {
         .map(|rel| rel.to_string_lossy().to_string())
         .unwrap_or(stem)
 }
+
+// 单元测试文件在仓库根 `tests/` 下，目录结构镜像 `src/`
+#[cfg(test)]
+#[path = "../../tests/ui/completion.rs"]
+mod tests;
