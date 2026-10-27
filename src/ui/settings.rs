@@ -1629,9 +1629,11 @@ impl SettingsView {
                                 this.model_notice = Some("请先填写模型名".into());
                                 return;
                             }
-                            let mut entry = crate::core::config::ModelEntry::default();
-                            entry.id = id.clone();
-                            entry.base_url = base;
+                            let entry = crate::core::config::ModelEntry {
+                                id: id.clone(),
+                                base_url: base,
+                                ..Default::default()
+                            };
                             let mut added = false;
                             crate::app::update_config(cx, |cfg| {
                                 if cfg.ai.models.iter().any(|m| m.id == id) {
