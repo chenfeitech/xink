@@ -151,12 +151,19 @@ impl Task {
     /// 面板标题用的一句话
     pub fn title(&self) -> String {
         match self.kind {
+            // 还没填新名字时，别在标题里显示一个空的 `#`
+            TaskKind::Retag if self.new_tag.is_empty() => {
+                format!("{}：#{} → （待填）", self.kind.label(), self.target)
+            }
             TaskKind::Retag => format!(
                 "{}：#{} → #{}",
                 self.kind.label(),
                 self.target,
                 self.new_tag
             ),
+            TaskKind::AddTag if self.target.is_empty() => {
+                format!("{}：（待填）", self.kind.label())
+            }
             TaskKind::AddTag => format!("{}：#{}", self.kind.label(), self.target),
             TaskKind::RemoveTag => format!("{}：#{}", self.kind.label(), self.target),
         }

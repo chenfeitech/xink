@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+
 use std::time::{Duration, Instant};
 
 use gpui_kit::base::TextView;
@@ -28,6 +29,9 @@ use crate::core::ai::agent_loop::{self, LoopEvent, LoopRequest};
 use crate::core::ai::context::{ContextScope, assemble};
 use crate::core::ai::diff::{DiffLine, diff_lines};
 use crate::core::ai::keychain::{MacKeychain, resolve_api_key};
+/// 库级任务的计划面板（M3-P1）
+pub mod plan;
+
 use crate::core::ai::ollama::OllamaProvider;
 use crate::core::ai::openai::OpenAiProvider;
 use crate::core::ai::prompt::{Action, all_actions};
@@ -1041,7 +1045,9 @@ impl AiChat {
     ) {
         // 进入评审就存快照：逐块接受过程中原文一直在变，事后再存就晚了
         if let Some(pending) = &self.pending {
-            let dir = app_data_dir();
+            // 必须是 `ai-history`：设置里的「清空快照」与需求 A7.2 都认这个目录，
+            // 写到 app_data_dir 根下的那些既看不到也清不掉
+            let dir = app_data_dir().join(crate::core::ai::snapshot::SNAPSHOT_DIR);
             let file_name = pending
                 .path
                 .file_name()
