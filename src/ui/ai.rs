@@ -875,7 +875,7 @@ impl AiChat {
     }
 
     /// 处理流事件；返回 true 表示本次请求结束
-    fn on_event(&mut self, ev: StreamEvent, _window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn on_event(&mut self, ev: StreamEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
         match ev {
             StreamEvent::Delta(text) => {
                 if let Some(body) = self.blocks.last_mut().and_then(|b| b.as_assistant_mut()) {
@@ -892,7 +892,7 @@ impl AiChat {
                 false
             }
             StreamEvent::Done => {
-                self.finish(cx);
+                self.finish(window, cx);
                 true
             }
             StreamEvent::Failed(err) => {
@@ -906,7 +906,7 @@ impl AiChat {
     fn on_runtime_event(
         &mut self,
         ev: RuntimeEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         match ev {
@@ -950,7 +950,7 @@ impl AiChat {
                 false
             }
             RuntimeEvent::Loop(LoopEvent::Done) => {
-                self.finish(cx);
+                self.finish(window, cx);
                 true
             }
             RuntimeEvent::Failed(err) => {
@@ -963,7 +963,7 @@ impl AiChat {
     /// 收尾：把最后一轮的正文记入历史并挂上待应用的编辑
     ///
     /// loop 与单轮两条路径共用——它们产出的都是"最后一轮的正文"。
-    fn finish(&mut self, cx: &mut Context<Self>) {
+    fn finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.busy = false;
         self.task = None;
         self.elapsed_ms = self.started.map(|t| t.elapsed().as_millis() as u64);
@@ -997,7 +997,7 @@ impl AiChat {
         // （设计见 `docs/ai/ai-review-hunks-design.md` §3.6）。
         let review_target = self.classify_and_record(&output);
         if let Some((path, hunks)) = review_target {
-            self.start_review(path, hunks, cx);
+            self.start_review(path, hunks, window, cx);
         }
         self.persist();
         cx.notify();
@@ -1041,6 +1041,7 @@ impl AiChat {
         &mut self,
         path: std::path::PathBuf,
         hunks: Vec<crate::core::ai::patch::Hunk>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // 进入评审就存快照：逐块接受过程中原文一直在变，事后再存就晚了
@@ -1063,8 +1064,10 @@ impl AiChat {
         let Some(panel) = state.tabs.get(&path) else {
             return;
         };
-        panel.update(cx, |panel, cx| panel.start_review(path.clone(), hunks, cx));
-        self.notice = Some("已在编辑区下方按块评审，可逐块接受或拒绝".into());
+        panel.update(cx, |panel, cx| {
+            panel.start_review(path.clone(), hunks, window, cx)
+        });
+        self.notice = Some("已在编辑区内按块评审：改动行已就地插入，可逐块接受或拒绝".into());
     }
 
     /// 这轮的兜底落法是否要先点一次确认

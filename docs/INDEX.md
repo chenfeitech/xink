@@ -1,6 +1,6 @@
 # 文档索引
 
-> `docs/` 共 52 份 Markdown，按领域分组如下。
+> `docs/` 共 55 份 Markdown，按领域分组如下。
 > **状态以当前 `src/` 代码为准**（核对日期 2026-10-26），不是文档自述。
 > 新增文档请按 §7 的命名约定命名，并回到本文件登记一行。
 
@@ -102,6 +102,7 @@
 | [ai-m1-completion-design.md](./ai/ai-m1-completion-design.md) | M1 收口：agent loop / 只读工具 / 结构校验 / `.xink` 排除 / 连接测试 / 快照轮转与清空 / 命令面板入口，P1–P5 分期 | `core/ai/{agent_loop,tools,verify,probe,snapshot}.rs`、`core/media.rs`、`ui/{ai,command,settings}.rs` | ✅ **P1–P5 全部实施并验收、已合入 main**（2026-10-26） |
 | [ai-chat-blocks-design.md](./ai/ai-chat-blocks-design.md) | 对话条：正文改用 `TextView`（可选中 / `Cmd-C` 可复制）+ 交互过程分块折叠（我 / AI / 工具 / 校验 / diff） | `ui/ai.rs`、`core/ai/agent_loop.rs` | ✅ 已实施（2026-10-26，待人工验收） |
 | [ai-review-hunks-design.md](./ai/ai-review-hunks-design.md) | AI 修订评审：按 hunk 展示原文 / 改后文，逐块「接受修订」「拒绝修订」；落法改为结果驱动（不再只有"替换整篇"） | `core/ai/patch.rs`、`ui/editor.rs`、`ui/ai.rs` | ✅ **已实施**（2026-10-26，待人工验收） |
+| [ai-inline-diff-review-design.md](./ai/ai-inline-diff-review-design.md) | 把评审从"编辑区下方评审条"搬到**编辑区内部**：A 真插入式（AI 新行就地写进编辑区 + 行染色）+ 顶部条逐块卡片接受/拒绝；含 gpui 可行性调研结论 | `ui/editor.rs`、`core/ai/patch.rs` | ✅ **已实施**（2026-10-27） |
 | [ai-skills-design.md](./ai/ai-skills-design.md) | M2 Skills：`SKILL.md` 发现 / 解析 / 库内+用户级两级来源、命令面板 `AI:` 入口、`references/` 按需加载、设置里启停 | `core/ai/skills.rs`、`core/ai/{prompt,tools}.rs`、`ui/{command,ai,editor,settings}.rs` | ✅ **已实施**（2026-10-26，待人工验收） |
 | [ai-m3-library-tasks-design.md](./ai/ai-m3-library-tasks-design.md) | M3 库级任务：只读执行计划（逐条可取消）+ 批量改盘（快照 / 原子写 / 索引刷新）+ 分批停下与中断恢复；P1 先做规则可判定的批量标签动作 | `core/ai/tasks.rs`、`ui/ai/plan.rs`、`ui/tags.rs` | ✅ **已实施**（2026-10-27，待人工验收） |
 
@@ -110,6 +111,7 @@
 | 文档 | 说明 | 状态 |
 |---|---|---|
 | [TESTS.md](./TESTS.md) | 测试规范：`tests/` 镜像 `src/`，用 `#[path]` 挂载 | ✅ 现状符合，规范仍有效 |
+| [ai-rd-pipeline-design.md](./ai-rd-pipeline-design.md) | AI 端到端研发流水线：rules（6 环节硬约束 + G1–G6 门禁）与 skills（7 个阶段 SOP + 元技能）的体系设计、协同机制与缺口分析 | 📝 **分析完成，待确认后落地**（M1–M4 分期） |
 | [wechat-promo.md](./wechat-promo.md) | 公众号宣传文案 | 📄 非工程文档，不含需求或规范 |
 | `imgs/image.png` | 被 [README.md](../README.md) 引用的截图 | 保留 |
 

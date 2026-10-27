@@ -403,48 +403,112 @@ fn scroll_offset_is_zero_when_content_fits_the_viewport() {
     assert_eq!(offset, px(0.), "不足一屏没有可滚空间: {offset:?}");
 }
 
-// ── AI 修订评审的状态机（设计见 docs/ai/ai-review-hunks-design.md §3.2）──
+// ── AI 修订评审的状态机（设计见 docs/ai/ai-inline-diff-review-design.md §5）──
 
-use super::{AiReview, HunkState};
-use crate::core::ai::patch::Hunk;
+use super::{AiReview, EditorPanel, HunkState, ReviewBlock, ReviewLine};
+use crate::core::ai::patch::ReviewKind;
 
-fn hunk(start_line: usize) -> Hunk {
-    Hunk {
-        start_line,
-        orig_lines: vec!["原文行".into()],
+fn block(start_line: usize) -> ReviewBlock {
+    ReviewBlock {
+        rows: vec![
+            ReviewLine {
+                kind: ReviewKind::Del,
+                orig_no: Some(start_line + 1),
+                new_no: None,
+                paired: true,
+                text: "原文行".into(),
+            },
+            ReviewLine {
+                kind: ReviewKind::Add,
+                orig_no: None,
+                new_no: Some(start_line + 1),
+                paired: true,
+                text: "改后行".into(),
+            },
+        ],
+        review_lines: vec!["原文行".into(), "改后行".into()],
         new_lines: vec!["改后行".into()],
-        lines: Vec::new(),
+        orig_lines: vec!["原文行".into()],
+        start_line,
         added: 1,
         removed: 1,
     }
 }
 
+fn review_with(count: usize) -> AiReview {
+    AiReview::new(
+        "a.md".into(),
+        String::new(),
+        (0..count).map(|ix| block(ix * 5)).collect(),
+    )
+}
+
 #[test]
-fn new_review_starts_every_hunk_pending() {
-    let review = AiReview::new("a.md".into(), vec![hunk(0), hunk(5)]);
+fn new_review_starts_every_block_pending() {
+    let review = review_with(2);
     assert_eq!(review.stats(), (2, 0, 0, 0));
-    assert!(review.hunks.iter().all(|e| e.state == HunkState::Pending));
+    assert!(review.blocks.iter().all(|e| e.state == HunkState::Pending));
+    assert!(!review.resolved, "刚开场不该是已收尾");
 }
 
 #[test]
 fn review_stats_counts_every_state() {
-    let mut review = AiReview::new("a.md".into(), vec![hunk(0), hunk(5), hunk(9), hunk(12)]);
-    review.hunks[0].state = HunkState::Accepted;
-    review.hunks[1].state = HunkState::Rejected;
-    review.hunks[2].state = HunkState::Stale("原文已改动".into());
+    let mut review = review_with(4);
+    review.blocks[0].state = HunkState::Accepted;
+    review.blocks[1].state = HunkState::Rejected;
+    review.blocks[2].state = HunkState::Stale("原文已改动".into());
     // （待处理，已接受，已拒绝，已失效）
     assert_eq!(review.stats(), (1, 1, 1, 1));
 }
 
 #[test]
-fn rejecting_a_hunk_leaves_the_note_text_alone() {
-    // 拒绝 = 不调用 apply_hunk：这里锁死"拒绝后原文逐字不变"
-    let note = "开头\n原文行\n结尾\n";
-    let hunk = hunk(1);
-    let mut review = AiReview::new("a.md".into(), vec![hunk.clone()]);
-    review.hunks[0].state = HunkState::Rejected;
-    assert_eq!(note, "开头\n原文行\n结尾\n", "拒绝不该动原文");
-    // 而接受是要真的改的（对照：apply_hunk 会生效）
-    let applied = crate::core::ai::patch::apply_hunk(note, &hunk).unwrap();
-    assert!(applied.contains("改后行"), "接受才改：{applied}");
+fn a_block_carries_both_sides_of_the_decision() {
+    // 接受留下 `new_lines`（AI 的新行），拒绝留下 `orig_lines`（原文行）——
+    // 两边都自带上下文，所以块外的文字一个字节都不动
+    let b = block(1);
+    assert_eq!(b.new_lines, vec!["改后行".to_string()]);
+    assert_eq!(b.orig_lines, vec!["原文行".to_string()]);
+    assert_eq!(b.review_lines.len(), 2, "锚点是块的全部行（含插入的新行）");
+}
+
+#[test]
+fn card_rows_keeps_context_when_the_block_is_short() {
+    let rows = EditorPanel::card_rows(&block(0));
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].kind, '-');
+    assert!(rows[0].paired, "配对的删行是改，配色应与纯删区分");
+    assert_eq!(rows[1].kind, '+');
+    // 新行没有原文行号，用空位对齐
+    assert!(rows[0].text.starts_with("- "));
+    assert!(rows[1].text.starts_with("+ "));
+    assert!(
+        !rows[1].text.contains("None"),
+        "行号不能是 None：{}",
+        rows[1].text
+    );
+}
+
+#[test]
+fn card_rows_drops_context_when_the_block_is_long() {
+    // 超过上限就只留改动行：卡片再长也不能盖住正文
+    let mut big = block(0);
+    big.rows = (0..20)
+        .map(|_| ReviewLine {
+            kind: ReviewKind::Same,
+            orig_no: Some(1),
+            new_no: Some(1),
+            paired: false,
+            text: "上下文".into(),
+        })
+        .collect();
+    big.rows.push(ReviewLine {
+        kind: ReviewKind::Add,
+        orig_no: None,
+        new_no: Some(2),
+        paired: false,
+        text: "新增".into(),
+    });
+    let rows = EditorPanel::card_rows(&big);
+    assert!(rows.len() < big.rows.len(), "应裁掉上下文：{}", rows.len());
+    assert!(rows.iter().all(|r| r.kind == '+'), "只剩改动行：{rows:?}");
 }

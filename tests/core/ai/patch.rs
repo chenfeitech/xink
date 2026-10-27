@@ -244,3 +244,150 @@ fn hunks_are_capped() {
         hunks.len()
     );
 }
+
+// ── 展示层：评审态（原文 + 就地插入的 AI 新行） ────────────────
+
+use super::{ReviewKind, locate_lines, review_layout};
+
+/// 模拟"逐块处置"：把每块的评审态行换成接受 / 拒绝后留下的行
+fn resolve_all(before: &str, after: &str, accepted: bool) -> String {
+    let layout = review_layout(before, after);
+    let mut lines: Vec<String> = layout.lines.iter().map(|l| l.text.clone()).collect();
+    for block in layout.blocks.iter().rev() {
+        let text = lines.join("\n");
+        let start = locate_lines(&text, &block.review_lines).expect("块应能定位");
+        let replacement = if accepted {
+            &block.new_lines
+        } else {
+            &block.orig_lines
+        };
+        lines.splice(
+            start..start + block.review_lines.len(),
+            replacement.iter().cloned(),
+        );
+    }
+    let mut out = lines.join("\n");
+    if before.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+#[test]
+fn review_layout_inserts_added_lines_in_place() {
+    let layout = review_layout(&note(), &changed(5, "改过的第 6 行"));
+    // 原文行在上、AI 新行在下 —— 编辑区里的上下对照
+    assert!(
+        layout.text.contains("第 6 行\n改过的第 6 行"),
+        "新行应就地插在原文行下方：{:?}",
+        layout.text
+    );
+}
+
+#[test]
+fn review_layout_pairs_adjacent_del_and_add() {
+    let layout = review_layout(&note(), &changed(5, "改过的第 6 行"));
+    let rows = &layout.blocks[0].rows;
+    let del = rows.iter().find(|r| r.kind == ReviewKind::Del).unwrap();
+    let add = rows.iter().find(|r| r.kind == ReviewKind::Add).unwrap();
+    assert!(del.paired && add.paired, "一删一增应算“改”：{rows:?}");
+    assert_eq!(del.orig_no, Some(6));
+    assert_eq!(del.new_no, None);
+    assert_eq!(add.orig_no, None, "新增行没有原文行号");
+    assert_eq!(add.new_no, Some(6));
+}
+
+#[test]
+fn review_layout_leaves_pure_insert_unpaired() {
+    let after = note().replace("第 3 行\n", "第 3 行\n插进来的一行\n");
+    let layout = review_layout(&note(), &after);
+    let add = layout.blocks[0]
+        .rows
+        .iter()
+        .find(|r| r.kind == ReviewKind::Add)
+        .expect("应有一行新增");
+    assert!(!add.paired, "孤立的增不该标成“改”");
+}
+
+#[test]
+fn review_layout_leaves_pure_delete_unpaired() {
+    let after = note().replace("第 3 行\n", "");
+    let layout = review_layout(&note(), &after);
+    let del = layout.blocks[0]
+        .rows
+        .iter()
+        .find(|r| r.kind == ReviewKind::Del)
+        .expect("应有一行删除");
+    assert!(!del.paired, "孤立的删不该标成“改”");
+}
+
+#[test]
+fn accepting_every_block_yields_the_ai_version() {
+    let after = note()
+        .lines()
+        .enumerate()
+        .map(|(ix, line)| match ix {
+            2 => "改过的第 3 行".to_string(),
+            9 => "改过的第 10 行".to_string(),
+            _ => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_eq!(resolve_all(&note(), &after, true), after);
+}
+
+#[test]
+fn rejecting_every_block_yields_the_original() {
+    let after = note()
+        .lines()
+        .enumerate()
+        .map(|(ix, line)| match ix {
+            2 => "改过的第 3 行".to_string(),
+            9 => "改过的第 10 行".to_string(),
+            _ => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_eq!(resolve_all(&note(), &after, false), note());
+}
+
+#[test]
+fn review_layout_splits_distant_changes() {
+    let after = note()
+        .lines()
+        .enumerate()
+        .map(|(ix, line)| match ix {
+            1 => "改过的第 2 行".to_string(),
+            9 => "改过的第 10 行".to_string(),
+            _ => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    let layout = review_layout(&note(), &after);
+    assert_eq!(
+        layout.blocks.len(),
+        2,
+        "隔得远应是两块：{:?}",
+        layout.blocks
+    );
+    assert_eq!(layout.blocks[0].start_line, 2);
+    assert_eq!(layout.blocks[1].start_line, 10);
+}
+
+#[test]
+fn locate_lines_finds_unique_start() {
+    let layout = review_layout(&note(), &changed(5, "改过的第 6 行"));
+    let start = locate_lines(&layout.text, &layout.blocks[0].review_lines);
+    assert_eq!(start, Some(3), "第 6 行在评审态里是第 4 行（0-based 3）");
+}
+
+#[test]
+fn locate_lines_rejects_ambiguous_and_missing() {
+    let lines = vec!["重复".to_string()];
+    assert_eq!(locate_lines("重复\n重复\n", &lines), None, "两处应为 None");
+    assert_eq!(locate_lines("别的\n", &lines), None);
+    assert_eq!(locate_lines("重复\n", &[]), None, "空锚点直接 None");
+}
