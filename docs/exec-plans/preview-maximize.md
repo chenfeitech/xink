@@ -32,19 +32,25 @@
 
 | 约束 | 证据 | 影响 |
 |---|---|---|
-| **中间 dock 不能被折叠**：toggle 按钮只支持 `Left`/`Right`/`Bottom`，`Center` 直接 `return None` | `tab_panel.rs:246`（`designated`）、`:260`（图标 match） | 预览左伸**无法照搬 Collapse 机制** |
-| **框架有完整 Zoom 能力**：`Panel::zoomable()`、`Panel::set_zoomed()`、`DockArea::set_zoomed_in/out()`、`TabGroup::toggle_zoom()` | `gpui-base-0.8.0/src/dock/panel.rs:102,105`；`dock_area.rs:727,736,740`；`tab_group.rs:267` | 预览左伸的可行路径 |
-| **Zoom 是天然 toggle**：`toggle_zoom()` = `set_zoomed(!zoomed)` | `tab_group.rs:267-269` | 「再点恢复」无需自己维护状态 |
-| **Zoom 后该 group 填满整个 area**（注释：*the container that fills the area when something is zoomed*） | `dock_area.rs:800` | ⚠️ **可能连左侧文件树一起遮蔽** |
+| **中间区域根本不是 dock**：`DockArea` 只有 `docks: HashMap<DockPlacement, DockRegion>`，Center 单独存 `self.center` | `dock_area.rs:105-107`、`:191` | — |
+| **`toggle_dock(Center)` 是死路**：函数体第一行 `docks.get_mut(&placement) else { return }`，Center 不在表里 → 静默返回 | `dock_area.rs:307` | ❌ **方案 D 不成立**（第一版就是踩这个） |
+| **`is_dock_open(Center)` 恒 false** | `dock_area.rs:293-297` | 图标会永久卡在"已伸展" |
+| **框架有完整 Zoom 能力**：`Panel::zoomable()`、`TabGroup::toggle_zoom()`、`DockArea::set_zoomed_in/out()` | `panel.rs:40`；`tab_group.rs:267`；`dock_area.rs:727,736` | ✅ 预览左伸的实际路径 |
+| **Zoom 链路闭合**：`toggle_zoom` → `set_zoomed` → `TabGroupEvent::ZoomIn/Out` → `DockArea::set_zoom` | `tab_group.rs:391-405`；`dock_area.rs:1224-1237` | 不用自己记账 |
+| **Zoom 后整块区域换成该 group**：`render` 命中 `zoomed_view()` 就不再画三栏 | `dock_area.rs:1565-1593` | ⚠️ **左侧文件树一并被遮**（要拍板） |
+| **Zoom 不持久化**：`load()` 开头 `self.zoomed = None` | `dock_area.rs:824` | ✅ 正好符合 Q2 |
+| 面板能拿到自己的 group：`Panel::on_added_to(WeakEntity<TabGroup>)` | `panel.rs:68`；调用点 `tab_group.rs:340` | 按钮触发 zoom 的入口 |
 
-### 1.3 由此产生的不对称（本次最关键的待确认点）
+### 1.3 由此产生的不对称（要拍板的点）
 
 | 状态 | 机制 | 文件树是否保留 |
 |---|---|---|
 | **B 编辑右伸**（现有 Collapse） | 折叠右侧 dock | ✅ **保留** |
-| **C 预览左伸**（Zoom 方案） | zoom 预览 group | ❌ **可能一起遮蔽** |
+| **C 预览左伸**（Zoom 方案） | zoom 预览 group | ❌ **一并被遮** |
 
-两者行为不一致，需在 G2 由用户拍板（见设计文档 §3 方案对比）。
+想让 C 也保留文件树，只剩「撑大右 dock 尺寸」一条路，代价：
+① 尺寸会写进 `layout.json`，与 Q2「不持久化」冲突，需在保存前还原；
+② 窗口缩放要重算尺寸。**当前按 Zoom 交付，等人工验收拍板。**
 
 ## 2 需求定义与拍板记录
 
@@ -58,11 +64,11 @@
 | Q4 | B/C 能否直接互切 | **接受限制**：先回三栏再切另一侧 |
 | Q5 | 文件树是否参与伸展 | **不参与**（前提：方案能保留文件树） |
 
-### 待用户在 G2 拍板
+### 待拍板（👤 交回用户）
 
 | # | 问题 | 出处 |
 |---|---|---|
-| Q6 | 预览左伸时**是否遮蔽文件树**？（决定选 Zoom 还是自实现） | 设计文档 §3 |
+| Q6 | 预览左伸时**文件树也被遮住，能否接受**？不能接受则改「撑大右 dock 尺寸」方案（代价见 §1.3） | `ACCEPTANCE.md` §14 / 设计文档 §9-1 |
 
 ## 3 边界条件（九项逐条过）
 
@@ -88,46 +94,55 @@
 
 | T-n | 内容 | 依赖 | 涉及文件 | 验收方式 | 状态 |
 |---|---|---|---|---|---|
-| T-1 | `PreviewPanel` 实现 `toolbar_buttons()`，按钮调 `dock_area.toggle_dock(DockPlacement::Center)`；图标 `PanelLeft` / `PanelLeftOpen`，再点恢复 | G2 确认 | `src/ui/preview.rs` | 编译通过 + 人工看四点 | ✅ |
-| T-2 | G4 四连自校验 | T-1 | — | build / clippy / fmt / test 全绿 | ✅ |
-| T-3 | 补边界：无笔记、图片模式、切库 | T-1 | `src/ui/preview.rs` | 人工验收 | ⬜ 人工 |
-| T-4 | 人工验收（进 `ACCEPTANCE.md` §14） | T-1 | — | 用户亲自跑 | ⬜ 人工 |
+| T-1 | ~~按钮调 `toggle_dock(Center)`~~ | G2 | `src/ui/preview.rs` | — | ❌ **证伪** |
+| T-2 | 改走 Zoom：`PreviewPanel.group` + `on_added_to` + 按钮调 `group.toggle_zoom()`，状态读 `dock_area.zoomed_group()` | T-1 证伪 | `src/ui/preview.rs` | 编译 + 人工 | ✅ |
+| T-3 | G4 四连自校验 | T-2 | — | build / clippy / fmt / test 全绿 | ✅ |
+| T-4 | 人工验收（进 `ACCEPTANCE.md` §14），含 Q6 拍板 | T-2 | — | 用户亲自跑 | ⬜ 人工 |
 
 | 门禁 | 结果 | 证据 |
 |---|---|---|
 | G1 需求 | ✅ | §2 五个问题全部拍板 |
-| G2 设计 | ✅ | 用户确认方案 D（2026-10-27「好，开工」） |
+| G2 设计 | ✅ | 用户确认（2026-10-27「好，开工」），方案后由 D 改 A（见偏差记录） |
 | G3 计划 | ✅ | 本文件 |
-| G4 实施 | ✅ | 四连见下 |
+| G4 实施 | ✅ | 四连见下（改 Zoom 后重跑） |
 | G5 测试 | ⬜ | 无新增可单测逻辑（状态由框架持有），以人工验收为准 |
-| G6 质量 | ⬜ | 待 T-3 / T-4 |
+| G6 质量 | ⬜ | 待 T-4；Q6 仍需 👤 拍板 |
 
-### G4 四连输出
+### G4 四连输出（改 Zoom 后重跑，2026-10-27）
 
 ```text
-cargo build                : 1 warning（第三方 block v0.1.6，不可控）
+cargo build                : Finished dev profile，0 warning（项目代码）
 cargo clippy --all-targets : 0 warning
 cargo fmt --check          : clean
 cargo test                 : 603 passed / 0 failed / 3 ignored
 ```
 
-## 5 实施记录（2026-10-27）
+## 5 实施记录
 
-改动落在 `src/ui/preview.rs` 一处：
+### 第一版（已作废）—— `toggle_dock(Center)`
 
-- import 补 `DockPlacement`、`IconName`
-- `impl Panel for PreviewPanel` 新增 `toolbar_buttons()`：
-  从 `AppState.dock_area` 取 DockArea，读 `is_dock_open(Center)` 决定图标与 tooltip，
-  点击调 `toggle_dock(Center, window, cx)`
+- `toolbar_buttons()` 加按钮，点击 `dock_area.toggle_dock(DockPlacement::Center)`
+- 结果：用户实测**点击无任何反应**；图标因 `is_dock_open(Center)` 恒 false 卡死
 
-**与现有 Collapse 同源**：编辑区右上按钮调 `toggle_dock(Right)`，
-本按钮调 `toggle_dock(Center)`，框架同一套机制，toggle 语义免费。
+### 当前实现 —— Zoom（2026-10-27）
+
+改动仍只落在 `src/ui/preview.rs` 一处：
+
+- import：`DockPlacement` → `TabGroup`
+- `PreviewPanel` 增字段 `group: Option<WeakEntity<TabGroup>>`
+- `impl BasePanel` 增 `on_added_to()` 存下 group 句柄
+- `extend_toggle_button(group, cx)`：
+  状态判据 `dock_area.zoomed_group() == Some(group.node())`（**每帧问容器，
+  不维护本地标志**，杜绝不同步）；点击 `group.toggle_zoom(window, cx)`；
+  `group` 为 `None` 时按钮不渲染，避免出现死按钮
+- 按钮仍挂在 `title()` 最左端（见 §7）
 
 ## 6 下一步
 
-1. **人工验收**（`ACCEPTANCE.md` §14）——本功能的正确性只能靠跑起来看
-2. 按验收结果补 T-3 的边界处理
-3. 若验收发现「按钮位置不符合预期」→ 见 §7 已知限制
+1. **人工验收**（`ACCEPTANCE.md` §14）——本功能正确性只能靠跑起来看，
+   尤其要确认「点击真的有反应」
+2. 👤 **Q6 拍板**：文件树被遮能否接受
+3. 按验收结果决定是否换成「撑大右 dock 尺寸」方案
 
 ## 7 按钮位置（已定：标题**最左侧**）
 
@@ -154,3 +169,10 @@ cargo test                 : 603 passed / 0 failed / 3 ignored
   项目源码里。用户提供关键词 `Collapse` 后在**依赖源码**中定位。
   教训：查证"某能力是否存在"时，① 不要过早 `head` 截断；
   ② 现象在 UI 上但代码里搜不到时，要想到**框架渲染**这一层。
+- 2026-10-27（第二次，同类错误）：断言「Center 可以折叠，只要 `is_collapsible()`」
+  ——只读了 `toggle_dock` 的**注释和前几行约束**，没往下读函数体第一行
+  `docks.get_mut(&placement) else { return }`。而 Center **不在 `docks` 表里**
+  （它是 `self.center` 字段）。结果第一版上线即死按钮，由用户实测发现。
+  教训：**判断"某 API 对某个入参是否生效"时，必须读完函数体**，
+  尤其是 `else { return }` 这类静默失败；"文档说支持"≠"这个入参走得到"。
+  同类第三处：`is_dock_open` 同理恒 false。

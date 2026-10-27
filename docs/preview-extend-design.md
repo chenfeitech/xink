@@ -10,22 +10,25 @@
 |---|---|
 | 编辑区已有伸展按钮，是 **gpui-component 框架自带的 dock toggle**，不在项目源码 | `gpui-component-0.8.0/src/dock/tab_panel.rs:218` `dock_toggle_button` |
 | 它显示在中间 dock 标题栏右上角，图标 `PanelRight`，点击折叠**右侧 dock（预览）** | 同上 `:253-257`、`:275-279` |
-| **中间 dock 不可折叠**：toggle 只支持 `Left`/`Right`/`Bottom`，`Center` → `return None` | 同上 `:246`、`:260` |
-| 框架有 Zoom：`Panel::zoomable()` / `set_zoomed()` / `TabGroup::toggle_zoom()`（天然 toggle） | `gpui-base-0.8.0/src/dock/panel.rs:102,105`；`tab_group.rs:267` |
-| Zoom 后该 group **填满整个 area** | `dock_area.rs:800` 注释：*the container that fills the area when something is zoomed* |
+| **中间区域不是 dock**：`DockArea` 只有 `docks: HashMap<DockPlacement, DockRegion>`，Center 单独存 `self.center` | `gpui-base-0.8.0/src/dock/dock_area.rs:105-107`、`:191` |
+| **`toggle_dock` 开头就 `docks.get_mut(&placement) else { return }`——Center 不在表里，直接静默返回** | 同上 `:307` |
+| **`is_dock_open(Center)` 恒为 `false`** | 同上 `:293-297`（`docks.get` 取不到 Center） |
+| 框架有 Zoom：`Panel::zoomable()` / `TabGroup::toggle_zoom()`（天然 toggle） | `gpui-base-0.8.0/src/dock/panel.rs:40`；`tab_group.rs:267` |
+| Zoom 链路完整：`toggle_zoom` → `set_zoomed` → `TabGroupEvent::ZoomIn/Out` → `DockArea::set_zoom` | `tab_group.rs:391-405`；`dock_area.rs:1224-1237` |
+| **Zoom 后整块区域被换成该 group**：`render` 里 `zoomed_view()` 命中就不再画 Left/Center/Right | `dock_area.rs:1565-1593` |
+| Zoom **不持久化**：`load()` 第一行就 `self.zoomed = None` | `dock_area.rs:824` |
+| 面板能拿到自己所在 group：`Panel::on_added_to(WeakEntity<TabGroup>)` | `gpui-base-0.8.0/src/dock/panel.rs:68`；调用点 `tab_group.rs:340` |
 | 预览面板另有图片模式（`image` 非空时显示图片而非 Markdown） | `src/ui/preview.rs` |
 | 三栏布局在 `src/app.rs`，DockArea 只用 `add_panel` / `remove_panel` | `src/app.rs:429`；`src/ui/tabs.rs:154,243` |
-| **`toggle_dock(placement)` 对任何 placement 都有效**，只要求该 dock `is_collapsible()`，未排除 Center | `gpui-base-0.8.0/src/dock/dock_area.rs:301-320` |
-| **`DockPlacement::collapsible` 默认 `true`** | `gpui-base-0.8.0/src/dock/dock_placement.rs:125` |
 | 折叠用 `set_open(false)` + `reconcile()`，**面板实体保留**（不像 `remove_panel` 会丢状态） | `dock_area.rs:314-318` |
-| 面板可自定义工具栏按钮：`Panel::toolbar_buttons()` | `gpui-component-0.8.0/src/dock/panel.rs:101,158` |
-| 项目当前**未实现** `toolbar_buttons` | 全仓 grep 无结果 |
+| 框架没有**标题栏左侧**的自定义按钮入口：`toolbar_buttons` / `title_suffix` 都在 trailing（右侧） | `gpui-component-0.8.0/src/dock/panel.rs:92-107` |
 
-**关键澄清**：`tab_panel.rs:246` 的 `Center => None` 卡的是**按钮放哪**（`designated` 位置判定），
-**不是能不能折叠**。折叠能力本身对 Center 完全可用（见上表第 6–7 行）。
+**关键澄清 1**：`tab_panel.rs:246` 的 `Center => None` 卡的是**按钮放哪**（`designated` 位置判定）。
 
-**核心矛盾（已消解）**：原以为只能靠 Zoom（会遮蔽文件树）；
-调研后发现可直接复用与 Collapse **完全相同**的 `toggle_dock` 机制，见方案 D。
+**关键澄清 2（第三轮调研，推翻方案 D）**：折叠能力**只对真实存在的 dock 生效**。
+Center 不是 dock，所以 `toggle_dock(Center)` 是**死路**——不报错、不生效，
+且 `is_dock_open(Center)` 恒 false，图标会永久卡在"已伸展"。
+首版代码上线后用户反馈"点击无响应"，根因即在此。
 
 ## 2 目标 / 非目标
 
@@ -40,42 +43,36 @@
 - 不做 B/C 直接互切（已拍板 Q4：先回三栏）
 - 不做状态持久化（已拍板 Q2）
 - 不加快捷键、不加双击分隔条（已拍板 Q3）
-- 不改文件树那一栏（已拍板 Q5）
+- 不改文件树那一栏的**布局与尺寸**（已拍板 Q5）
+  —— 但采用 Zoom 后，伸展期间文件树会随整块区域一起被预览**覆盖**；
+  这只是"被遮住"，文件树的尺寸 / 状态 / 内容都不变，恢复后原样回来
 - 不改现有 Collapse 按钮的行为
 
 ## 3 方案对比
 
-### 方案 D：复用框架 `toggle_dock(Center)` —— **推荐**（第二轮调研后新增）
+### 方案 A：复用框架 Zoom —— **采用**（第三轮调研后改选）
 
-`PreviewPanel` 实现 `toolbar_buttons()` 返回一个按钮，点击调
-`dock_area.toggle_dock(DockPlacement::Center, window, cx)`。
-
-| 维度 | 评价 |
-|---|---|
-| 改动面 | **小**——只加一个按钮 + 一次 `toggle_dock` 调用，不碰布局逻辑 |
-| 对称性 | ✅ **与现有 Collapse 完全同一套机制**：右上按钮 `toggle_dock(Right)`，左上按钮 `toggle_dock(Center)` |
-| toggle 语义 | ✅ 框架原生：`set_open(!open)`，再点即恢复 |
-| 文件树 | ✅ **保留**（折叠的只是 Center dock，Left dock 不受影响） |
-| 数据风险 | ✅ 无——`set_open(false)` 保留面板实体，光标 / 未保存内容不丢（对比 `remove_panel`） |
-| 可测性 | 状态由框架持有；可测部分为按钮 id / tooltip 的查表一致性 |
-| 升级风险 | 低——走的是公开 API，不与框架内部布局对抗 |
-
-**为什么框架自己不画这个按钮**：`dock_toggle_button` 的 `designated` 要求按钮挂在
-Center dock 的左上/右上 group 上；而「折叠 Center」的按钮**没有天然归属位置**
-（该挂在谁身上？），故 `Center => None`。我们把它挂在**预览面板自己**的
-`toolbar_buttons()` 上，正好补上这个空缺。
-
-### 方案 A：复用框架 Zoom
-
-`PreviewPanel` 实现 `zoomable() -> true`，按钮调 `TabGroup::toggle_zoom()`。
+`PreviewPanel` 在 `on_added_to` 里记住自己的 `TabGroup`，按钮点击调
+`group.toggle_zoom(window, cx)`；状态直接读 `dock_area.zoomed_group()`。
 
 | 维度 | 评价 |
 |---|---|
-| 改动面 | **最小**——框架原生，toggle 语义免费（`toggle_zoom` = `set_zoomed(!zoomed)`） |
-| 可测性 | 状态由框架持有，本项目可测部分少 |
-| 数据风险 | 无（不触碰笔记文件） |
-| 扩展性 | 编辑区若将来也要「右伸」，同样用 zoom |
-| **缺点** | ⚠️ zoom 后**可能连左侧文件树一起遮蔽**，与 Collapse（保留文件树）**不对称** |
+| 改动面 | **小**——一个字段 + 一个 `on_added_to` + 一个按钮，不碰布局逻辑 |
+| toggle 语义 | ✅ 框架原生：`toggle_zoom` = `set_zoomed(!zoomed)`，再点即恢复 |
+| 状态准确性 | ✅ 状态由**容器**持有，按钮每帧从 `zoomed_group()` 读，不存在本地标志与框架不同步 |
+| 持久化 | ✅ **不持久化**（`load()` 清 zoom），正好符合已拍板的 Q2 |
+| 窗口缩放 | ✅ zoom 恒填满整块区域，窗口变大变小都不用重算尺寸 |
+| 数据风险 | ✅ 无——不动笔记文件，也不动面板实体 |
+| 升级风险 | 低——走公开 API，不与框架内部布局对抗 |
+| **代价** | ⚠️ zoom 填的是**整个 area**，左栏文件树一并被遮（见 §2 非目标 Q5 的重新界定） |
+
+### ~~方案 D：复用框架 `toggle_dock(Center)`~~ —— ❌ **已否决（实现后证伪）**
+
+| 维度 | 评价 |
+|---|---|
+| 改动面 | 小（曾以为） |
+| **致命缺陷** | ❌ `docks` 里没有 `Center` 键，`toggle_dock` 开头 `get_mut` 直接 return；`is_dock_open(Center)` 恒 false。**上线后实测：点击无任何反应** |
+| 否决理由 | 未读到 `toggle_dock` 函数体第一行就下结论（详见 `exec-plans/preview-maximize.md` 偏差记录） |
 
 ### 方案 B：自实现「折叠中间 dock」
 
@@ -107,22 +104,25 @@ Center dock 的左上/右上 group 上；而「折叠 Center」的按钮**没有
 
 ### 建议
 
-**采用方案 D**。它与现有 Collapse **同源、对称、不丢状态、改动最小**，
-也不需要 Zoom 那种"填满整个 area"的语义——方案 A / B / C 均已无优势。
+**采用方案 A（Zoom）**。方案 D 已被源码证伪；方案 B/C 要么与框架布局对抗，
+要么要自己承担"尺寸 + 持久化"两套账（右 dock 尺寸会被 `layout.json` 持久化，
+与"不持久化"的拍板冲突）。Zoom 是框架里唯一一条**现成、可逆、不落盘、
+且窗口缩放自适应**的路。
 
-仍需**一次实测**确认框架的实际布局行为（§10 S0）：
-折叠 Center dock 后，Right dock（预览）是否真的向左扩展填补、文件树是否保留。
+已知代价只有一条：zoom 会连左栏文件树一起遮住。这条需**人工验收确认**，
+见 §9 开放问题 1。
 
-> 按 `05-design-first.md` §4，框架行为**必须实测**，不得凭注释推断
-> （历史教训：曾误判"框架没有链接点击回调""没有缩进设置"，源码核实后都是错的）。
+> 按 `05-design-first.md` §4，框架行为**必须查源码/实测**，不得凭注释推断
+> （历史教训：曾误判"框架没有链接点击回调""没有缩进设置"，
+> 以及本轮误判"Center 可以折叠"，源码核实后都是错的）。
 
 ## 4 数据模型与持久化
 
-- **不持久化**（已拍板 Q2）
-- 方案 A：状态由框架的 `TabGroup.zoomed` / `DockArea.zoomed` 持有，本项目不新增字段
-- 方案 B：需在 `EditorPanel` 或 `AppState` 增一个枚举
-  `enum Extent { Default, EditorExtended, PreviewExtended }`
-- 旧数据兼容：不涉及（无新持久化字段）
+- **不持久化**（已拍板 Q2）：zoom 状态由框架的 `TabGroup.zoomed` / `DockArea.zoomed`
+  持有，`DockArea::load()` 会清零（`dock_area.rs:824`），重启必回三栏
+- 本项目新增字段只有一个：`PreviewPanel.group: Option<WeakEntity<TabGroup>>`，
+  **纯运行时句柄，不入 `dump()`**，不写 `layout.json`
+- 旧数据兼容：不涉及（无新持久化字段，`layout.json` 格式不变）
 
 ## 5 交互流程
 
@@ -139,57 +139,81 @@ Center dock 的左上/右上 group 上；而「折叠 Center」的按钮**没有
 ```
 
 - B/C 之间**不直接互切**（已拍板 Q4）
-- 按钮图标：待定，需确认 gpui-kit 内置图标清单里有能表达「向左伸展」的
-  （当前全仓只用过 10 种图标，无此类）
+- 按钮图标：沿用框架 dock toggle 同款的 `PanelLeft` / `PanelLeftOpen`
+  （`tab_panel.rs:254-255` 已在用），与编辑区 Collapse 视觉一致
+
+**伸展态的实际形态（Zoom 语义）**
+
+```
+默认三栏               伸展态（预览 zoom）
+┌────┬───────┬─────┐   ┌──────────────────┐
+│ 树 │ 编辑  │ 预览 │   │ 预览（含自己的    │
+│    │       │ [←] │ → │ 标题栏，按钮还在）│
+└────┴───────┴─────┘   └──────────────────┘
+                          ↑ 编辑区被覆盖
+                          ↑ 文件树亦被覆盖（Zoom 填满整块 area）
+```
+
+即：**不是"预览变宽"，而是"预览所在的 group 整块顶掉了整个 dock 区域"**；
+被遮住的两栏只是不渲染，实体、尺寸、内容都还在，取消 zoom 后原样回来。
 
 ## 6 异常与边界
 
 | 场景 | 处理 |
 |---|---|
-| 没有打开笔记 | 按钮禁用或点击无效（待定，倾向禁用） |
+| 没有打开笔记 | 预览是空的，但仍可伸展（zoom 不看有没有内容）；不做禁用，避免按钮时有时无 |
 | 预览处于图片模式 | 左伸照常可用 |
-| 编辑区有未保存内容时左伸 | 不保存、不丢弃，仅遮蔽；恢复后内容还在 |
-| 编辑区挂着 AI 对话条 / 修订评审条 | 随编辑区一起被遮蔽，恢复后保留 |
-| 切 Vault | 回到默认三栏（不持久化） |
-| 左伸状态下关闭预览面板 | 伸展状态随之失效，回到默认 |
+| 编辑区有未保存内容时左伸 | 不保存、不丢弃，仅被覆盖；恢复后内容、光标、滚动位置都还在 |
+| 编辑区挂着 AI 对话条 / 修订评审条 | 随编辑区一起被覆盖，恢复后保留 |
+| 切 Vault / 重载布局 | 回到默认三栏（`load()` 清 zoom） |
+| 伸展中把预览面板拖走 / 关闭 | group 消失 → `zoom_survives` 判定失败 → 自动回到三栏（`dock_area.rs:1092-1098`） |
+| 伸展中缩放窗口 | zoom 恒填满整块 area，无需重算尺寸 |
+| 还没加入 group（`on_added_to` 未触发） | `group` 为 `None` → **按钮不渲染**，不会出现"点了没反应的死按钮" |
 
 ## 7 测试计划
 
 | 能自动化 | 要人工 |
 |---|---|
-| 方案 B 的状态机（若采用）：抽成纯函数，如 `next_extent(current, action)` | **zoom 后文件树是否保留**（方案 A 的前提，必须实测） |
-| 按钮 id / tooltip 的查表一致性（沿用 `settings.rs` 描述表测试的做法） | 伸展动画是否平滑、有无闪烁 |
+| `cargo build` / `clippy --all-targets` / `fmt --check` / `test`（G4 四连） | **点击是否真的伸展**（上一版就是死按钮，必须人眼确认） |
+| 无新增纯函数可测：状态判据 `zoomed_group() == Some(group.node())` 一行，逻辑全在框架侧 | **伸展时文件树是否也被遮**（开放问题 1，需拍板） |
+| — | 再点是否准确回到三栏、各栏比例是否与伸展前一致 |
 | — | 恢复后编辑区光标、滚动位置、未保存内容是否还在 |
-| — | 图片模式下左伸的表现 |
+| — | 图片模式下、窄窗 / 宽屏下的表现 |
+| — | 切换 / 关闭 / 拖走预览面板后伸展态是否自动解除 |
 
 ## 8 人工验收清单
 
 > 交付时进 `docs/ACCEPTANCE.md`，此处只放索引（`10-acceptance.md`）。
 
-- [ ] 预览区顶部左侧出现按钮，图标能表达「向左伸展」
-- [ ] 点击 → 预览向左伸展、编辑区被遮蔽
+- [ ] 预览区标题**最左侧**出现按钮（在「预览」两字之前）
+- [ ] 点击 → 预览铺满、编辑区被遮蔽（**不再是"点了没反应"**）
+- [ ] 伸展状态下**文件树是否也该被遮** 👤（开放问题 1，需拍板）
 - [ ] **再点一次 → 恢复三栏**，比例与伸展前一致
+- [ ] 按钮图标在两种状态下正确切换（伸展态显示"收起"）
 - [ ] 伸展状态下编辑区的未保存内容、光标位置不丢
-- [ ] 与编辑区右上 Collapse 按钮视觉对称、行为对称
+- [ ] 与编辑区右上 Collapse 按钮视觉对称
 - [ ] 图片预览模式下左伸正常
 - [ ] 不同窗口尺寸下（窄窗 / 宽屏）伸展表现正常
+
+> 完整清单见 `docs/ACCEPTANCE.md` §14。
 
 ## 9 风险与开放问题
 
 | # | 类型 | 内容 |
 |---|---|---|
-| 1 | ~~需用户拍板 Q6~~ ✅ **已消解** | 方案 D 折叠的是 Center dock，文件树（Left dock）**天然保留**，无需在「对称」与「改动量」之间取舍 |
-| 2 | 需实测 | 折叠 Center 后预览是否真的左伸填补（§10 S0 四点） |
-| 3 | 需调研 | gpui-kit 内置图标清单里有没有「向左伸展」语义的图标 |
-| 4 | 风险 | 方案 B 与框架布局对抗，gpui-kit 升级时易碎 |
-| 5 | 风险 | 方案 B 若误用 `remove_panel` 会丢编辑状态 |
+| 1 | **需用户拍板** 👤 | Zoom 会连左栏文件树一起遮住。若要求"伸展后文件树仍在"，只能改用「撑大右 dock 尺寸」方案，代价：① 尺寸会被 `layout.json` 持久化，与 Q2「不持久化」冲突，需在保存前还原 ② 窗口缩放时要重算尺寸。**当前按 Zoom 交付，等验收结论** |
+| 2 | 已核实 | Zoom 链路与渲染替换点（`dock_area.rs:1224` / `:1565`）——源码级确认，行为仍进人工验收 |
+| 3 | 已解决 | 图标沿用框架 dock toggle 同款的 `PanelLeft` / `PanelLeftOpen`（`tab_panel.rs:254-255` 已在用），与编辑区 Collapse 视觉一致 |
+| 4 | 已知限制 | **无过渡动画**：框架的 dock toggle / zoom 都是即时布局替换，没有暴露动画钩子。要平滑动画需自绘过渡层，成本另议 |
+| 5 | 已消解 | 方案 B/C 不再采用，其风险（对抗框架布局、尺寸持久化）不再进入本需求 |
 
 ## 10 实施步骤
 
-| 步 | 内容 | 可独立验证 |
+| 步 | 内容 | 状态 |
 |---|---|---|
-| **S0** | **Spike 验证**：给 `PreviewPanel` 临时加一个按钮调 `toggle_dock(Center)`，实测四点——① 预览是否真的左伸填补 ② 文件树是否保留 ③ 再点是否恢复 ④ 编辑区光标 / 未保存内容是否还在 | 跑起来看四点（**Spike 原型，不是交付**；验证后按结果调整） |
-| S1 | 根据 S0 结果锁定方案（预期方案 D 通过），更新本文档 §3 | 本文档定稿 |
-| S2 | 实现按钮 + 伸展逻辑（预览面板侧） | 编译通过 |
-| S3 | 边界处理：无笔记禁用、图片模式、切库重置 | 人工验收 |
-| S4 | 文档：INDEX 登记、验收项进 `ACCEPTANCE.md` | 文档自洽 |
+| S0 | 查证框架 Collapse 按钮的实现位置 | ✅ `tab_panel.rs:218` |
+| S1 | 第一版实现：`toggle_dock(Center)` | ❌ **证伪**：Center 不在 `docks` 里，点击无响应（用户实测反馈） |
+| S2 | 第三轮源码查证：`docks` / `center` / `toggle_dock` / zoom 链路 | ✅ 本文 §1、§3 |
+| S3 | 改走 Zoom：`on_added_to` 存 group + 按钮调 `toggle_zoom` + 状态读 `zoomed_group()` | ✅ 已实现（`src/ui/preview.rs`），G4 四连通过 |
+| S4 | 按钮位置：从 `toolbar_buttons()`（右）移到 `title()` 最左 | ✅ 已实现并交付 |
+| S5 | 人工验收（含开放问题 1：文件树是否可接受被遮） | ⬜ 待用户跑 `docs/ACCEPTANCE.md` §14 |

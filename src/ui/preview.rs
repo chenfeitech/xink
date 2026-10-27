@@ -6,7 +6,7 @@ use std::time::Instant;
 use gpui_kit::base::Theme as BaseTheme;
 use gpui_kit::base::{ScrollbarHandle, TextView, TextViewState, TextViewStyle};
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
-use gpui_kit::component::dock::{BasePanel, DockPlacement, Panel, PanelEvent};
+use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent, TabGroup};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::{ActiveTheme, IconName, Sizable};
 use gpui_kit::*;
@@ -49,6 +49,8 @@ pub struct PreviewPanel {
     last_scroll_y: Pixels,
     /// 有滚动发生过、但还没同步出去（"停止后对齐"模式下用）
     pending_push: bool,
+    /// 自己所在的 tab group：伸展按钮靠它触发 zoom（`on_added_to` 里拿到）
+    group: Option<WeakEntity<TabGroup>>,
     /// 帧计数：实时模式下推送降频用
     sync_tick: u8,
     /// 实时模式下最近一次推送出去的锚点（死区判定）
@@ -78,6 +80,7 @@ impl PreviewPanel {
             gesture: GestureGuard::default(),
             last_scroll_y: px(0.),
             pending_push: true,
+            group: None,
             sync_tick: 0,
             last_pushed: None,
             last_content_h: px(0.),
@@ -496,6 +499,16 @@ impl BasePanel for PreviewPanel {
     fn panel_name(&self) -> &'static str {
         "PreviewPanel"
     }
+
+    /// 记住自己所在的 tab group：伸展按钮要靠它触发 zoom。
+    fn on_added_to(
+        &mut self,
+        group: WeakEntity<TabGroup>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.group = Some(group);
+    }
 }
 
 impl Panel for PreviewPanel {
@@ -504,7 +517,7 @@ impl Panel for PreviewPanel {
         let mut row = div().flex().items_center().gap_2();
 
         // 伸展按钮放**最左**（需求明确）：与编辑区右上角「折叠预览」左右呼应
-        if let Some(button) = extend_toggle_button(cx) {
+        if let Some(button) = extend_toggle_button(self.group.clone(), cx) {
             row = row.child(button);
         }
 
@@ -531,30 +544,40 @@ impl Panel for PreviewPanel {
     }
 }
 
-/// 预览区标题**左侧**的伸展按钮：折叠 / 展开编辑区（中间 dock）。
+/// 预览区标题**左侧**的伸展按钮：向左伸展遮蔽编辑区，再点恢复三栏。
 ///
-/// 与编辑区右上角那个「折叠预览」的按钮**同源**——都是
-/// `DockArea::toggle_dock`，只是折叠的 placement 不同：
-/// 那边折 `Right`（预览），这边折 `Center`（编辑）。
-/// 折叠中间 dock 后预览区向左伸展填补；再点即恢复（框架原生 toggle）。
+/// 走的是框架原生的 **zoom**：`TabGroup::toggle_zoom` 翻自己的 zoomed 标志
+/// 并发 `TabGroupEvent::ZoomIn/Out`，`DockArea` 收到后把整块区域换成这个
+/// group（`gpui-base-0.8.0/src/dock/dock_area.rs:1224`）。再点一次即回到三栏。
+///
+/// 为什么不是 `toggle_dock(DockPlacement::Center)`：中间区域不是 dock，
+/// `self.docks` 里根本没有 `Center` 这个键（`dock_area.rs:105-107`），
+/// `toggle_dock` 开头 `docks.get_mut` 直接返回，点了没反应。
 ///
 /// 为什么挂在 `title()` 里而不是 `toolbar_buttons()`：
 /// `toolbar_buttons` / `title_suffix` 都固定在标题栏 trailing（右侧），
 /// 框架没有左侧的自定义按钮入口
 /// （`gpui-component-0.8.0/src/dock/panel.rs:93-108`）。
-fn extend_toggle_button(cx: &mut Context<PreviewPanel>) -> Option<impl IntoElement> {
+fn extend_toggle_button(
+    group: Option<WeakEntity<TabGroup>>,
+    cx: &mut Context<PreviewPanel>,
+) -> Option<impl IntoElement> {
     let dock_area = cx.try_global::<AppState>()?.dock_area.clone();
-    let open = dock_area.read(cx).is_dock_open(DockPlacement::Center);
+    let group = group?.upgrade()?;
 
-    let icon = if open {
-        IconName::PanelLeft
-    } else {
+    // 状态直接问容器，不用回调：框架保证"填满了整块区域的 group"与它自己的
+    // zoomed 标志一致（`set_zoom` 只在容器接受后才记账，dock_area.rs:759）。
+    let zoomed = dock_area.read(cx).zoomed_group() == Some(group.read(cx).node());
+
+    let icon = if zoomed {
         IconName::PanelLeftOpen
-    };
-    let tooltip = if open {
-        "向左伸展：遮蔽编辑区，只留预览"
     } else {
-        "恢复：回到三栏布局"
+        IconName::PanelLeft
+    };
+    let tooltip = if zoomed {
+        "收起：回到三栏布局"
+    } else {
+        "向左伸展：遮蔽编辑区，只留预览"
     };
 
     Some(
@@ -570,9 +593,9 @@ fn extend_toggle_button(cx: &mut Context<PreviewPanel>) -> Option<impl IntoEleme
                     .icon(icon)
                     .tooltip(tooltip)
                     .on_click(cx.listener(move |_this, _, window, cx| {
-                        dock_area.update(cx, |area, cx| {
-                            area.toggle_dock(DockPlacement::Center, window, cx);
-                        });
+                        // zoom 是容器自己的动作，只能由 group 发起：
+                        // 它才知道当前显示的面板是否可缩放
+                        group.update(cx, |group, cx| group.toggle_zoom(window, cx));
                     })),
             ),
     )
