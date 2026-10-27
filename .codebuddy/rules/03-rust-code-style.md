@@ -1,5 +1,6 @@
 ---
 description: Rust 编码规范与错误处理约定。在编写或修改本项目任何 Rust 代码时遵守本规则。
+globs: ["src/**/*.rs", "tests/**/*.rs"]
 ---
 
 # Rust 编码规范
@@ -64,6 +65,8 @@ let note = load(path).context("加载笔记失败")?;
 - 测试名用 `should_xxx_when_xxx` 或在注释中写清场景
 - UI 交互测试用 `gpui::test` 宏 + `TestAppContext`
 - 涉及文件系统的测试用临时目录（`tempfile`），**绝不**污染真实用户目录
+- 测试**写什么、测到什么程度**见 `09-testing-standard.md`
+- **提交前必须跑的四条命令**（build / clippy / fmt / test）见 `07-quality-gates.md` G4
 
 ## 7. 依赖引入
 

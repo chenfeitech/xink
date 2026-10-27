@@ -2,10 +2,10 @@
 
 | 属性 | 内容 |
 |---|---|
-| 文档版本 | v1.0（待确认） |
+| 文档版本 | v1.1（已确认，进入落地） |
 | 创建日期 | 2026-10-27 |
 | 文档作者 | AI 自动生成（待人工复核） |
-| 状态 | 📝 **分析完成，待确认后落地** |
+| 状态 | ✅ **已确认**：M1 已落地待验收，M2–M4 待推进 |
 
 ---
 
@@ -386,7 +386,7 @@ docs/exec-plans/            【新增目录】<slug>.md —— 流水线状态�
 
 | 期 | 内容 | 可独立验证的产出 |
 |---|---|---|
-| **M1** | 补治理层：新建 `00-pipeline.md`、`07-quality-gates.md`（均 alwaysApply）；把现有 5 条 rules 的 frontmatter 补 `alwaysApply` 或 glob 触发条件 | 任意一句"加个功能"都能稳定触发流程规则 |
+| **M1** ✅ | 补治理层：新建 `00-pipeline.md`、`07-quality-gates.md`（均 alwaysApply）；把现有 5 条 rules 的 frontmatter 补 `alwaysApply` 或 glob 触发条件 | 任意一句"加个功能"都能稳定触发流程规则 |
 | **M2** | 补需求—设计环节：`08-artifacts.md` + `requirement-clarify` + `solution-design` + `rd-orchestrator` | 提一个真实需求，AI 能自主产出澄清问题与设计文档并停在 G2 等人确认 |
 | **M3** | 补计划—实施环节：`06-git-workflow.md` + `exec-plan` + `implement-task` + `docs/exec-plans/` | 设计确认后能拆任务、逐步实施、每步自校验 |
 | **M4** | 补测试—质量环节：`09-testing-standard.md` + `10-acceptance.md` + `test-verify` + `quality-review` | 交付时自动跑测试、出验收清单、回写 INDEX |
@@ -399,9 +399,9 @@ docs/exec-plans/            【新增目录】<slug>.md —— 流水线状态�
 
 | # | 类型 | 内容 |
 |---|---|---|
-| Q1 | **需拍板** | 状态文件放 `docs/exec-plans/` 还是复用 `docs/` 根？前者需新增目录并改 INDEX §14 归属规则 |
-| Q2 | **需拍板** | `00-pipeline` 与 `07-quality-gates` 常驻上下文（约 150 行），是否接受这份额外 token 开销？ |
-| Q3 | **需拍板** | 是否允许 AI 在缺陷修复场景跳过 G1/G2（`05-design-first` §3 已允许，`00-pipeline` 需确认继承） |
+| Q1 | ✅ 已拍板 | **采用 `docs/exec-plans/` 新目录**：已建目录 + `README.md` 模板，并改 `INDEX.md` §14 归属规则。rules 保持 `.codebuddy/rules/` 独立存放，不与 docs 混放 |
+| Q2 | ✅ 已拍板 | **接受**：`00-pipeline.md` 与 `07-quality-gates.md` 已设 `alwaysApply: true` |
+| Q3 | ✅ 已拍板 | **维持跳过 G1/G2**，按推荐加三条硬约束：① 改法唯一 + 改动 ≤1 模块 + 不涉及数据格式变更；② 事后补「现象 / 根因 / 改法」三行说明；③ **G4/G5/G6 永不豁免**。已写入 `00-pipeline.md` §4 |
 | Q4 | 风险 | 门禁是"AI 自评"，存在自我放水风险 → 缓解：G4 的四条命令结果必须**贴进状态文件**，可事后核对 |
 | Q5 | 风险 | rules 变多后加载冲突 → 缓解：单条 rule 控制在 80 行内，SOP 一律进 skill |
 | Q6 | 风险 | `docs/INDEX.md` 已承认文档会漂移 → 缓解：`08-artifacts` 强制"现状附代码行号"，`quality-review` 每次交付回写索引 |

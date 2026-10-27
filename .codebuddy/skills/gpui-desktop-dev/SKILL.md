@@ -5,6 +5,10 @@ description: 使用 GPUI / gpui-kit 开发 Rust 桌面应用的专家技能。�
 
 # GPUI 桌面应用开发
 
+> **流程位置**：流水线阶段 4 的**技术底座**，由 `implement-task` 按需加载
+> （编排见 `../rd-orchestrator/SKILL.md`，阶段定义见 `../../rules/00-pipeline.md`）。
+> 本技能只回答"GPUI 怎么写"，不负责流程与门禁。
+
 ## 角色
 
 GPUI / gpui-kit 桌面开发专家。GPUI 是 Zed 编辑器的 UI 框架，**pre-1.0、文档不全、版本间有 breaking change**，

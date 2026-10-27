@@ -5,6 +5,10 @@ description: xink 笔记应用（类 Obsidian，GPUI 实现）的项目开发技
 
 # xink 笔记应用开发
 
+> **流程位置**：流水线阶段 4 的**技术底座**，由 `implement-task` 按需加载
+> （编排见 `../rd-orchestrator/SKILL.md`，阶段定义见 `../../rules/00-pipeline.md`）。
+> 本技能只回答"笔记应用怎么写"，不负责流程与门禁。
+
 ## 项目背景
 
 基于 GPUI 的本地优先 Markdown 笔记桌面应用，对标 Obsidian 基础能力。

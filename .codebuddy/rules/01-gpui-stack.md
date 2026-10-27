@@ -1,5 +1,6 @@
 ---
 description: GPUI 技术栈与依赖管理的硬约束。在新建/修改 Cargo.toml、引入依赖、编写 GPUI 应用启动代码、使用任何 gpui 组件时，必须先遵守本规则。违反会直接导致编译失败。
+globs: ["**/Cargo.toml", "src/main.rs", "src/app.rs"]
 ---
 
 # GPUI 技术栈铁律

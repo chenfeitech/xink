@@ -1,6 +1,6 @@
 # 文档索引
 
-> `docs/` 共 55 份 Markdown，按领域分组如下。
+> `docs/` 共 57 份 Markdown，按领域分组如下。
 > **状态以当前 `src/` 代码为准**（核对日期 2026-10-26），不是文档自述。
 > 新增文档请按 §7 的命名约定命名，并回到本文件登记一行。
 
@@ -111,7 +111,7 @@
 | 文档 | 说明 | 状态 |
 |---|---|---|
 | [TESTS.md](./TESTS.md) | 测试规范：`tests/` 镜像 `src/`，用 `#[path]` 挂载 | ✅ 现状符合，规范仍有效 |
-| [ai-rd-pipeline-design.md](./ai-rd-pipeline-design.md) | AI 端到端研发流水线：rules（6 环节硬约束 + G1–G6 门禁）与 skills（7 个阶段 SOP + 元技能）的体系设计、协同机制与缺口分析 | 📝 **分析完成，待确认后落地**（M1–M4 分期） |
+| [ai-rd-pipeline-design.md](./ai-rd-pipeline-design.md) | AI 端到端研发流水线：rules（11 条，含 G1–G6 门禁）与 skills（9 个，含元技能）的体系设计、协同机制与缺口分析 | ✅ **M1–M4 已落地，待整体验收**：清单见 [ACCEPTANCE.md §13](./ACCEPTANCE.md)，执行计划见 [exec-plans/ai-rd-pipeline.md](./exec-plans/ai-rd-pipeline.md) |
 | [wechat-promo.md](./wechat-promo.md) | 公众号宣传文案 | 📄 非工程文档，不含需求或规范 |
 | `imgs/image.png` | 被 [README.md](../README.md) 引用的截图 | 保留 |
 
@@ -131,6 +131,7 @@
 |---|---|---|
 | 反链/标签面板的位置描述过时 | `index-panels-design.md` | 实际由 `ui/rail.rs` + `ui/drawer.rs` 承载 |
 | 部分 `ui/` 模块无对应测试 | `TESTS.md` | `tabs` / `preview` / `backlink` / `tags` / `search` / `drawer` / `rail` / `completion` / `vault_manager`（`settings` 已于 2026-10-26 补上描述表测试） |
+| ✅ ~~clippy 17 条 warning~~ **已清零** | [exec-plans/clippy-cleanup.md](./exec-plans/clippy-cleanup.md) | 2026-10-27 修完：`cargo clippy --all-targets` 剩 **1 条**——第三方 `block v0.1.6`（依赖树间接引入，本项目无法控制，记为 Won't fix，跟踪 `cargo tree -i block`）。附带修好一处**文档注释错位**：`ui/editor.rs` 中描述 `insert_at_cursor`（2309 行）的 doc comment 原本挂在 `selected_text` 上方 |
 
 ## 11. 待判断：清理与归档候选
 
@@ -175,7 +176,8 @@ docs/
 ├── preview/          预览与界面 5 份
 ├── config/           配置       5 份
 ├── ai/               AI 协助    8 份
-└── vault/            多库       1 份
+├── vault/            多库       1 份
+└── exec-plans/       执行计划   1 份（状态文件，随需求增长）
 ```
 
 **归属规则**
@@ -185,6 +187,10 @@ docs/
 3. **跨功能文档留根目录**：总纲、规范、总索引、跨功能计划不属于任何单一功能。
 4. **不复制、只引用**：涉及多个功能的文档只在其主功能文件夹存**一份**，
    关联关系通过本文档的「对应模块」列表达，避免多份副本内容漂移。
+5. **执行计划进 `exec-plans/`**：单个需求的流水线状态文件
+   `docs/exec-plans/<slug>.md` 单独存这里，既不进根目录也不进功能目录；
+   它是过程记录而非设计文档，功能交付且索引回写后即为归档候选
+   （约定见 [`exec-plans/README.md`](./exec-plans/README.md)）。
 5. **跨文件夹引用用相对路径**：同目录 `./x.md`，跨目录 `../<功能目录>/x.md`。
 
 **多归属文档的归属说明**

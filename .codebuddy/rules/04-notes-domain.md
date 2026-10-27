@@ -1,5 +1,6 @@
 ---
 description: 笔记应用（类 Obsidian）领域规则：磁盘真值、原子写盘、防抖保存、外部变更同步与索引约定。在实现 Vault/Note/索引/文件监听/保存相关功能时必须遵守。
+globs: ["src/core/vault.rs", "src/core/note.rs", "src/core/index.rs", "src/core/watcher.rs", "src/core/markdown.rs", "src/core/fs.rs"]
 ---
 
 # 笔记应用领域规则
