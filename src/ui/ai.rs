@@ -461,6 +461,11 @@ pub struct AiChat {
     tool_calls: usize,
     /// 兜底的"替换整篇 / 替换选中"是否已经点过一次确认
     confirm_apply: bool,
+    /// 「替换原文」是否已经点过一次确认
+    ///
+    /// 与 `confirm_apply` 分开记：共用一个的话，点「替换原文」会顺带把旁边
+    /// 「插入到光标处」的标签也变成"确认…"。
+    confirm_replace: bool,
 }
 
 impl AiChat {
@@ -508,6 +513,7 @@ impl AiChat {
             started: None,
             tool_calls: 0,
             confirm_apply: false,
+            confirm_replace: false,
         };
         if let Some(path) = note_path {
             this.switch_note(&path);
@@ -966,6 +972,8 @@ impl AiChat {
     fn finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.busy = false;
         self.task = None;
+        // 新一轮结果：上一轮点出来的"确认…"不该留到这一轮
+        self.confirm_replace = false;
         self.elapsed_ms = self.started.map(|t| t.elapsed().as_millis() as u64);
         let output = self
             .blocks
@@ -1177,6 +1185,22 @@ impl AiChat {
         self.notice = None;
         self.usage = None;
         cx.notify();
+    }
+
+    /// 「替换原文」：删掉整篇原文，把生成结果整段放上去
+    ///
+    /// 与评审条的「全部接受」不是一回事：那条只接受**能定位上的块**
+    /// （`editor.rs:1820` 只取 Pending），定位不上的会跳过，结果 ≠ AI 输出；
+    /// 这里是硬替换，结果严格等于 AI 输出。
+    ///
+    /// 走的是既有的 `ApplyKind::ReplaceWhole` 落盘路径（含写前快照），
+    /// 不新增写盘逻辑。
+    fn replace_whole(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_replace = false;
+        if let Some(pending) = self.pending.as_mut() {
+            pending.kind = ApplyKind::ReplaceWhole;
+        }
+        self.apply(window, cx);
     }
 
     /// 应用结果：先快照，再落到笔记
@@ -1585,26 +1609,53 @@ impl Render for AiChat {
             } else {
                 apply_button.primary()
             };
-            input_row = input_row
-                .child(apply_button.on_click(cx.listener(|this, _, window, cx| {
+            input_row =
+                input_row.child(apply_button.on_click(cx.listener(|this, _, window, cx| {
                     if this.needs_confirm() {
                         this.confirm_apply = true;
                         cx.notify();
                         return;
                     }
                     this.apply(window, cx);
-                })))
-                .child(
-                    Button::new("ai-drop")
+                })));
+
+            // 「替换原文」：整篇硬替换。只在当前落法**不是**替换整篇时出现
+            // ——那种情况下上面的 apply 按钮本身就已经是它了，不重复摆一个。
+            if kind != ApplyKind::ReplaceWhole {
+                input_row = input_row.child(
+                    Button::new("ai-replace-whole")
                         .small()
                         .ghost()
-                        .label("不采用")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.pending = None;
-                            this.confirm_apply = false;
-                            cx.notify();
+                        .label(if self.confirm_replace {
+                            "确认替换原文？"
+                        } else {
+                            "替换原文"
+                        })
+                        .tooltip("删除原文全部内容，用生成结果替换（改动前会先写快照）")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            // 删掉整篇是破坏性最大的操作，不一键直达
+                            if !this.confirm_replace {
+                                this.confirm_replace = true;
+                                cx.notify();
+                                return;
+                            }
+                            this.replace_whole(window, cx);
                         })),
                 );
+            }
+
+            input_row = input_row.child(
+                Button::new("ai-drop")
+                    .small()
+                    .ghost()
+                    .label("不采用")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.pending = None;
+                        this.confirm_apply = false;
+                        this.confirm_replace = false;
+                        cx.notify();
+                    })),
+            );
         }
 
         // ── 状态行 ──
