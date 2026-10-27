@@ -30,7 +30,7 @@ pub struct PreparedContext {
 pub fn estimate_tokens(text: &str) -> usize {
     let wide = text.chars().filter(|c| is_wide(*c)).count();
     let narrow = text.chars().count() - wide;
-    wide + (narrow + 3) / 4
+    wide + narrow.div_ceil(4)
 }
 
 fn is_wide(ch: char) -> bool {

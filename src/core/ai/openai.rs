@@ -165,16 +165,16 @@ fn frame_to_events(
         return;
     };
     let delta = &choice["delta"];
-    if let Some(text) = delta["content"].as_str() {
-        if !text.is_empty() {
-            out.push(StreamEvent::Delta(text.to_string()));
-        }
+    if let Some(text) = delta["content"].as_str()
+        && !text.is_empty()
+    {
+        out.push(StreamEvent::Delta(text.to_string()));
     }
     for key in ["reasoning", "reasoning_content"] {
-        if let Some(text) = delta[key].as_str() {
-            if !text.is_empty() {
-                out.push(StreamEvent::Thinking(text.to_string()));
-            }
+        if let Some(text) = delta[key].as_str()
+            && !text.is_empty()
+        {
+            out.push(StreamEvent::Thinking(text.to_string()));
         }
     }
     if let Some(calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {

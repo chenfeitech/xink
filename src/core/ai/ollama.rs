@@ -248,15 +248,15 @@ fn frame_to_events(line: &str, usage: &mut Usage, out: &mut Vec<StreamEvent>) {
         out.push(StreamEvent::Failed(AiError::Protocol(err.to_string())));
         return;
     }
-    if let Some(text) = value["message"]["content"].as_str() {
-        if !text.is_empty() {
-            out.push(StreamEvent::Delta(text.to_string()));
-        }
+    if let Some(text) = value["message"]["content"].as_str()
+        && !text.is_empty()
+    {
+        out.push(StreamEvent::Delta(text.to_string()));
     }
-    if let Some(text) = value["message"]["thinking"].as_str() {
-        if !text.is_empty() {
-            out.push(StreamEvent::Thinking(text.to_string()));
-        }
+    if let Some(text) = value["message"]["thinking"].as_str()
+        && !text.is_empty()
+    {
+        out.push(StreamEvent::Thinking(text.to_string()));
     }
     // 工具调用：Ollama 整帧给完整的 `tool_calls`（不像 OpenAI 那样分片），
     // 而且 `arguments` 是**对象**；统一成 JSON 文本给上层
