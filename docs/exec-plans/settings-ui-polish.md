@@ -35,6 +35,7 @@
 | T-5 | AI 5 个列表面板改用与元数据分组同款容器（密钥面板仍就地挂在模型行下） | T-3 | P2 | `src/ui/settings.rs` | G4 四连 + 人工 AC-11 | R-6 | ✅ |
 | T-6 | AI 模型分区：Ollama 独立区 + 其余按厂家（base_url 域名）分列；模型行改两行（主行 + 能力小字）；操作列定宽 340 右对齐 | T-5 | P1 | `src/ui/settings.rs`、`tests/ui/settings.rs` | 新增加 3 条单测 + G4 四连 + 人工 AC-15 | R-8 / R-9 / R-10 | ✅ |
 | T-7 | 快捷动作：提示词移到名称下一行（预览截断 100 字）；「编辑」改行内就地编辑（保存 / 取消在这一行），底部表单只管新增 | T-5 | P1 | `src/ui/settings.rs`、`tests/ui/settings.rs` | 新增 1 条单测 + G4 四连 + 人工 AC-17 | R-11 / R-12 | ✅ |
+| T-8 | 编辑区改上下两行（名称 / 提示词），提示词换多行文本域（h 120），新增表单同步 | T-7 | P1 | `src/ui/settings.rs` | G4 四连 + 人工 AC-18 | R-13 | ✅ |
 
 （计划阶段填充）
 
@@ -124,6 +125,20 @@ cargo fmt --check          : no diff
 cargo test                 : 623 passed, 0 failed, 3 ignored（新增 truncate_chars 单测）
 git diff --stat            : src/ui/settings.rs +121-25、tests/ui/settings.rs +11（与计划一致）
 ```
+
+### T-8 提交前（2026-10-28）
+
+```text
+cargo build                : Finished，0 warning
+cargo clippy --all-targets : 0 warning
+cargo fmt --check          : no diff
+cargo test                 : 623 passed, 0 failed, 3 ignored
+git diff --stat            : src/ui/settings.rs +73-42（与计划一致）
+```
+
+`action_prompt` 的类型从 `Entity<InputState>` 换成 `Entity<TextareaState>`
+（组件库里 `TextareaState = InputBaseState<TextareaMode>`，`new` / `set_value` /
+`value` / `placeholder` 与单行态共用，调用点不用改）。
 
 ## 偏差记录
 

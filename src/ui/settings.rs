@@ -16,7 +16,7 @@ use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariant, GroupBoxVariants};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::switch::Switch;
@@ -1412,7 +1412,8 @@ pub struct SettingsView {
     /// 编辑区当前是"新增"还是"改已有的一条"
     action_is_new: bool,
     action_name: Entity<InputState>,
-    action_prompt: Entity<InputState>,
+    /// 提示词：多行文本域（单行框装不下长提示词）
+    action_prompt: Entity<TextareaState>,
     /// 快捷动作区的提示 / 错误
     action_notice: Option<String>,
 }
@@ -1438,6 +1439,8 @@ mod layout {
     pub const MODEL_ACTION_W: f32 = 340.;
     /// 快捷动作行的操作列宽：一行五个按钮
     pub const ACTION_ROW_W: f32 = 260.;
+    /// 编辑表单里「名称 / 提示词」标签列宽：两行的输入框左边缘才对得齐
+    pub const FIELD_LABEL_W: f32 = 56.;
     /// 搜索无结果时的空态高度
     pub const EMPTY_H: f32 = 64.;
     /// 浮层高度：够放下大多数分类，超出部分由内容列滚动
@@ -1561,8 +1564,11 @@ impl SettingsView {
             cx.new(|cx| InputState::new(window, cx).placeholder("地址（留空用全局地址）"));
         let key_input = cx.new(|cx| InputState::new(window, cx).placeholder("API Key"));
         let action_name = cx.new(|cx| InputState::new(window, cx).placeholder("动作名，如 润色"));
-        let action_prompt = cx
-            .new(|cx| InputState::new(window, cx).placeholder("给模型的指令，可用 {{known_tags}}"));
+        // 提示词可能很长（几十上百字），用多行文本域而不是单行输入框：
+        // 单行框里长提示词要横向拖着看，改起来很难受
+        let action_prompt = cx.new(|cx| {
+            TextareaState::new(window, cx).placeholder("给模型的指令，可用 {{known_tags}}")
+        });
 
         let mut this = Self {
             tab: SettingsTab::Basic,
@@ -2033,7 +2039,7 @@ impl SettingsView {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .child(Input::new(&self.action_prompt).small()),
+                                .child(Textarea::new(&self.action_prompt).h(px(120.))),
                         ),
                 )
                 .child(
@@ -2315,53 +2321,78 @@ impl SettingsView {
     /// 改一条要跑到列表末尾去找输入框；现在就地在这一行改，
     /// 跟"点哪一行改哪一行"的表格编辑一个路子。
     fn render_action_editor(&mut self, cx: &mut Context<SettingsView>) -> Div {
+        let muted = cx.theme().muted_foreground;
         let id_for_save = self.action_edit_id.clone().unwrap_or_default();
+        let label = |text: &'static str| {
+            div()
+                .w(px(layout::FIELD_LABEL_W))
+                .text_xs()
+                .text_color(muted)
+                .child(text)
+        };
         div()
-            .flex()
-            .items_center()
+            .flex_col()
             .gap_2()
             .py_1()
-            .child(Input::new(&self.action_name).small().w(px(120.)))
+            // 上行：名称
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(Input::new(&self.action_prompt).small()),
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(label("名称"))
+                    .child(Input::new(&self.action_name).small().w(px(200.))),
+            )
+            // 下行：提示词（多行，给足高度）
+            .child(
+                div().flex().gap_2().child(label("提示词")).child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(Textarea::new(&self.action_prompt).h(px(120.))),
+                ),
             )
             .child(
-                Button::new("act-inline-save")
-                    .xsmall()
-                    .outline()
-                    .label("保存")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let name = this.action_name.read(cx).value().trim().to_string();
-                        let prompt = this.action_prompt.read(cx).value().trim().to_string();
-                        if name.is_empty() || prompt.is_empty() {
-                            this.action_notice = Some("名称与提示词都不能为空".into());
-                            cx.notify();
-                            return;
-                        }
-                        let id = id_for_save.clone();
-                        crate::app::update_config(cx, move |cfg| {
-                            if let Some(a) = cfg.ai.actions.iter_mut().find(|a| a.id == id) {
-                                a.name = name;
-                                a.prompt = prompt;
-                            }
-                        });
-                        this.action_edit_id = None;
-                        this.action_notice = Some("已保存".into());
-                    })),
-            )
-            .child(
-                Button::new("act-inline-cancel")
-                    .xsmall()
-                    .ghost()
-                    .label("取消")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.action_edit_id = None;
-                        this.action_notice = None;
-                        cx.notify();
-                    })),
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        Button::new("act-inline-save")
+                            .xsmall()
+                            .outline()
+                            .label("保存")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let name = this.action_name.read(cx).value().trim().to_string();
+                                let prompt = this.action_prompt.read(cx).value().trim().to_string();
+                                if name.is_empty() || prompt.is_empty() {
+                                    this.action_notice = Some("名称与提示词都不能为空".into());
+                                    cx.notify();
+                                    return;
+                                }
+                                let id = id_for_save.clone();
+                                crate::app::update_config(cx, move |cfg| {
+                                    if let Some(a) = cfg.ai.actions.iter_mut().find(|a| a.id == id)
+                                    {
+                                        a.name = name;
+                                        a.prompt = prompt;
+                                    }
+                                });
+                                this.action_edit_id = None;
+                                this.action_notice = Some("已保存".into());
+                            })),
+                    )
+                    .child(
+                        Button::new("act-inline-cancel")
+                            .xsmall()
+                            .ghost()
+                            .label("取消")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.action_edit_id = None;
+                                this.action_notice = None;
+                                cx.notify();
+                            })),
+                    ),
             )
     }
 
