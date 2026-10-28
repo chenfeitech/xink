@@ -15,6 +15,7 @@ use std::sync::OnceLock;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::dialog::DialogEntrance;
+use gpui_kit::component::group_box::{GroupBox, GroupBoxVariant, GroupBoxVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -1416,14 +1417,17 @@ pub struct SettingsView {
 /// 因此这里把每部分的行高固定下来，窗口高度即可按可见项数**精确计算**，
 /// 从而做到打开时贴合内容：既没有多余空白，也不会出现滚动条。
 mod layout {
-    pub const SIDEBAR_W: f32 = 160.;
-    pub const CONTENT_W: f32 = 560.;
+    pub const SIDEBAR_W: f32 = 180.;
+    pub const CONTENT_W: f32 = 660.;
     pub const SEARCH_H: f32 = 45.;
     pub const FOOTER_H: f32 = 48.;
-    /// 单个设置项行高（含上下内边距）
-    pub const ROW_H: f32 = 52.;
-    /// 分组标题行高
-    pub const GROUP_H: f32 = 32.;
+    /// 设置项行的**最小**高度
+    ///
+    /// 原来是固定行高 52：描述一长就被压到看不见。现在描述压到 20 字以内，
+    /// 这里只兜底——两行说明也能完整显示，行高由内容决定。
+    pub const ROW_MIN_H: f32 = 44.;
+    /// 控件列宽：所有控件在这一列里右对齐，行与行的控件左边缘才对得齐
+    pub const CONTROL_W: f32 = 240.;
     /// 搜索无结果时的空态高度
     pub const EMPTY_H: f32 = 64.;
     /// 浮层高度：够放下大多数分类，超出部分由内容列滚动
@@ -2942,6 +2946,14 @@ impl Render for SettingsView {
         // 同样要 `min_h_0`：否则这一列会被自己的内容撑到"内容高度"，
         // 滚动区就有等于内容的高度，滚不动（同上面对话框内容层的坑）。
         let mut content = div().flex_1().min_w_0().min_h_0().flex_col().px_4().py_2();
+        // 层级最上面一级：分类名。下面依次是分组标题（卡片）→ 设置项标题 → 说明
+        content = content.child(
+            div()
+                .text_lg()
+                .font_weight(FontWeight(600.))
+                .pb_2()
+                .child(self.tab.title()),
+        );
         // 快捷键那一页：16 项说明都一样，逐项重复一遍纯属噪音，提到页顶说一次
         if self.tab == SettingsTab::Keymap {
             content = content.child(
@@ -2952,24 +2964,29 @@ impl Render for SettingsView {
                     .child("留空即用默认键位；改动在下次启动后生效"),
             );
         }
-        let mut current_group = String::new();
+        // 先按分组切段（分组没有注册表，仍靠顺序推断：相邻同名的归为一段），
+        // 再把每段塞进一张 GroupBox 卡片——分组之间因此有了明确的边界与留白
+        let mut groups: Vec<(&str, Vec<&SettingField>)> = Vec::new();
         for field in &visible {
-            if field.group != current_group {
-                current_group = field.group.to_string();
-                content = content.child(
-                    div()
-                        // 固定行高，分组标题不随内容长短跳动
-                        .h(px(layout::GROUP_H))
-                        .flex()
-                        .items_center()
-                        .pt_2()
-                        .pb_1()
-                        .text_sm()
-                        .font_weight(FontWeight(600.))
-                        .child(field.group),
-                );
+            match groups.last_mut() {
+                Some((name, items)) if *name == field.group => items.push(field),
+                _ => groups.push((field.group, vec![field])),
             }
-            content = content.child(self.render_field(field, &cfg, cx));
+        }
+        for (name, items) in groups {
+            // 卡片标题：与设置项标题拉开一级（项标题 text_sm，说明 text_xs）
+            let title = div()
+                .text_sm()
+                .font_weight(FontWeight(600.))
+                .text_color(cx.theme().foreground)
+                .child(name);
+            let mut card = GroupBox::new()
+                .with_variant(GroupBoxVariant::Fill)
+                .title(title);
+            for field in items {
+                card = card.child(self.render_field(field, &cfg, cx));
+            }
+            content = content.child(div().pb_2().child(card));
         }
 
         if visible.is_empty() {
@@ -3080,8 +3097,8 @@ impl SettingsView {
         let control = (field.control)(self, cfg);
 
         let mut row = div()
-            // 固定行高：窗口高度按"可见项数 × 行高"精确计算，避免估算误差
-            .h(px(layout::ROW_H))
+            // 只兜底最小高度：说明压到 20 字后仍是两行也能完整显示
+            .min_h(px(layout::ROW_MIN_H))
             .flex()
             .items_center()
             .justify_between()
@@ -3130,7 +3147,16 @@ impl SettingsView {
         row = row.child(left);
 
         // 右：控件 + 单项重置
-        let mut right = div().flex_none().flex().items_center().gap_2();
+        //
+        // 固定列宽 + 右对齐：开关、分段按钮、下拉、步进器、输入框宽度各不相同，
+        // 不定宽就对不齐，整页控件会呈锯齿状
+        let mut right = div()
+            .flex_none()
+            .w(px(layout::CONTROL_W))
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap_2();
         match disabled_reason {
             Some(_) => {
                 // 依赖未满足：只展示当前值，不提供交互
