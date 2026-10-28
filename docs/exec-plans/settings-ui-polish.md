@@ -28,7 +28,11 @@
 
 | T-n | 内容 | 依赖 | 优先级 | 涉及文件 | 验收命令 | 关联 R-n | 状态 |
 |---|---|---|---|---|---|---|---|
-| T-1 | | — | P0 | | | R-1 | ⬜ |
+| T-1 | 分级与分类：`FieldTier` + `ADVANCED_IDS` 白名单；快捷键独立成 `SettingsTab::Keymap`；移除 `preview.debug_scroll_sync` 项 | — | P0 | `src/ui/settings.rs`、`tests/ui/settings.rs` | 新增 3 条测试 + G4 四连 | R-1 / R-2 / R-3 | ✅ |
+| T-2 | 描述精简：全部 desc ≤20 字；新增 `tip` 承载细节并挂 tooltip；keymap desc 同步；快捷键页顶部加「重启后生效」说明 | T-1 | P0 | `src/ui/settings.rs`、`src/core/keymap.rs` | 新增长度断言 + G4 四连 | R-4 | ⬜ |
+| T-3 | 视觉：`GroupBox` 卡片分组、三级层级、控件右列 240 右对齐、行高改 `min_h(44)`、窗口 160+660=840 | T-2 | P1 | `src/ui/settings.rs` | G4 四连 + 人工 AC-6 / AC-12 | R-5 | ⬜ |
+| T-4 | 「高级」受控折叠（`advanced_open`）+ 搜索命中自动展开与高亮 | T-1 | P1 | `src/ui/settings.rs` | G4 四连 + 人工 AC-7 / AC-8 | R-1 / R-7 | ⬜ |
+| T-5 | AI 6 个列表面板改用与元数据分组同款容器 | T-3 | P2 | `src/ui/settings.rs` | G4 四连 + 人工 AC-11 | R-6 | ⬜ |
 
 （计划阶段填充）
 
@@ -43,8 +47,20 @@
 
 ## 门禁命令输出摘要
 
-（实施阶段逐任务填充）
+### T-1 提交前（2026-10-28）
+
+```text
+cargo build                : Finished，0 warning（仅第三方 block v0.1.6 的 future-incompat 提示）
+cargo clippy --all-targets : 0 warning
+cargo fmt --check          : no diff
+cargo test                 : 618 passed, 0 failed, 3 ignored（新增 3 条：高级白名单一致 / keymap 归属 / debug 项缺席）
+git diff --stat            : src/ui/settings.rs +94-14、tests/ui/settings.rs +66-1（与计划一致）
+```
 
 ## 偏差记录
 
-（暂无）
+1. **快捷键分类图标**：设计写 `IconName::Keyboard`，实测 `gpui_component::IconName`
+   的兼容子集（`gpui-kit-assets/default-icons.txt`）里没有 keyboard，
+   改用 `IconName::SquareTerminal`，代码注释已注明。
+2. **`tip` 字段推迟到 T-2**：T-1 只引入 `tier`，`tip` 等描述精简时一起加，
+   否则会有 `field is never read` 警告（G4 要求 0 warning）。

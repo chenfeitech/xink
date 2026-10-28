@@ -53,10 +53,18 @@ pub enum SettingsTab {
     Editor,
     Preview,
     Ai,
+    /// 快捷键：16 项，原先混在「编辑器」里，独立成页（与 Obsidian 一致）
+    Keymap,
 }
 
 impl SettingsTab {
-    const ALL: [SettingsTab; 4] = [Self::Basic, Self::Editor, Self::Preview, Self::Ai];
+    const ALL: [SettingsTab; 5] = [
+        Self::Basic,
+        Self::Editor,
+        Self::Preview,
+        Self::Ai,
+        Self::Keymap,
+    ];
 
     fn title(self) -> &'static str {
         match self {
@@ -64,6 +72,7 @@ impl SettingsTab {
             SettingsTab::Editor => "编辑器",
             SettingsTab::Preview => "预览",
             SettingsTab::Ai => "AI",
+            SettingsTab::Keymap => "快捷键",
         }
     }
 
@@ -71,12 +80,16 @@ impl SettingsTab {
     ///
     /// 只取 `gpui_component::IconName` 的兼容子集（gpui-kit 内置图标清单），
     /// 不引项目外的图标资源。
+    ///
+    /// 注：这套子集清单（`gpui-kit-assets/default-icons.txt`）里**没有 keyboard**，
+    /// 因此快捷键页借用 square-terminal；哪天换成完整图标集再改回 Keyboard。
     fn icon(self) -> IconName {
         match self {
             SettingsTab::Basic => IconName::Settings,
             SettingsTab::Editor => IconName::FileText,
             SettingsTab::Preview => IconName::Eye,
             SettingsTab::Ai => IconName::Replace,
+            SettingsTab::Keymap => IconName::SquareTerminal,
         }
     }
 }
@@ -92,6 +105,19 @@ pub enum FieldKind {
     Font,
     /// 自由文本（base_url / keep_alive 这类无法枚举的值）
     Text,
+}
+
+/// 使用频率分层
+///
+/// `Advanced` 的项收进「高级」区（默认折叠），**不是删除**：配置照常生效、
+/// 搜索照样能定位。分层只存在于代码里，不写进 `config.json`——免得旧配置
+/// 带着一份过期的分层信息。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FieldTier {
+    /// 高频：主视图直接可见
+    Core,
+    /// 低频：收进「高级」
+    Advanced,
 }
 
 /// 控件构造函数。
@@ -139,6 +165,8 @@ pub struct SettingField {
     pub control: ControlFn,
     /// 输入框的占位提示：留空时显示什么（快捷键项用它显示默认键位）
     pub placeholder: &'static str,
+    /// 使用频率分层：决定它出现在主视图还是「高级」里
+    pub tier: FieldTier,
 }
 
 // ── 描述表的构造器（消除逐项重复代码） ──────────────────────────
@@ -188,6 +216,9 @@ fn bool_field(
         text_set: Rc::new(|_, _| {}),
         control,
         placeholder: "",
+        // 默认核心；要挪进「高级」的项在 `all_fields()` 末尾统一标注
+        // （见 `ADVANCED_IDS`），构造器签名保持不变
+        tier: FieldTier::Core,
     }
 }
 
@@ -233,6 +264,9 @@ fn choice_field(
         text_set: Rc::new(|_, _| {}),
         control,
         placeholder: "",
+        // 默认核心；要挪进「高级」的项在 `all_fields()` 末尾统一标注
+        // （见 `ADVANCED_IDS`），构造器签名保持不变
+        tier: FieldTier::Core,
     }
 }
 
@@ -273,6 +307,9 @@ fn number_field(
         text_set: Rc::new(|_, _| {}),
         control,
         placeholder: "",
+        // 默认核心；要挪进「高级」的项在 `all_fields()` 末尾统一标注
+        // （见 `ADVANCED_IDS`），构造器签名保持不变
+        tier: FieldTier::Core,
     }
 }
 
@@ -325,6 +362,9 @@ fn text_field(
         text_set: set,
         control,
         placeholder: "",
+        // 默认核心；要挪进「高级」的项在 `all_fields()` 末尾统一标注
+        // （见 `ADVANCED_IDS`），构造器签名保持不变
+        tier: FieldTier::Core,
     }
 }
 
@@ -877,16 +917,6 @@ fn all_fields() -> Vec<SettingField> {
                 };
             },
         ),
-        bool_field(
-            "preview.debug_scroll_sync",
-            "显示同步调试信息",
-            "在预览面板标题显示两端当前的源码行号与偏差（排查滚动同步用）",
-            Preview,
-            "同步",
-            None,
-            |c| c.preview.debug_scroll_sync,
-            |c, v| c.preview.debug_scroll_sync = v,
-        ),
         // ── AI · 连接 ──
         bool_field(
             "ai.enabled",
@@ -1012,8 +1042,40 @@ fn all_fields() -> Vec<SettingField> {
     .into_iter()
     // 快捷键：每个可绑定动作一项，表里在 `core/keymap.rs`
     .chain(keymap_fields())
+    // 分层放在最后统一打标：57 项的调用处一行不用动，
+    // 白名单一眼可比对，也正好是单测的断言依据
+    .map(|mut field| {
+        if ADVANCED_IDS.contains(&field.id) {
+            field.tier = FieldTier::Advanced;
+        }
+        field
+    })
     .collect()
 }
+
+/// 收进「高级」的设置项（低频 / 专家向）
+///
+/// **只收纳、不删除**：配置字段与已存的值都还在，搜索照样能定位到。
+/// 与需求文档 `docs/config/settings-ui-polish-requirements.md` §3.1 的表一一对应，
+/// 增删本表必须同步 `tests/ui/settings.rs` 的白名单断言（它就是照这张表写的）。
+pub const ADVANCED_IDS: &[&str] = &[
+    "basic.icon_size",
+    "basic.tree_font.family",
+    "basic.tree_font.line_height",
+    "basic.tree_font.weight",
+    "editor.font.line_height",
+    "editor.font.weight",
+    "editor.data_file.indent",
+    "editor.data_file.max_format_bytes",
+    "preview.font.line_height",
+    "preview.font.weight",
+    "preview.max_width",
+    "ai.ollama.keep_alive",
+    "ai.ollama.num_ctx",
+    "ai.timeout_secs",
+    "ai.max_context_chars",
+    "ai.max_steps",
+];
 
 /// 快捷键设置项：一个动作一行
 ///
@@ -1029,7 +1091,7 @@ fn keymap_fields() -> Vec<SettingField> {
                 binding.id,
                 binding.label,
                 binding.desc,
-                SettingsTab::Editor,
+                SettingsTab::Keymap,
                 "快捷键",
                 move |c: &AppConfig| c.editor.keymap.get(action).cloned().unwrap_or_default(),
                 move |c: &mut AppConfig, v: String| {
@@ -2738,11 +2800,17 @@ impl Render for SettingsView {
         }
 
         let query = self.query.trim().to_lowercase();
-        let visible: Vec<&SettingField> = fields
+        let mut visible: Vec<&SettingField> = fields
             .iter()
             .filter(|f| f.tab == self.tab)
             .filter(|f| query.is_empty() || matches_query(f, &query))
             .collect();
+        // 同一分组内核心项在前、高级项在后（`sort_by_key` 稳定，同级保持表内顺序）。
+        // 分组标题还是按 group 字符串推断，所以跨分组的相对顺序不受影响。
+        visible.sort_by_key(|f| match f.tier {
+            FieldTier::Core => 0,
+            FieldTier::Advanced => 1,
+        });
 
         // ── 左侧分类 ──
         //

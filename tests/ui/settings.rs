@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use super::{FieldKind, all_fields};
+use super::{ADVANCED_IDS, FieldKind, FieldTier, SettingsTab, all_fields};
 use crate::core::config::AppConfig;
 
 /// 描述表里的每一段命名空间（`id` 的第一段）
@@ -136,5 +136,69 @@ fn unavailable_fields_match_the_documented_set() {
     assert_eq!(
         marked, known,
         "⚠ 暂未生效项发生变化：需同步 docs/INDEX.md §10 与 config-wiring-design.md"
+    );
+}
+
+/// 收进「高级」的项必须与白名单逐条对上
+///
+/// 分级表在需求文档 §3.1，白名单在 `ADVANCED_IDS`。两边任一处改动而另一处没跟，
+/// 就会出现"文档说收起来了、界面上还摊着"这类偏差，所以用测试锁死。
+#[test]
+fn advanced_fields_match_the_documented_whitelist() {
+    let marked: HashSet<&str> = all_fields()
+        .iter()
+        .filter(|field| field.tier == FieldTier::Advanced)
+        .map(|field| field.id)
+        .collect();
+    let documented: HashSet<&str> = ADVANCED_IDS.iter().copied().collect();
+
+    // 写错 id 的表现是"这一项永远收不进高级"，集合比较抓不到，单独查一次
+    for id in ADVANCED_IDS {
+        assert!(
+            all_fields().iter().any(|field| field.id == *id),
+            "白名单里的 {id} 在描述表里不存在（id 写错了？）"
+        );
+    }
+    assert_eq!(
+        marked, documented,
+        "高级项与 ADVANCED_IDS 不一致：改了一边忘了另一边"
+    );
+}
+
+/// 快捷键独立成分类：16 项都在「快捷键」，且「编辑器」里不再混着它们
+#[test]
+fn keymap_fields_live_in_their_own_tab() {
+    let keymap_count = all_fields()
+        .iter()
+        .filter(|field| field.id.starts_with("editor.keymap."))
+        .count();
+    assert!(keymap_count > 0, "快捷键项不应为空（绑定表没接上？）");
+
+    for field in all_fields() {
+        if field.id.starts_with("editor.keymap.") {
+            assert!(
+                field.tab == SettingsTab::Keymap,
+                "{} 应归到「快捷键」分类",
+                field.id
+            );
+        } else {
+            assert!(
+                field.tab != SettingsTab::Keymap,
+                "{} 不是快捷键却被放进「快捷键」分类",
+                field.id
+            );
+        }
+    }
+}
+
+/// 排查用的 debug 项不给入口（配置字段保留，旧 `config.json` 里的值照旧生效）
+#[test]
+fn debug_only_field_has_no_settings_entry() {
+    let present = all_fields()
+        .iter()
+        .any(|field| field.id == "preview.debug_scroll_sync");
+    assert!(
+        !present,
+        "preview.debug_scroll_sync 是排查用的调试开关，不该出现在设置界面"
     );
 }
