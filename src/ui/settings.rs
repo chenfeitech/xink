@@ -28,8 +28,8 @@ use crate::core::ai::keychain::SecretStore;
 use crate::core::ai::skills;
 use crate::core::config::{
     AiActionApply, AiActionConfig, AiActionScope, AiProviderKind, AiScenario, AppConfig,
-    FontWeight, ImageDisplay, KeySource, LinkOpen, OutputLang, PreviewDensity, ScrollSyncMode,
-    ThemeMode, builtin_actions,
+    FontWeight, ImageDisplay, KeySource, LinkOpen, ModelEntry, OutputLang, PreviewDensity,
+    ScrollSyncMode, ThemeMode, builtin_actions,
 };
 use crate::core::keymap;
 use crate::core::theme::PRESET_THEMES;
@@ -1434,6 +1434,8 @@ mod layout {
     pub const ROW_MIN_H: f32 = 44.;
     /// 控件列宽：所有控件在这一列里右对齐，行与行的控件左边缘才对得齐
     pub const CONTROL_W: f32 = 240.;
+    /// 模型行的操作列宽：一行六个按钮，定宽才能让上下各行对齐
+    pub const MODEL_ACTION_W: f32 = 340.;
     /// 搜索无结果时的空态高度
     pub const EMPTY_H: f32 = 64.;
     /// 浮层高度：够放下大多数分类，超出部分由内容列滚动
@@ -1443,6 +1445,88 @@ mod layout {
     pub fn window_width() -> f32 {
         SIDEBAR_W + CONTENT_W
     }
+}
+
+/// Ollama 单独一区；其余模型按厂家分区，归不到厂家的进「其他」
+const OLLAMA_VENDOR: &str = "Ollama";
+const OTHER_VENDOR: &str = "其他";
+
+/// 取 base_url 的域名：`https://api.deepseek.com/v1` → `api.deepseek.com`
+fn host_of(base_url: &str) -> String {
+    let raw = base_url.trim();
+    let no_scheme = raw
+        .strip_prefix("https://")
+        .or_else(|| raw.strip_prefix("http://"))
+        .unwrap_or(raw);
+    no_scheme
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+}
+
+/// 模型属于哪个厂家：**按 base_url 的域名归组**，不新增配置字段
+///
+/// `api.deepseek.com` → `deepseek`；没填地址（归不到厂家）的进「其他」。
+/// 返回 `(厂家名, 域名)`，域名用作分区的说明行。
+fn vendor_of(model: &ModelEntry) -> (String, String) {
+    let host = host_of(&model.base_url);
+    if host.is_empty() {
+        return (OTHER_VENDOR.to_string(), String::new());
+    }
+    let name = host
+        .strip_prefix("api.")
+        .unwrap_or(&host)
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    if name.is_empty() {
+        (OTHER_VENDOR.to_string(), host)
+    } else {
+        (name, host)
+    }
+}
+
+/// 128000 → `128k`，2_000_000 → `2M`
+fn compact_num(value: u32) -> String {
+    if value >= 1_000_000 {
+        format!("{}M", value / 1_000_000)
+    } else if value >= 1_000 {
+        format!("{}k", value / 1_000)
+    } else {
+        value.to_string()
+    }
+}
+
+/// 模型能力的一行小字：能力 + 上下文 + 工具结论 + 启用状态
+///
+/// 以前这些和模型名、按钮挤在同一行，挤不下就换行、一换行就对不齐；
+/// 现在单独一行，主行只留模型名与操作。
+fn capability_line(model: &ModelEntry) -> String {
+    let mut parts = Vec::new();
+    if !model.capabilities.is_empty() {
+        parts.push(model.capabilities.join(" / "));
+    }
+    if let Some(limit) = model.context_limit {
+        parts.push(format!("上下文 {}", compact_num(limit)));
+    }
+    // 能力是厂商声明的，tools_enabled 是连接测试实测的（设计 D5），分开说
+    if model.tools_enabled {
+        parts.push("工具调用已实测".into());
+    } else if model.capabilities.iter().any(|c| c == "tools") {
+        parts.push("工具调用待实测".into());
+    } else {
+        parts.push("不支持工具调用".into());
+    }
+    if !model.enabled {
+        parts.push("已停用".into());
+    }
+    parts.join(" · ")
 }
 
 impl SettingsView {
@@ -2025,284 +2109,78 @@ impl SettingsView {
     fn render_models(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
         let cfg = crate::app::config(cx);
         let muted = cx.theme().muted_foreground;
-        let primary = cx.theme().primary;
 
         let mut block = div()
             .flex_col()
             .gap_1()
             .child(div().text_sm().font_weight(FontWeight(600.)).child("模型"));
 
-        // ── 拉取 ──
-        let base_url = cfg.ai.ollama.base_url.clone();
-        block = block.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    Button::new("ai-fetch-models")
-                        .small()
-                        .outline()
-                        .label("从 Ollama 拉取")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            let base = base_url.clone();
-                            this.model_notice = Some("正在拉取…".into());
-                            let base_for_task = base.clone();
-                            let task = cx.background_spawn(async move {
-                                crate::core::ai::ollama::list_models(
-                                    &base_for_task,
-                                    std::time::Duration::from_secs(5),
-                                )
-                            });
-                            this.model_task =
-                                Some(cx.spawn_in(window, async move |this, window| {
-                                    let result = task.await;
-                                    _ = this.update_in(window, |this, _window, cx| {
-                                        match result {
-                                            Ok(models) => {
-                                                let count = models.len();
-                                                let cache = crate::core::ai::models::ModelCache {
-                                                    fetched_at_ms: crate::core::ai::models::now_ms(
-                                                    ),
-                                                    base_url: base.clone(),
-                                                    models,
-                                                };
-                                                let mut added = 0;
-                                                crate::app::update_config(cx, |cfg| {
-                                                    added = cache.merge_into(&mut cfg.ai.models);
-                                                });
-                                                this.model_notice = Some(format!(
-                                                    "拉取到 {count} 个模型，新增 {added} 个"
-                                                ));
-                                            }
-                                            Err(err) => {
-                                                this.model_notice = Some(err.message());
-                                            }
-                                        }
-                                        cx.notify();
-                                    });
-                                }));
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child("只更新上下文上限与能力，不会覆盖你改过的参数"),
-                ),
-        );
-
-        // ── 列表 ──
-        let models: Vec<(String, String, bool, bool, AiProviderKind)> = cfg
+        // ── 分区：Ollama 单独一区，其余按厂家各一区 ──
+        //
+        // 厂家从现有 base_url 推出来，不新增字段、不动 config.json：
+        // 填了地址就自动落到对应区，换厂家不用改数据结构。
+        let mut sections: Vec<(String, String, Vec<ModelEntry>)> = Vec::new();
+        sections.push((
+            "Ollama".to_string(),
+            "本地 Ollama，不需要密钥".to_string(),
+            cfg.ai
+                .models
+                .iter()
+                .filter(|m| m.kind == AiProviderKind::Ollama)
+                .cloned()
+                .collect(),
+        ));
+        let mut vendors: Vec<(String, String, Vec<ModelEntry>)> = Vec::new();
+        for model in cfg
             .ai
             .models
             .iter()
-            .map(|m| {
-                (
-                    m.id.clone(),
-                    m.capabilities.join("/"),
-                    m.enabled,
-                    m.id == cfg.ai.default_model,
-                    m.kind,
-                )
-            })
-            .collect();
-
-        if models.is_empty() {
-            block = block.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("还没有模型：点上面拉取，或在下面手动添加"),
-            );
-        }
-
-        for (id, caps, enabled, is_default, kind) in models {
-            let id_for_default = id.clone();
-            let id_for_toggle = id.clone();
-            let id_for_delete = id.clone();
-            let id_for_kind = id.clone();
-            let id_for_key = id.clone();
-            let id_for_probe = id.clone();
-            let mut row = div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap_2()
-                .py_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(if is_default {
-                            primary
-                        } else {
-                            cx.theme().foreground
-                        })
-                        .child(id.clone()),
-                )
-                .child(div().text_xs().text_color(muted).child(caps))
-                .child(
-                    Button::new(SharedString::from(format!("ai-default-{id}")))
-                        .small()
-                        .ghost()
-                        .label(if is_default {
-                            "当前默认"
-                        } else {
-                            "设为默认"
-                        })
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            let id = id_for_default.clone();
-                            crate::app::update_config(cx, move |cfg| cfg.ai.default_model = id);
-                        })),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("ai-toggle-{id}")))
-                        .small()
-                        .ghost()
-                        .label(if enabled { "停用" } else { "启用" })
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            let id = id_for_toggle.clone();
-                            crate::app::update_config(cx, move |cfg| {
-                                if let Some(m) = cfg.ai.models.iter_mut().find(|m| m.id == id) {
-                                    m.enabled = !m.enabled;
-                                }
-                            });
-                        })),
-                )
-                // 类型可改：从 Ollama 换成 OpenAI 兼容（或反过来）不用重建条目
-                .child(
-                    Button::new(SharedString::from(format!("ai-kind-{id}")))
-                        .xsmall()
-                        .ghost()
-                        .label(if kind == AiProviderKind::Ollama {
-                            "Ollama"
-                        } else {
-                            "OpenAI"
-                        })
-                        .tooltip("点击切换协议类型：云厂商（deepseek 等）用 OpenAI")
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            let id = id_for_kind.clone();
-                            crate::app::update_config(cx, move |cfg| {
-                                if let Some(m) = cfg.ai.models.iter_mut().find(|m| m.id == id) {
-                                    m.kind = match m.kind {
-                                        AiProviderKind::Ollama => AiProviderKind::OpenAiCompatible,
-                                        AiProviderKind::OpenAiCompatible => AiProviderKind::Ollama,
-                                    };
-                                }
-                            });
-                        })),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("ai-key-{id}")))
-                        .xsmall()
-                        .ghost()
-                        .label("密钥")
-                        .tooltip("设置这个模型的 API Key 从哪来、是什么")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            let id = id_for_key.clone();
-                            this.key_edit_id = Some(id.clone());
-                            this.key_notice = None;
-                            let current = crate::app::config(cx)
-                                .ai
-                                .models
-                                .iter()
-                                .find(|m| m.id == id)
-                                .map(|m| m.plain_key.clone())
-                                .unwrap_or_default();
-                            this.key_input
-                                .update(cx, |input, cx| input.set_value(current, window, cx));
-                            // 本地状态变了必须自己 notify：改的不是配置，
-                            // 没有 `update_config` 兜底刷窗口
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("ai-delete-{id}")))
-                        .small()
-                        .ghost()
-                        .label("删除")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let id = id_for_delete.clone();
-                            crate::app::update_config(cx, move |cfg| {
-                                cfg.ai.models.retain(|m| m.id != id);
-                            });
-                            this.model_notice = Some("已删除".into());
-                        })),
-                )
-                // 连接测试：能力声明不可信（设计 D5），是否支持工具
-                // 只能靠一次真实探针来判断
-                .child(
-                    Button::new(SharedString::from(format!("ai-probe-{id}")))
-                        .small()
-                        .ghost()
-                        .label("测试")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            let id = id_for_probe.clone();
-                            let cfg = crate::app::config(cx);
-                            let Some(model) = cfg.ai.models.iter().find(|m| m.id == id).cloned()
-                            else {
-                                this.model_notice = Some("模型已不在列表中".into());
-                                return;
-                            };
-                            let ai = cfg.ai.clone();
-                            this.model_notice = Some(format!("正在测试 {id}…"));
-                            let task = cx.background_spawn(async move {
-                                crate::core::ai::probe::probe_model(&ai, &model)
-                            });
-                            this.model_task =
-                                Some(cx.spawn_in(window, async move |this, window| {
-                                    let result = task.await;
-                                    // 面板可能已经随设置窗口关掉了，拿不到就算了
-                                    _ = this.update_in(window, |this, _window, cx| {
-                                        let id_for_write = id.clone();
-                                        let tools = result.supports_tools;
-                                        crate::app::update_config(cx, move |cfg| {
-                                            if let Some(m) = cfg
-                                                .ai
-                                                .models
-                                                .iter_mut()
-                                                .find(|m| m.id == id_for_write)
-                                            {
-                                                m.tools_enabled = tools;
-                                                // 能力列表跟着探针结论走：
-                                                // 声明有但实际不支持的，要摘掉
-                                                m.capabilities.retain(|c| c != "tools");
-                                                if tools {
-                                                    m.capabilities.push("tools".into());
-                                                }
-                                                m.last_checked_ms =
-                                                    crate::core::ai::models::now_ms();
-                                            }
-                                        });
-                                        this.model_notice = Some(match result.error {
-                                            Some(err) => format!("{id}：{}", err.message()),
-                                            None => format!(
-                                                "{id}：{} {} ms{}",
-                                                if tools {
-                                                    "支持工具"
-                                                } else {
-                                                    "不支持工具"
-                                                },
-                                                result.elapsed_ms,
-                                                if tools {
-                                                    ""
-                                                } else {
-                                                    "（将按单轮使用）"
-                                                }
-                                            ),
-                                        });
-                                    });
-                                }));
-                        })),
-                );
-            let _ = &mut row;
-            block = block.child(row);
-            // 密钥面板就地展开在被点的这一行下面：挂到列表末尾会被长列表
-            // 顶到滚动视口外面，看着就像"点了没反应"
-            if self.key_edit_id.as_deref() == Some(id.as_str()) {
-                block = block.child(self.render_key_panel(cx));
+            .filter(|m| m.kind != AiProviderKind::Ollama)
+        {
+            let (name, host) = vendor_of(model);
+            match vendors.iter().position(|(n, _, _)| *n == name) {
+                Some(pos) => vendors[pos].2.push(model.clone()),
+                None => vendors.push((name, host, vec![model.clone()])),
             }
+        }
+        // 「其他」永远排最后，其余按厂家名排序
+        vendors.sort_by(|a, b| match (a.0.as_str(), b.0.as_str()) {
+            (OTHER_VENDOR, OTHER_VENDOR) => std::cmp::Ordering::Equal,
+            (OTHER_VENDOR, _) => std::cmp::Ordering::Greater,
+            (_, OTHER_VENDOR) => std::cmp::Ordering::Less,
+            _ => a.0.cmp(&b.0),
+        });
+        sections.extend(vendors);
+
+        for (title, desc, items) in sections {
+            let heading = div()
+                .text_sm()
+                .font_weight(FontWeight(600.))
+                .text_color(cx.theme().foreground)
+                .child(title.clone());
+            let mut section = GroupBox::new().title(heading);
+            section = section.child(div().text_xs().text_color(muted).child(desc.clone()));
+            if title == OLLAMA_VENDOR {
+                section = section.child(self.render_ollama_fetch(cx));
+            }
+            if items.is_empty() {
+                section = section.child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("还没有模型：点上面拉取，或在最下面手动添加"),
+                );
+            }
+            for model in &items {
+                let is_default = model.id == cfg.ai.default_model;
+                section = section.child(self.render_model_row(model, is_default, cx));
+                // 密钥面板就地展开在被点的这一行下面：挂到分区末尾会被长列表
+                // 顶到滚动视口外面，看着就像"点了没反应"
+                if self.key_edit_id.as_deref() == Some(model.id.as_str()) {
+                    section = section.child(self.render_key_panel(cx));
+                }
+            }
+            block = block.child(div().pb_2().child(section));
         }
 
         // ── 手动新增 ──
@@ -2389,6 +2267,274 @@ impl SettingsView {
         }
 
         block
+    }
+
+    /// Ollama 区的「从 Ollama 拉取」：本地模型列表只能从 Ollama 那边拿
+    fn render_ollama_fetch(&mut self, cx: &mut Context<SettingsView>) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let base_url = crate::app::config(cx).ai.ollama.base_url.clone();
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                Button::new("ai-fetch-models")
+                    .small()
+                    .outline()
+                    .label("从 Ollama 拉取")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let base = base_url.clone();
+                        this.model_notice = Some("正在拉取…".into());
+                        let base_for_task = base.clone();
+                        let task = cx.background_spawn(async move {
+                            crate::core::ai::ollama::list_models(
+                                &base_for_task,
+                                std::time::Duration::from_secs(5),
+                            )
+                        });
+                        this.model_task = Some(cx.spawn_in(window, async move |this, window| {
+                            let result = task.await;
+                            _ = this.update_in(window, |this, _window, cx| {
+                                match result {
+                                    Ok(models) => {
+                                        let count = models.len();
+                                        let cache = crate::core::ai::models::ModelCache {
+                                            fetched_at_ms: crate::core::ai::models::now_ms(),
+                                            base_url: base.clone(),
+                                            models,
+                                        };
+                                        let mut added = 0;
+                                        crate::app::update_config(cx, |cfg| {
+                                            added = cache.merge_into(&mut cfg.ai.models);
+                                        });
+                                        this.model_notice =
+                                            Some(format!("拉取到 {count} 个模型，新增 {added} 个"));
+                                    }
+                                    Err(err) => {
+                                        this.model_notice = Some(err.message());
+                                    }
+                                }
+                                cx.notify();
+                            });
+                        }));
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("只更新上下文上限与能力，不会覆盖你改过的参数"),
+            )
+    }
+
+    /// 单个模型：主行（模型名 + 操作）+ 下面一行能力小字
+    ///
+    /// 以前模型名、能力串、六个按钮全挤在一行，挤不下就换行，一换行就对不齐。
+    /// 现在主行只放名字，操作定宽右对齐；能力另起一行小字。
+    fn render_model_row(
+        &mut self,
+        model: &ModelEntry,
+        is_default: bool,
+        cx: &mut Context<SettingsView>,
+    ) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let primary = cx.theme().primary;
+        let id = model.id.clone();
+        let id_for_default = id.clone();
+        let id_for_toggle = id.clone();
+        let id_for_delete = id.clone();
+        let id_for_kind = id.clone();
+        let id_for_key = id.clone();
+        let id_for_probe = id.clone();
+        let enabled = model.enabled;
+        let kind = model.kind;
+
+        let mut actions = div()
+            .flex_none()
+            .w(px(layout::MODEL_ACTION_W))
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap_1();
+        actions = actions
+            .child(
+                Button::new(SharedString::from(format!("ai-default-{id}")))
+                    .xsmall()
+                    .ghost()
+                    .label(if is_default {
+                        "当前默认"
+                    } else {
+                        "设为默认"
+                    })
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let id = id_for_default.clone();
+                        crate::app::update_config(cx, move |cfg| cfg.ai.default_model = id);
+                    })),
+            )
+            .child(
+                Button::new(SharedString::from(format!("ai-toggle-{id}")))
+                    .xsmall()
+                    .ghost()
+                    .label(if enabled { "停用" } else { "启用" })
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let id = id_for_toggle.clone();
+                        crate::app::update_config(cx, move |cfg| {
+                            if let Some(m) = cfg.ai.models.iter_mut().find(|m| m.id == id) {
+                                m.enabled = !m.enabled;
+                            }
+                        });
+                    })),
+            )
+            .child(
+                Button::new(SharedString::from(format!("ai-kind-{id}")))
+                    .xsmall()
+                    .ghost()
+                    .label(if kind == AiProviderKind::Ollama {
+                        "Ollama"
+                    } else {
+                        "OpenAI"
+                    })
+                    .tooltip("点击切换协议类型：云厂商（deepseek 等）用 OpenAI")
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let id = id_for_kind.clone();
+                        crate::app::update_config(cx, move |cfg| {
+                            if let Some(m) = cfg.ai.models.iter_mut().find(|m| m.id == id) {
+                                m.kind = match m.kind {
+                                    AiProviderKind::Ollama => AiProviderKind::OpenAiCompatible,
+                                    AiProviderKind::OpenAiCompatible => AiProviderKind::Ollama,
+                                };
+                            }
+                        });
+                    })),
+            )
+            .child(
+                Button::new(SharedString::from(format!("ai-key-{id}")))
+                    .xsmall()
+                    .ghost()
+                    .label("密钥")
+                    .tooltip("设置这个模型的 API Key 从哪来、是什么")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let id = id_for_key.clone();
+                        this.key_edit_id = Some(id.clone());
+                        this.key_notice = None;
+                        let current = crate::app::config(cx)
+                            .ai
+                            .models
+                            .iter()
+                            .find(|m| m.id == id)
+                            .map(|m| m.plain_key.clone())
+                            .unwrap_or_default();
+                        this.key_input
+                            .update(cx, |input, cx| input.set_value(current, window, cx));
+                        // 本地状态变了必须自己 notify：改的不是配置，
+                        // 没有 `update_config` 兜底刷窗口
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new(SharedString::from(format!("ai-delete-{id}")))
+                    .xsmall()
+                    .ghost()
+                    .label("删除")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let id = id_for_delete.clone();
+                        crate::app::update_config(cx, move |cfg| {
+                            cfg.ai.models.retain(|m| m.id != id);
+                        });
+                        this.model_notice = Some("已删除".into());
+                    })),
+            )
+            // 连接测试：能力声明不可信（设计 D5），是否支持工具
+            // 只能靠一次真实探针来判断
+            .child(
+                Button::new(SharedString::from(format!("ai-probe-{id}")))
+                    .xsmall()
+                    .ghost()
+                    .label("测试")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let id = id_for_probe.clone();
+                        let cfg = crate::app::config(cx);
+                        let Some(model) = cfg.ai.models.iter().find(|m| m.id == id).cloned() else {
+                            this.model_notice = Some("模型已不在列表中".into());
+                            return;
+                        };
+                        let ai = cfg.ai.clone();
+                        this.model_notice = Some(format!("正在测试 {id}…"));
+                        let task = cx.background_spawn(async move {
+                            crate::core::ai::probe::probe_model(&ai, &model)
+                        });
+                        this.model_task = Some(cx.spawn_in(window, async move |this, window| {
+                            let result = task.await;
+                            // 面板可能已经随设置窗口关掉了，拿不到就算了
+                            _ = this.update_in(window, |this, _window, cx| {
+                                let id_for_write = id.clone();
+                                let tools = result.supports_tools;
+                                crate::app::update_config(cx, move |cfg| {
+                                    if let Some(m) =
+                                        cfg.ai.models.iter_mut().find(|m| m.id == id_for_write)
+                                    {
+                                        m.tools_enabled = tools;
+                                        // 能力列表跟着探针结论走：
+                                        // 声明有但实际不支持的，要摘掉
+                                        m.capabilities.retain(|c| c != "tools");
+                                        if tools {
+                                            m.capabilities.push("tools".into());
+                                        }
+                                        m.last_checked_ms = crate::core::ai::models::now_ms();
+                                    }
+                                });
+                                this.model_notice = Some(match result.error {
+                                    Some(err) => format!("{id}：{}", err.message()),
+                                    None => format!(
+                                        "{id}：{} {} ms{}",
+                                        if tools {
+                                            "支持工具"
+                                        } else {
+                                            "不支持工具"
+                                        },
+                                        result.elapsed_ms,
+                                        if tools {
+                                            ""
+                                        } else {
+                                            "（将按单轮使用）"
+                                        }
+                                    ),
+                                });
+                                cx.notify();
+                            });
+                        }));
+                    })),
+            );
+
+        div()
+            .flex_col()
+            .py_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(if is_default {
+                                primary
+                            } else {
+                                cx.theme().foreground
+                            })
+                            .child(id.clone()),
+                    )
+                    .child(actions),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .pt_1()
+                    .text_color(muted)
+                    .child(capability_line(model)),
+            )
     }
 
     /// 单个模型的密钥面板：来源轮换 + 写入 / 清除

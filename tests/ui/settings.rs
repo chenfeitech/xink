@@ -11,7 +11,8 @@
 use std::collections::HashSet;
 
 use super::{ADVANCED_IDS, FieldKind, FieldTier, SettingsTab, all_fields};
-use crate::core::config::AppConfig;
+use super::{capability_line, compact_num, vendor_of};
+use crate::core::config::{AiProviderKind, AppConfig, ModelEntry};
 
 /// 描述表里的每一段命名空间（`id` 的第一段）
 ///
@@ -204,6 +205,69 @@ fn descriptions_are_short_enough() {
         too_long.is_empty(),
         "说明超过 20 字：{}",
         too_long.join("、")
+    );
+}
+
+/// 厂家归组只认 base_url 的域名：换厂家不用改数据结构，
+/// 填了地址就自动落到对应区
+#[test]
+fn vendor_grouping_uses_base_url_host() {
+    let model = |base_url: &str| ModelEntry {
+        id: "m".into(),
+        kind: AiProviderKind::OpenAiCompatible,
+        base_url: base_url.into(),
+        ..Default::default()
+    };
+
+    let (name, host) = vendor_of(&model("https://api.deepseek.com/v1"));
+    assert_eq!(name, "deepseek");
+    assert_eq!(host, "api.deepseek.com");
+
+    // 带端口、大写、带路径都归一
+    assert_eq!(
+        vendor_of(&model("http://LOCALHOST:11434/v1")).0,
+        "localhost"
+    );
+    // 没填地址 → 归不进任何厂家
+    assert_eq!(vendor_of(&model("")).0, "其他");
+    assert_eq!(vendor_of(&model("   ")).0, "其他");
+}
+
+/// 128000 → 128k：能力小字里塞原始数字太长
+#[test]
+fn compact_num_uses_k_and_m() {
+    assert_eq!(compact_num(512), "512");
+    assert_eq!(compact_num(128_000), "128k");
+    assert_eq!(compact_num(2_000_000), "2M");
+}
+
+/// 能力小字：能力 + 上下文 + 工具结论，且工具分"声明"与"实测"
+#[test]
+fn capability_line_lists_context_and_tools() {
+    let mut model = ModelEntry {
+        id: "m".into(),
+        capabilities: vec!["chat".into(), "tools".into()],
+        context_limit: Some(128_000),
+        ..Default::default()
+    };
+    // 声明有 tools 但没测过 → 待实测
+    assert_eq!(
+        capability_line(&model),
+        "chat / tools · 上下文 128k · 工具调用待实测"
+    );
+
+    model.tools_enabled = true;
+    assert_eq!(
+        capability_line(&model),
+        "chat / tools · 上下文 128k · 工具调用已实测"
+    );
+
+    model.capabilities = vec!["chat".into()];
+    model.tools_enabled = false;
+    model.enabled = false;
+    assert_eq!(
+        capability_line(&model),
+        "chat · 上下文 128k · 不支持工具调用 · 已停用"
     );
 }
 
