@@ -32,8 +32,6 @@ use crate::core::ai::keychain::{MacKeychain, resolve_api_key};
 /// 库级任务的计划面板（M3-P1）
 pub mod plan;
 
-use crate::core::ai::ollama::OllamaProvider;
-use crate::core::ai::openai::OpenAiProvider;
 use crate::core::ai::skills;
 use crate::core::ai::snapshot::write_snapshot;
 use crate::core::ai::tools::ToolHost;
@@ -41,15 +39,13 @@ use crate::core::ai::verify::LinkIndex;
 use crate::core::ai::{
     AiError, ChatMessage, CompletionRequest, Provider, Role, StreamEvent, Usage,
 };
-use crate::core::config::AiProviderKind;
-use crate::core::config::{AiActionApply, AiActionConfig, AiActionScope};
+use crate::core::config::{AiActionApply, AiActionConfig, AiActionScope, AiScenario, ModelEntry};
 use crate::core::index::{IndexSnapshot, LinkRef, Resolution};
 use crate::core::search::{Hit, search_files};
 use crate::state::ai_sessions::{self, StoredBlock};
 use crate::state::workspace::app_data_dir;
 
 /// 等待首个响应字节的预算（Ollama 冷启动实测数秒）
-const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(30);
 /// 对话区最大高度：超过就让对话区自己滚，编辑区不被压扁
 ///
 /// 180 太小：一轮问答就撑满，更早的轮次全在视口外，看起来像"只有一轮"。
@@ -528,11 +524,36 @@ impl AiChat {
         self.input.update(cx, |state, cx| state.focus(window, cx));
     }
 
-    fn model_id(&self, cx: &App) -> String {
+    /// 本次请求的上下文字符预算：全局上限与模型窗口取小者
+    ///
+    /// 只看全局配置会让小窗口模型吃到超长上下文（服务端截断或报错），
+    /// 所以模型已知窗口时以它为准。
+    fn context_budget(&self, cx: &App) -> usize {
         let cfg = config(cx);
-        self.model_override
-            .clone()
-            .unwrap_or_else(|| cfg.ai.default_model.clone())
+        let global = cfg.ai.max_context_chars;
+        match self.resolve_model(cx).and_then(|m| m.context_chars()) {
+            Some(limit) => global.min(limit),
+            None => global,
+        }
+    }
+
+    /// 本次请求用哪个模型
+    ///
+    /// 场景从 `self.mode` 推出来（对话 / 动作 / skill），再交给配置层统一解析——
+    /// 优先级与回落规则只在 `AiConfig::resolve_model` 一处，这里不重复实现。
+    fn resolve_model(&self, cx: &App) -> Option<ModelEntry> {
+        let cfg = config(cx);
+        let (scenario, action_model) = match &self.mode {
+            AiMode::Chat => (AiScenario::Chat, None),
+            AiMode::Action(id) => (
+                AiScenario::Action,
+                cfg.ai.action(id).and_then(|a| a.model.as_deref()),
+            ),
+            AiMode::Skill(_) => (AiScenario::Skill, None),
+        };
+        cfg.ai
+            .resolve_model(scenario, action_model, self.model_override.as_deref())
+            .cloned()
     }
 
     /// 取当前笔记的上下文（选中 / 整篇 / 光标）
@@ -583,13 +604,12 @@ impl AiChat {
             ApplyKind::ReplaceSelection
         };
 
-        let cfg = config(cx);
         let prepared = assemble(
             ContextScope::WholeNote,
             "",
             &whole,
             0,
-            cfg.ai.max_context_chars,
+            self.context_budget(cx),
         );
         self.notice = prepared.notice.clone();
         self.input_tokens = Some(crate::core::ai::estimate_tokens(&prepared.text));
@@ -650,7 +670,7 @@ impl AiChat {
             ContextScope::WholeNote
         };
         let cfg = config(cx);
-        let prepared = assemble(scope, &selection, &whole, cursor, cfg.ai.max_context_chars);
+        let prepared = assemble(scope, &selection, &whole, cursor, self.context_budget(cx));
         self.notice = prepared.notice.clone();
         self.input_tokens = Some(crate::core::ai::estimate_tokens(&prepared.text));
         // 落法同样由动作声明：Insert 是"往里加内容"，判成替换会删掉其余部分
@@ -729,7 +749,7 @@ impl AiChat {
             ContextScope::Selection
         };
         let cfg = config(cx);
-        let prepared = assemble(scope, &selection, &whole, cursor, cfg.ai.max_context_chars);
+        let prepared = assemble(scope, &selection, &whole, cursor, self.context_budget(cx));
         self.notice = prepared.notice.clone();
         self.input_tokens = Some(crate::core::ai::estimate_tokens(&prepared.text));
         // 落地方式由**结果**决定（`classify_and_record`）：与原文对得上就进
@@ -776,8 +796,7 @@ impl AiChat {
             );
             return;
         }
-        let model_id = self.model_id(cx);
-        let Some(model) = cfg.ai.models.iter().find(|m| m.id == model_id).cloned() else {
+        let Some(model) = self.resolve_model(cx) else {
             self.fail(AiError::NoModel, cx);
             return;
         };
@@ -787,15 +806,19 @@ impl AiChat {
             model: model.id.clone(),
             messages,
             params: model.params.clone(),
-            api_key: resolve_api_key(&cfg.ai, &model.id, &MacKeychain),
-            first_byte_timeout: FIRST_BYTE_TIMEOUT,
+            api_key: resolve_api_key(&model, &MacKeychain),
+            first_byte_timeout: Duration::from_secs(cfg.ai.first_byte_timeout_secs),
             silence_timeout: Duration::from_secs(cfg.ai.timeout_secs),
             // M1 的 loop 还没接上（P4 后半），这一轮先不带工具
             tools: Vec::new(),
         };
-        let provider: Arc<dyn Provider> = match model.kind {
-            AiProviderKind::Ollama => Arc::new(OllamaProvider),
-            AiProviderKind::OpenAiCompatible => Arc::new(OpenAiProvider),
+        // provider 从注册表取：新增 provider 不用改这里
+        let Ok(provider) = crate::core::ai::providers().resolve(model.kind) else {
+            self.fail(
+                AiError::Protocol(format!("未注册的 provider：{:?}", model.kind)),
+                cx,
+            );
+            return;
         };
 
         self.busy = true;
@@ -807,19 +830,26 @@ impl AiChat {
         self.started = Some(Instant::now());
         cx.notify();
 
+        // 工具循环有独立的场景路由：工具调用对模型要求不同（要支持 schema、
+        // 要能连续多轮），允许单独配一个更合适的模型。没配就用上面解析出来的。
+        let agent_model = cfg
+            .ai
+            .resolve_model(AiScenario::Agent, None, self.model_override.as_deref())
+            .cloned()
+            .unwrap_or_else(|| model.clone());
         // 走 agent loop 还是单轮，只看两件事：用户开了它、模型探针说支持工具。
         // 不满足就完全保持今天的行为（不带 schema、一轮出结果）。
-        if cfg.ai.agentic && model.tools_enabled {
+        if cfg.ai.agentic && agent_model.tools_enabled {
             let snapshot = cx
                 .try_global::<AppState>()
                 .map(|state| IndexSnapshot::new(state.notes.read(cx)))
                 .unwrap_or_default();
             // `messages` 已经移进上面的 request，从它这里取一份
             let loop_messages = request.messages.clone();
-            let endpoint = cfg.ai.endpoint_for(&model);
-            let model_id = model.id.clone();
-            let params = model.params.clone();
-            let api_key = resolve_api_key(&cfg.ai, &model.id, &MacKeychain);
+            let endpoint = cfg.ai.endpoint_for(&agent_model);
+            let model_id = agent_model.id.clone();
+            let params = agent_model.params.clone();
+            let api_key = resolve_api_key(&agent_model, &MacKeychain);
             let max_steps = cfg.ai.max_steps as u8;
             let max_tool_chars = cfg.ai.max_tool_chars;
             let silence = Duration::from_secs(cfg.ai.timeout_secs);
@@ -841,7 +871,7 @@ impl AiChat {
                     max_tool_chars,
                     host: &host,
                     index: Some(&host),
-                    first_byte_timeout: FIRST_BYTE_TIMEOUT,
+                    first_byte_timeout: Duration::from_secs(cfg.ai.first_byte_timeout_secs),
                     silence_timeout: silence,
                 };
                 let mut sink = |ev: LoopEvent| {
@@ -868,14 +898,52 @@ impl AiChat {
             return;
         }
 
+        // 备用模型：主用重试耗尽后才试，端点 / 密钥都按备用模型自己的配置重算
+        let fallback = if cfg.ai.fallback_model.trim().is_empty() {
+            None
+        } else {
+            cfg.ai
+                .models
+                .iter()
+                .find(|m| m.id == cfg.ai.fallback_model && m.enabled && m.id != model.id)
+                .cloned()
+        };
+        let fallback_request = fallback.as_ref().map(|m| CompletionRequest {
+            endpoint: cfg.ai.endpoint_for(m),
+            model: m.id.clone(),
+            messages: request.messages.clone(),
+            params: m.params.clone(),
+            api_key: resolve_api_key(m, &MacKeychain),
+            first_byte_timeout: request.first_byte_timeout,
+            silence_timeout: request.silence_timeout,
+            tools: Vec::new(),
+        });
         let (tx, rx) = flume::unbounded::<StreamEvent>();
         let cancel = self.cancel.clone();
+        let max_attempts = cfg.ai.retry.max_attempts;
+        let backoff_ms = cfg.ai.retry.backoff_ms;
         // provider 是阻塞的（同步 IO），必须放后台线程
         self.task = Some(cx.background_spawn(async move {
             let mut sink = |ev: StreamEvent| {
                 let _ = tx.send(ev);
             };
-            if let Err(err) = provider.stream(&request, cancel, &mut sink) {
+            // attempts 借用栈上的 request / fallback_request，因此在这里组装
+            let mut attempts: Vec<(&dyn Provider, &CompletionRequest)> =
+                vec![(provider.as_ref(), &request)];
+            // 备用 provider 要先提出来：`resolve` 的临时值活不过下面这行
+            let fallback_provider = fallback
+                .as_ref()
+                .and_then(|m| crate::core::ai::providers().resolve(m.kind).ok());
+            if let (Some(req), Some(p)) = (fallback_request.as_ref(), fallback_provider.as_ref()) {
+                attempts.push((p.as_ref(), req));
+            }
+            if let Err(err) = crate::core::ai::stream_with_failover(
+                &attempts,
+                cancel,
+                max_attempts,
+                backoff_ms,
+                &mut sink,
+            ) {
                 let _ = tx.send(StreamEvent::Failed(err));
             }
         }));
@@ -1286,7 +1354,11 @@ impl Render for AiChat {
         let primary = theme.primary;
         let warning = theme.warning;
         let cfg = config(cx);
-        let current_model = self.model_id(cx);
+        // 顶栏显示的是"这次请求实际会用哪个"，与路由结果保持一致
+        let current_model = self
+            .resolve_model(cx)
+            .map(|m| m.id)
+            .unwrap_or_else(|| cfg.ai.default_model.clone());
 
         // ── 顶栏：模型 + 清空 + 关闭 ──
         let models: Vec<(String, String)> = cfg

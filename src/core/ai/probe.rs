@@ -33,7 +33,7 @@ pub fn probe_model(cfg: &AiConfig, model: &ModelEntry) -> ProbeResult {
         AiProviderKind::OpenAiCompatible => probe_compatible(
             &cfg.endpoint_for(model),
             &model.id,
-            resolve_api_key(cfg, &model.id, &MacKeychain),
+            resolve_api_key(model, &MacKeychain),
             timeout,
         ),
     }

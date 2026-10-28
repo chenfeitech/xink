@@ -29,6 +29,7 @@ pub mod tasks;
 pub mod tools;
 pub mod verify;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -44,11 +45,15 @@ pub use keychain::{MacKeychain, MemorySecretStore, SecretStore, resolve_api_key}
 #[allow(unused_imports)]
 pub use models::{DiscoveredModel, ModelCache, parse_tags};
 #[allow(unused_imports)]
+pub use ollama::OllamaProvider;
+#[allow(unused_imports)]
+pub use openai::OpenAiProvider;
+#[allow(unused_imports)]
 pub use prompt::KNOWN_TAGS_PLACEHOLDER;
 #[allow(unused_imports)]
 pub use snapshot::{snapshot_name, write_snapshot};
 
-use crate::core::config::AiModelParams;
+use crate::core::config::{AiModelParams, AiProviderKind};
 use tools::ToolCall;
 
 /// 对话角色
@@ -220,6 +225,165 @@ pub trait Provider: Send + Sync {
         cancel: Arc<AtomicBool>,
         on: &mut dyn FnMut(StreamEvent),
     ) -> Result<(), AiError>;
+}
+
+/// 一个 provider 的构造与它的协议细节
+///
+/// 只放"每种 provider 都必然有"的东西：**怎么造实例**、**聊天端点怎么拼**。
+/// 列模型、连接探针这类只有部分 provider 具备的能力不进这里——塞进来会逼着
+/// 别人写 `unimplemented!()`，保持它们是模块级自由函数。
+pub trait ProviderFactory: Send + Sync {
+    fn build(&self) -> Arc<dyn Provider>;
+    fn chat_endpoint(&self, base_url: &str) -> String;
+}
+
+struct UnitFactory<F, E>
+where
+    F: Fn() -> Arc<dyn Provider> + Send + Sync,
+    E: Fn(&str) -> String + Send + Sync,
+{
+    build: F,
+    endpoint: E,
+}
+
+impl<F, E> ProviderFactory for UnitFactory<F, E>
+where
+    F: Fn() -> Arc<dyn Provider> + Send + Sync,
+    E: Fn(&str) -> String + Send + Sync,
+{
+    fn build(&self) -> Arc<dyn Provider> {
+        (self.build)()
+    }
+    fn chat_endpoint(&self, base_url: &str) -> String {
+        (self.endpoint)(base_url)
+    }
+}
+
+/// 这个错误值得重试吗
+///
+/// 判据是"再试一次有没有可能成功"：限流 / 超时 / 网络抖动 / 流被截断都可能；
+/// 鉴权失败、模型不存在、协议错误再试多少次都一样。
+pub fn is_retryable(err: &AiError) -> bool {
+    matches!(
+        err,
+        AiError::RateLimit | AiError::Timeout | AiError::Network(_) | AiError::Truncated
+    )
+}
+
+/// 带重试与备用的流式调用
+///
+/// 三条约束：
+/// 1. **只重试还没吐出内容的请求**——已经把半截正文交给 UI 了，再跑一遍会把
+///    两半拼在一起，宁可直接失败；
+/// 2. 退避是指数的（`backoff_ms * 2^n`），不做固定间隔，免得把限流的模型打得更死；
+/// 3. 备用模型只在主用**重试耗尽**后才用，且同样受上面两条约束。
+///
+/// 阻塞函数，**只在后台线程调用**（内部会 `sleep`）。
+pub fn stream_with_failover(
+    attempts: &[(&dyn Provider, &CompletionRequest)],
+    cancel: Arc<AtomicBool>,
+    max_attempts: u8,
+    backoff_ms: u64,
+    on: &mut dyn FnMut(StreamEvent),
+) -> Result<(), AiError> {
+    use std::sync::atomic::Ordering;
+    use std::thread;
+
+    let mut last: Option<AiError> = None;
+    for (provider, req) in attempts {
+        for attempt in 0..max_attempts.max(1) {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AiError::Canceled);
+            }
+            if attempt > 0 {
+                let wait = backoff_ms.saturating_mul(1u64 << (attempt - 1).min(4));
+                thread::sleep(Duration::from_millis(wait.min(10_000)));
+            }
+            let mut progressed = false;
+            let result = {
+                let mut watch = |ev: StreamEvent| {
+                    if matches!(ev, StreamEvent::Delta(_) | StreamEvent::ToolCall(_)) {
+                        progressed = true;
+                    }
+                    on(ev);
+                };
+                provider.stream(req, cancel.clone(), &mut watch)
+            };
+            match result {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    if !is_retryable(&err) || progressed {
+                        return Err(err);
+                    }
+                    last = Some(err);
+                }
+            }
+        }
+    }
+    Err(last.unwrap_or(AiError::NoModel))
+}
+
+/// Provider 注册表：`kind → 工厂`
+///
+/// 以前 `kind → provider` 是 UI 层一处硬编码 `match`，端点又在配置层另一处
+/// `match`，加一个 provider 要同时改三处。收进注册表后：
+/// **新增 provider = 写一个文件实现 `Provider` + 在 `builtin()` 里注册一行**，
+/// 请求链路一行都不用动。
+#[derive(Default)]
+pub struct ProviderRegistry {
+    factories: HashMap<AiProviderKind, Arc<dyn ProviderFactory>>,
+}
+
+impl ProviderRegistry {
+    /// 内置两个：Ollama native 与 OpenAI 兼容
+    pub fn builtin() -> Self {
+        let mut reg = Self::default();
+        reg.register(
+            AiProviderKind::Ollama,
+            || Arc::new(OllamaProvider) as Arc<dyn Provider>,
+            ollama::chat_endpoint,
+        );
+        reg.register(
+            AiProviderKind::OpenAiCompatible,
+            || Arc::new(OpenAiProvider) as Arc<dyn Provider>,
+            openai::chat_endpoint,
+        );
+        reg
+    }
+
+    pub fn register<B, E>(&mut self, kind: AiProviderKind, build: B, endpoint: E)
+    where
+        B: Fn() -> Arc<dyn Provider> + Send + Sync + 'static,
+        E: Fn(&str) -> String + Send + Sync + 'static,
+    {
+        self.factories
+            .insert(kind, Arc::new(UnitFactory { build, endpoint }));
+    }
+
+    /// 取 provider；没注册过就报语义错误，不 panic
+    pub fn resolve(&self, kind: AiProviderKind) -> Result<Arc<dyn Provider>, AiError> {
+        self.factories
+            .get(&kind)
+            .map(|f| f.build())
+            .ok_or_else(|| AiError::Protocol(format!("未注册的 provider：{kind:?}")))
+    }
+
+    /// 拼聊天端点；未注册的 kind 原样返回 base（枚举是唯一入口，实际到不了）
+    pub fn endpoint(&self, kind: AiProviderKind, base_url: &str) -> String {
+        self.factories
+            .get(&kind)
+            .map(|f| f.chat_endpoint(base_url))
+            .unwrap_or_else(|| base_url.to_string())
+    }
+}
+
+/// 进程内唯一的注册表
+///
+/// 两个内置 provider 都是零字段 unit struct，没有可变状态，做成全局单例省得
+/// 把 registry 一路透传到每个请求点。
+pub fn providers() -> &'static ProviderRegistry {
+    static REGISTRY: std::sync::OnceLock<ProviderRegistry> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(ProviderRegistry::builtin)
 }
 
 /// 把 `ureq` 的错误翻译成 [`AiError`]

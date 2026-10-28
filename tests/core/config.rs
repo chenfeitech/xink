@@ -729,19 +729,26 @@ fn endpoint_for_uses_each_providers_shape() {
 }
 
 #[test]
-fn ollama_only_ignores_keys_is_true_without_an_active_model() {
-    let mut ai = AiConfig::default();
-    assert!(ai.ollama_only_ignores_keys(), "没有模型时不该催着填 key");
+fn 是否需要_key_只看发起请求的那个模型() {
+    // 以前是"全局默认模型是不是 Ollama"，默认模型是本地时云模型取不到 key
+    let local = model("m"); // kind 默认 Ollama
+    assert!(!AiConfig::needs_key(&local), "本地 Ollama 不要 key");
 
     let mut compat = model("c");
     compat.kind = AiProviderKind::OpenAiCompatible;
-    ai.models = vec![compat];
-    ai.default_model = "c".into();
-    assert!(!ai.ollama_only_ignores_keys(), "远程端点要 key");
+    assert!(AiConfig::needs_key(&compat), "远程端点要 key");
 
-    ai.models = vec![model("m")];
-    ai.default_model = "m".into();
-    assert!(ai.ollama_only_ignores_keys(), "本地 Ollama 不要 key");
+    // 关键：默认模型是本地时，云模型的判定不受影响
+    let ai = AiConfig {
+        models: vec![local, compat],
+        default_model: "m".into(),
+        ..Default::default()
+    };
+    let cloud = ai.models.iter().find(|m| m.id == "c").unwrap();
+    assert!(
+        AiConfig::needs_key(cloud),
+        "默认模型是 Ollama 时云模型仍需 key"
+    );
 }
 
 #[test]

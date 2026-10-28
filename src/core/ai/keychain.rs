@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Mutex;
 
-use crate::core::config::{AiConfig, KeySource};
+use crate::core::config::{AiConfig, KeySource, ModelEntry};
 
 /// Keychain 里固定的 service 名
 const SERVICE: &str = "xink";
@@ -92,15 +92,23 @@ impl SecretStore for MemorySecretStore {
 /// 环境变量来源的默认变量名
 pub const KEY_ENV_VAR: &str = "XINK_AI_API_KEY";
 
-/// 按配置解析 API key
-pub fn resolve_api_key(cfg: &AiConfig, account: &str, store: &dyn SecretStore) -> Option<String> {
-    if cfg.ollama_only_ignores_keys() {
+/// 按**发起请求的那个模型**解析 API key
+///
+/// 传整条 `ModelEntry` 而不是只传 id：是否需要 key、从哪取，都是模型自己的
+/// 属性。以前传 id 再用全局默认模型判断，导致"默认模型是 Ollama 时云模型
+/// 全部取不到 key"。
+pub fn resolve_api_key(model: &ModelEntry, store: &dyn SecretStore) -> Option<String> {
+    if !AiConfig::needs_key(model) {
+        // 本地 Ollama 不需要 key
         return None;
     }
-    match cfg.default_key_source() {
-        KeySource::Keychain => store.get(account).filter(|s| !s.is_empty()),
+    match model.api_key_source {
+        KeySource::Keychain => store.get(&model.id).filter(|s| !s.is_empty()),
         KeySource::Env => std::env::var(KEY_ENV_VAR).ok().filter(|s| !s.is_empty()),
-        KeySource::Plain => cfg.plain_key().map(|s| s.to_string()),
+        KeySource::Plain => {
+            let key = model.plain_key.trim();
+            (!key.is_empty()).then(|| key.to_string())
+        }
     }
 }
 

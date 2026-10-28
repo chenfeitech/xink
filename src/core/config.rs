@@ -458,8 +458,14 @@ impl Default for PreviewConfig {
 // AI 配置从未发布过，历史 `config.json` 里没有 `ai` 段，
 // 因此**没有迁移逻辑**——`#[serde(default)]` + `sanitize()` 已足够。
 
+/// 上下文窗口（token）折算成字符时的保守系数，见 [`ModelEntry::context_chars`]
+pub const CHARS_PER_TOKEN: usize = 2;
+
 /// Provider 类型
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// 带 `Hash + Eq`：provider 注册表是 `HashMap<AiProviderKind, …>`，
+/// 新增 provider 时要在这里加一个变体。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AiProviderKind {
     /// 本地 Ollama（走 native `/api/chat`）
@@ -508,6 +514,66 @@ pub struct AiModelParams {
     pub keep_alive: String,
 }
 
+/// 用模型的场合
+///
+/// 路由键。不同场合对模型的要求差很多：对话要快、改写要准、工具循环要支持
+/// 工具调用，用同一个模型往往两头不讨好。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AiScenario {
+    /// 自由对话
+    Chat,
+    /// 快捷动作
+    Action,
+    /// Skill
+    Skill,
+    /// 工具循环（agent loop）
+    Agent,
+}
+
+/// 重试策略
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiRetryConfig {
+    /// 每个模型最多尝试几次（1 = 不重试）
+    pub max_attempts: u8,
+    /// 首次退避毫秒，之后按 2 的幂增长
+    pub backoff_ms: u64,
+}
+
+impl Default for AiRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            backoff_ms: 500,
+        }
+    }
+}
+
+/// 场景 → 模型的路由表
+///
+/// 全部可选：没配的场合回落到 `default_model`，所以**不配即行为不变**，
+/// 旧 `config.json` 也不会因为少了这一节而出问题。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiRouteConfig {
+    pub chat: Option<String>,
+    pub action: Option<String>,
+    pub skill: Option<String>,
+    pub agent: Option<String>,
+}
+
+impl AiRouteConfig {
+    pub fn model_for(&self, scenario: AiScenario) -> Option<&str> {
+        let pick = match scenario {
+            AiScenario::Chat => &self.chat,
+            AiScenario::Action => &self.action,
+            AiScenario::Skill => &self.skill,
+            AiScenario::Agent => &self.agent,
+        };
+        pick.as_deref().filter(|id| !id.is_empty())
+    }
+}
+
 /// 一个可选模型
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -520,6 +586,11 @@ pub struct ModelEntry {
     /// 覆盖全局 base_url（多实例 / 远端 Ollama）
     pub base_url: String,
     pub api_key_source: KeySource,
+    /// `api_key_source == Plain` 时的密钥本体，逐模型存放
+    ///
+    /// 空串表示没填。明文落 `config.json`，只有用户显式选择这个来源才写；
+    /// 默认值仍是 Keychain。
+    pub plain_key: String,
     pub params: AiModelParams,
     /// 来自 `/api/tags` 的 context_length；None 时按默认 num_ctx 用
     pub context_limit: Option<u32>,
@@ -586,6 +657,8 @@ pub struct AiActionConfig {
     pub apply: AiActionApply,
     /// 停用后不出现在对话条与命令面板，但配置仍保留
     pub enabled: bool,
+    /// 这个动作单独用哪个模型（可选；不配就走场景路由 / 全局默认）
+    pub model: Option<String>,
 }
 
 impl Default for AiActionConfig {
@@ -597,6 +670,7 @@ impl Default for AiActionConfig {
             scope: AiActionScope::default(),
             apply: AiActionApply::default(),
             enabled: true,
+            model: None,
         }
     }
 }
@@ -616,6 +690,7 @@ pub fn builtin_actions() -> Vec<AiActionConfig> {
             scope: AiActionScope::Selection,
             apply: AiActionApply::Replace,
             enabled: true,
+            model: None,
         },
         AiActionConfig {
             id: "condense".into(),
@@ -626,6 +701,7 @@ pub fn builtin_actions() -> Vec<AiActionConfig> {
             scope: AiActionScope::Selection,
             apply: AiActionApply::Replace,
             enabled: true,
+            model: None,
         },
         AiActionConfig {
             id: "translate".into(),
@@ -636,6 +712,7 @@ pub fn builtin_actions() -> Vec<AiActionConfig> {
             scope: AiActionScope::Selection,
             apply: AiActionApply::Replace,
             enabled: true,
+            model: None,
         },
         AiActionConfig {
             id: "retitle".into(),
@@ -646,6 +723,7 @@ pub fn builtin_actions() -> Vec<AiActionConfig> {
             scope: AiActionScope::Whole,
             apply: AiActionApply::Replace,
             enabled: true,
+            model: None,
         },
         AiActionConfig {
             id: "summarize".into(),
@@ -654,6 +732,7 @@ pub fn builtin_actions() -> Vec<AiActionConfig> {
             scope: AiActionScope::Whole,
             apply: AiActionApply::Insert,
             enabled: true,
+            model: None,
         },
         AiActionConfig {
             id: "tag".into(),
@@ -666,6 +745,7 @@ pub fn builtin_actions() -> Vec<AiActionConfig> {
             scope: AiActionScope::Whole,
             apply: AiActionApply::Insert,
             enabled: true,
+            model: None,
         },
     ]
 }
@@ -700,6 +780,14 @@ pub struct AiConfig {
     pub memory_enabled: bool,
     /// 快捷动作列表（可新增 / 改提示词 / 删除）
     pub actions: Vec<AiActionConfig>,
+    /// 场景 → 模型的路由表（可选，没配的场合回落到 `default_model`）
+    pub route: AiRouteConfig,
+    /// 重试耗尽后改用的备用模型 id（可选）
+    pub fallback_model: String,
+    pub retry: AiRetryConfig,
+    /// 等首字节的超时（秒）：与"等下一帧"的静默超时是两回事，
+    /// 前者管"模型有没有接"，后者管"接上了但卡住"
+    pub first_byte_timeout_secs: u64,
 }
 
 impl Default for AiModelParams {
@@ -723,6 +811,7 @@ impl Default for ModelEntry {
             label: String::new(),
             base_url: String::new(),
             api_key_source: KeySource::default(),
+            plain_key: String::new(),
             params: AiModelParams::default(),
             context_limit: None,
             capabilities: Vec::new(),
@@ -767,6 +856,16 @@ impl ModelEntry {
         }
     }
 
+    /// 按模型上下文窗口折算出的**字符**预算；None = 窗口未知
+    ///
+    /// 窗口是 token 数，上下文组装用的是字符数，两者只能折算。这里取 1 token
+    /// ≈ 2 字符：英文偏保守（约 4 字符 1 token），中文偏宽松（约 1 字符 1 token），
+    /// 是个折中。真正兜底的是组装后再用 `estimate_tokens` 复核。
+    pub fn context_chars(&self) -> Option<usize> {
+        self.context_limit
+            .map(|tokens| (tokens as usize).saturating_mul(CHARS_PER_TOKEN))
+    }
+
     /// 是否声明支持工具调用（M2 工具阶段用它决定是否显示"启用工具"开关）
     #[allow(dead_code)]
     pub fn supports_tools(&self) -> bool {
@@ -808,6 +907,10 @@ impl Default for AiConfig {
             disabled_skills: Vec::new(),
             memory_enabled: false,
             actions: builtin_actions(),
+            route: AiRouteConfig::default(),
+            fallback_model: String::new(),
+            retry: AiRetryConfig::default(),
+            first_byte_timeout_secs: 30,
         }
     }
 }
@@ -829,31 +932,20 @@ impl AiConfig {
     }
 
     /// 该模型的 endpoint（Ollama 走 native，兼容端点拼 `/chat/completions`）
+    ///
+    /// 拼法从 provider 注册表取，这里不再按 kind 分支——新增 provider 不用
+    /// 改配置层。
     pub fn endpoint_for(&self, model: &ModelEntry) -> String {
         let base = model.base_url_or(self);
-        match model.kind {
-            AiProviderKind::Ollama => crate::core::ai::ollama::chat_endpoint(&base),
-            AiProviderKind::OpenAiCompatible => crate::core::ai::openai::chat_endpoint(&base),
-        }
+        crate::core::ai::providers().endpoint(model.kind, &base)
     }
 
-    /// 是否所有模型都是本地 Ollama（本地不需要 key）
-    pub fn ollama_only_ignores_keys(&self) -> bool {
-        matches!(
-            self.active_model().map(|m| m.kind),
-            Some(AiProviderKind::Ollama) | None
-        )
-    }
-
-    pub fn default_key_source(&self) -> KeySource {
-        self.active_model()
-            .map(|m| m.api_key_source)
-            .unwrap_or_default()
-    }
-
-    pub fn plain_key(&self) -> Option<&str> {
-        // 明文 key 目前只有一处（当前模型），存放在模型条目外：见 `plain_key_raw`
-        None
+    /// 该模型需不需要 key：本地 Ollama 不需要
+    ///
+    /// 判断依据是**发起请求的那个模型**，不是全局默认模型——否则只要默认
+    /// 模型是 Ollama，所有云模型都取不到 key。
+    pub fn needs_key(model: &ModelEntry) -> bool {
+        !matches!(model.kind, AiProviderKind::Ollama)
     }
 
     pub fn sanitize(&mut self) {
@@ -869,6 +961,14 @@ impl AiConfig {
         self.max_tool_chars = self
             .max_tool_chars
             .clamp(limit::AI_TOOL_CHARS.0, limit::AI_TOOL_CHARS.1);
+        self.retry.max_attempts = self.retry.max_attempts.clamp(1, limit::AI_RETRY_MAX);
+        self.retry.backoff_ms = self
+            .retry
+            .backoff_ms
+            .clamp(limit::AI_BACKOFF_MS.0, limit::AI_BACKOFF_MS.1);
+        self.first_byte_timeout_secs = self
+            .first_byte_timeout_secs
+            .clamp(limit::AI_TIMEOUT_SECS.0, limit::AI_TIMEOUT_SECS.1);
         self.auto_apply = false;
         // 空 id 的条目没有意义（多半是手改配置留下的）
         self.models.retain(|m| !m.id.trim().is_empty());
@@ -891,7 +991,36 @@ impl AiConfig {
         if !self.default_model.is_empty() && self.active_model().is_none() {
             self.default_model.clear();
         }
+        self.sanitize_routing();
         self.sanitize_actions();
+    }
+
+    /// **唯一的模型解析入口**
+    ///
+    /// 优先级（高 → 低）：
+    /// 1. 会话级覆盖——用户临时切了模型，说明这次就要用它
+    /// 2. 动作自己指定的模型
+    /// 3. 场景路由
+    /// 4. 全局默认
+    ///
+    /// 所有发起请求的地方都必须走这里，不允许各自去读 `default_model`。
+    pub fn resolve_model(
+        &self,
+        scenario: AiScenario,
+        action_model: Option<&str>,
+        session_override: Option<&str>,
+    ) -> Option<&ModelEntry> {
+        let candidates = [
+            session_override,
+            action_model,
+            self.route.model_for(scenario),
+            Some(self.default_model.as_str()),
+        ];
+        candidates
+            .into_iter()
+            .flatten()
+            .filter(|id| !id.is_empty())
+            .find_map(|id| self.models.iter().find(|m| m.id == id && m.enabled))
     }
 
     /// 生效的快捷动作（停用 / 残缺的都不出现）
@@ -904,6 +1033,41 @@ impl AiConfig {
     /// 按 id 取一个启用的动作
     pub fn action(&self, id: &str) -> Option<&AiActionConfig> {
         self.active_actions().find(|a| a.id == id)
+    }
+
+    /// 路由与备用模型指向的模型不存在 / 已停用时清掉
+    ///
+    /// 指向不存在的 id 不会报错，只会悄悄回落到 `default_model`——用户以为
+    /// 配了专用模型其实没生效，还不如直接清掉让界面显示真实状态。
+    fn sanitize_routing(&mut self) {
+        let live = |id: &Option<String>, models: &[ModelEntry]| -> bool {
+            id.as_deref()
+                .is_some_and(|id| models.iter().any(|m| m.id == id && m.enabled))
+        };
+        for pick in [
+            &mut self.route.chat,
+            &mut self.route.action,
+            &mut self.route.skill,
+            &mut self.route.agent,
+        ] {
+            if !live(pick, &self.models) {
+                *pick = None;
+            }
+        }
+        if !self.fallback_model.is_empty()
+            && !self
+                .models
+                .iter()
+                .any(|m| m.id == self.fallback_model && m.enabled)
+        {
+            self.fallback_model.clear();
+        }
+        // 动作上指定的模型同理
+        for action in &mut self.actions {
+            if !live(&action.model, &self.models) {
+                action.model = None;
+            }
+        }
     }
 
     fn sanitize_actions(&mut self) {
@@ -959,6 +1123,9 @@ mod limit {
     pub const AI_NUM_PREDICT: (u32, u32) = (16, 32_768);
     pub const AI_TEMPERATURE: (f32, f32) = (0.0, 2.0);
     pub const AI_NUM_CTX: (u32, u32) = (512, 1_048_576);
+    /// 重试次数上限；退避毫秒区间
+    pub const AI_RETRY_MAX: u8 = 5;
+    pub const AI_BACKOFF_MS: (u64, u64) = (100, 10_000);
     /// 快捷动作：名字 / 提示词长度与条数上限
     pub const AI_ACTION_NAME: usize = 32;
     pub const AI_ACTION_PROMPT: usize = 2_000;

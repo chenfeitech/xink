@@ -107,9 +107,12 @@
 | 快捷动作 | 内置 6 项：润色、精简、翻译、改写标题、生成摘要、生成标签；命令面板里也能用 `AI:` 前缀唤起。**可配置**：设置 → AI → 快捷动作，能新增、改提示词、改作用范围与落法、停用或删除（设计见 `docs/ai/ai-actions-config-design.md`） |
 | 修订评审 | AI **不直接改文件**：先在编辑区内做行级 diff 对照，按修改块**逐块「接受 / 拒绝」**，确认后才落盘 |
 | 改前快照 | 接受改动前把原文另存到应用数据目录的 `ai-history/`（上限 200 份，超了删最旧的）——项目没有撤销栈，这是人工回退的兜底 |
-| 模型后端 | 两类：Ollama（native `/api/chat`）与 OpenAI 兼容端点；`base_url` 整体可配，换厂商即换地址 |
-| 模型管理 | 多个模型条目 + 默认模型；单个模型可「连接测试」，测通不通、支不支持工具调用、耗时多少 |
-| 密钥 | 默认存 macOS Keychain；也支持环境变量 `XINK_AI_API_KEY`，或（用户显式选择）明文写入 `config.json` |
+| 模型后端 | 两类：**Ollama**（native `/api/chat`）与 **OpenAI 兼容端点**（deepseek、OpenAI、Moonshot、各家兼容网关等）；`base_url` 整体可配，换厂商即换地址 |
+| 模型管理 | 多个模型条目 + 默认模型；新增时可选类型、填 `base_url`；单个模型可「连接测试」，测通不通、支不支持工具调用、耗时多少 |
+| 密钥 | 默认存 macOS Keychain（设置里可直接写入 / 清除）；也支持环境变量 `XINK_AI_API_KEY`，或（用户显式选择）明文写入 `config.json` |
+| 按场景路由 | 对话 / 快捷动作 / Skill / Agent 四类场景可各自指定模型，单个快捷动作还能再单独指定；优先级：会话指定 > 动作指定 > 场景路由 > 默认模型 |
+| 重试与备用 | 可重试次数（1–5）与退避间隔可配，首字节超时可配；主模型失败自动转备用模型。**已吐过内容的请求不重发**，不会出现半截重复输出 |
+| 上下文按模型裁剪 | 每个模型填 `context_limit`，送进请求的上下文取「全局上限」与「模型预算」的较小值；窗口小的模型自动少送 |
 | Agent Skills | 用 `SKILL.md` 定义自己的动作，框架负责发现、执行与启停；设置里可整体开关 |
 | 库级批量任务 | 「计划面板」把整库范围的整理（如批量打标签）拆成任务，批量执行并支持中断恢复 |
 
@@ -145,7 +148,9 @@
 | 编辑器 | 快捷键 | 每个动作一条，可覆盖默认键位；留空即用默认（**重启后生效**） |
 | AI | 连接 | 启用开关、Ollama 地址与 `keep_alive` / `num_ctx` |
 | AI | 生成 | 超时、上下文字符上限、最大步数、输出语言 |
-| AI | 扩展 | Skills 开关；模型条目管理与连接测试 |
+| AI | 扩展 | Skills 开关；模型条目管理与连接测试（可选类型、填 `base_url`） |
+| AI | 模型密钥 | 每个模型一条：来源在 Keychain / 环境变量 / 明文间切换，Keychain 可直接在界面里写入与清除 |
+| AI | 场景路由 | 对话 / 快捷动作 / Skill / Agent 各自指定模型；备用模型；重试次数 |
 | AI | 快捷动作 | 每项的名称、提示词（支持 `{{known_tags}}`）、作用范围（选中优先 / 整篇）、落法（替换 / 插入）；可新增、停用、删除，可恢复内置默认 |
 | 预览 | 渲染 | 代码高亮主题、图片显示方式与宽度、链接打开方式 |
 | 预览 | 排版 | 字体、版面密度、正文最大宽度 |
@@ -360,6 +365,7 @@ src/
 | [`docs/ai/ai-assistant-requirements.md`](docs/ai/ai-assistant-requirements.md) | AI 协助需求（R14） |
 | [`docs/ai/ai-assistant-design.md`](docs/ai/ai-assistant-design.md) | AI 协助设计（provider / agent loop / 修订评审 / 快照） |
 | [`docs/ai/ai-actions-config-design.md`](docs/ai/ai-actions-config-design.md) | 快捷动作可配置化（枚举 → 配置数据） |
+| [`docs/ai/multi-model-architecture-design.md`](docs/ai/multi-model-architecture-design.md) | 多模型可插拔架构（Provider 注册表 / 统一接口 / 能力差异 / 重试与路由） |
 | [`docs/preview-extend-design.md`](docs/preview-extend-design.md) | 预览区向左伸展的设计与方案取舍 |
 | [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) | 人工验收清单（只能靠跑起来看的项） |
 | `.codebuddy/rules/` | 开发铁律（开工前必读，含会导致编译失败的硬约束） |
@@ -378,10 +384,6 @@ src/
 开工前请先阅读 [`.codebuddy/rules/`](.codebuddy/rules/)，其中有会导致编译失败或架构腐化的硬约束。
 
 ---
-
-## TODO
-
-需要优化 AI 功能：将快捷功能精简为润色、精简、翻译、改写标题、生成摘要、生成标签这几项。设计可配置化机制，支持新增快捷功能，每项快捷功能可配置对应的提示词，并在提交模型请求时携带该提示词。
 
 ## 许可
 

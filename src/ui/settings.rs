@@ -23,10 +23,12 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Size};
 use gpui_kit::*;
 
 use crate::app::AppState;
+use crate::core::ai::keychain::SecretStore;
 use crate::core::ai::skills;
 use crate::core::config::{
-    AiActionApply, AiActionConfig, AiActionScope, AppConfig, FontWeight, ImageDisplay, LinkOpen,
-    OutputLang, PreviewDensity, ScrollSyncMode, ThemeMode, builtin_actions,
+    AiActionApply, AiActionConfig, AiActionScope, AiProviderKind, AiScenario, AppConfig,
+    FontWeight, ImageDisplay, KeySource, LinkOpen, OutputLang, PreviewDensity, ScrollSyncMode,
+    ThemeMode, builtin_actions,
 };
 use crate::core::keymap;
 use crate::core::theme::PRESET_THEMES;
@@ -1243,6 +1245,13 @@ pub struct SettingsView {
     new_model_id: Entity<InputState>,
     /// 「新增模型」的 base_url 输入（留空用全局地址）
     new_model_base: Entity<InputState>,
+    /// 「新增模型」的 provider 类型（Ollama / OpenAI 兼容）
+    new_model_kind: AiProviderKind,
+    /// 正在编辑密钥的模型 id（`None` 表示没在编辑）
+    key_edit_id: Option<String>,
+    key_input: Entity<InputState>,
+    /// 密钥区的提示 / 错误
+    key_notice: Option<String>,
     /// 拉取模型列表的后台任务
     model_task: Option<Task<()>>,
     /// 模型管理区的提示 / 错误
@@ -1308,6 +1317,7 @@ impl SettingsView {
             cx.new(|cx| InputState::new(window, cx).placeholder("模型名，如 qwen3.5:0.8b"));
         let new_model_base =
             cx.new(|cx| InputState::new(window, cx).placeholder("地址（留空用全局地址）"));
+        let key_input = cx.new(|cx| InputState::new(window, cx).placeholder("API Key"));
         let action_name = cx.new(|cx| InputState::new(window, cx).placeholder("动作名，如 润色"));
         let action_prompt = cx
             .new(|cx| InputState::new(window, cx).placeholder("给模型的指令，可用 {{known_tags}}"));
@@ -1320,6 +1330,10 @@ impl SettingsView {
             search_input,
             new_model_id,
             new_model_base,
+            new_model_kind: AiProviderKind::default(),
+            key_edit_id: None,
+            key_input,
+            key_notice: None,
             model_task: None,
             model_notice: None,
             confirm_clear_snapshots: false,
@@ -1404,6 +1418,161 @@ impl SettingsView {
     ///
     /// 写入一律走 `crate::app::update_config`（校正 + 落盘 + 重绘），
     /// 不直接改全局，避免与"改完立即生效"的既有约定脱节。
+    /// 场景路由：哪个场合用哪个模型
+    ///
+    /// 列表型但取值是"指向另一个列表的引用"，元数据表表达不了，单独渲染。
+    /// 每项用"点一下轮换"而不是下拉：省一个浮层，条目少的时候反而更快。
+    fn render_route(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let cfg = crate::app::config(cx);
+        let muted = cx.theme().muted_foreground;
+        let border = cx.theme().border;
+
+        let mut block = div()
+            .flex_col()
+            .gap_1()
+            .pt_3()
+            .mt_2()
+            .border_t_1()
+            .border_color(border)
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight(600.))
+                    .child("场景路由"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("没配的场合沿用默认模型；对话条顶部下拉的临时选择优先级最高"),
+            );
+
+        // 可选项：跟随默认 + 所有启用的模型
+        let mut options: Vec<String> = vec![String::new()];
+        options.extend(
+            cfg.ai
+                .models
+                .iter()
+                .filter(|m| m.enabled)
+                .map(|m| m.id.clone()),
+        );
+
+        let rows: [(AiScenario, &str, Option<String>); 4] = [
+            (AiScenario::Chat, "对话", cfg.ai.route.chat.clone()),
+            (AiScenario::Action, "快捷动作", cfg.ai.route.action.clone()),
+            (AiScenario::Skill, "技能", cfg.ai.route.skill.clone()),
+            (AiScenario::Agent, "工具循环", cfg.ai.route.agent.clone()),
+        ];
+        for (scenario, label, current) in rows {
+            let current_label = match current.as_deref() {
+                Some(id) if !id.is_empty() => id.to_string(),
+                _ => "跟随默认".to_string(),
+            };
+            let options_for_click = options.clone();
+            let current_for_click = current.clone().unwrap_or_default();
+            block = block.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().w(px(80.)).text_xs().text_color(muted).child(label))
+                    .child(
+                        Button::new(SharedString::from(format!("route-{label}")))
+                            .xsmall()
+                            .ghost()
+                            .label(current_label)
+                            .tooltip("点击轮换：跟随默认 → 各模型")
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                let cur = current_for_click.clone();
+                                let opts = options_for_click.clone();
+                                crate::app::update_config(cx, move |cfg| {
+                                    let next = opts
+                                        .iter()
+                                        .position(|o| *o == cur)
+                                        .map(|i| opts[(i + 1) % opts.len()].clone())
+                                        .unwrap_or_default();
+                                    let pick = if next.is_empty() { None } else { Some(next) };
+                                    match scenario {
+                                        AiScenario::Chat => cfg.ai.route.chat = pick,
+                                        AiScenario::Action => cfg.ai.route.action = pick,
+                                        AiScenario::Skill => cfg.ai.route.skill = pick,
+                                        AiScenario::Agent => cfg.ai.route.agent = pick,
+                                    }
+                                });
+                            })),
+                    ),
+            );
+        }
+
+        // 备用模型
+        let fallback_label = if cfg.ai.fallback_model.is_empty() {
+            "无".to_string()
+        } else {
+            cfg.ai.fallback_model.clone()
+        };
+        let fallback_options = options.clone();
+        let fallback_current = cfg.ai.fallback_model.clone();
+        block = block
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(80.))
+                            .text_xs()
+                            .text_color(muted)
+                            .child("备用模型"),
+                    )
+                    .child(
+                        Button::new("route-fallback")
+                            .xsmall()
+                            .ghost()
+                            .label(fallback_label)
+                            .tooltip("主用重试耗尽后改用这个模型")
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                let cur = fallback_current.clone();
+                                let opts = fallback_options.clone();
+                                crate::app::update_config(cx, move |cfg| {
+                                    cfg.ai.fallback_model = opts
+                                        .iter()
+                                        .position(|o| *o == cur)
+                                        .map(|i| opts[(i + 1) % opts.len()].clone())
+                                        .unwrap_or_default();
+                                });
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(80.))
+                            .text_xs()
+                            .text_color(muted)
+                            .child("重试次数"),
+                    )
+                    .child(
+                        Button::new("route-retry")
+                            .xsmall()
+                            .ghost()
+                            .label(format!("{} 次", cfg.ai.retry.max_attempts))
+                            .tooltip("每个模型最多尝试几次（1 = 不重试），退避按 2 的幂增长")
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                crate::app::update_config(cx, |cfg| {
+                                    cfg.ai.retry.max_attempts = (cfg.ai.retry.max_attempts % 5) + 1;
+                                });
+                            })),
+                    ),
+            );
+
+        block
+    }
+
     /// 「快捷动作」管理块
     ///
     /// 动作是列表、且每项的提示词是自由文本，元数据表（一行一项、取值与写入
@@ -1644,9 +1813,7 @@ impl SettingsView {
                                                 id,
                                                 name,
                                                 prompt,
-                                                scope: AiActionScope::Selection,
-                                                apply: AiActionApply::Replace,
-                                                enabled: true,
+                                                ..AiActionConfig::default()
                                             });
                                         }
                                     });
@@ -1795,7 +1962,7 @@ impl SettingsView {
         );
 
         // ── 列表 ──
-        let models: Vec<(String, String, bool, bool)> = cfg
+        let models: Vec<(String, String, bool, bool, AiProviderKind)> = cfg
             .ai
             .models
             .iter()
@@ -1805,6 +1972,7 @@ impl SettingsView {
                     m.capabilities.join("/"),
                     m.enabled,
                     m.id == cfg.ai.default_model,
+                    m.kind,
                 )
             })
             .collect();
@@ -1818,10 +1986,12 @@ impl SettingsView {
             );
         }
 
-        for (id, caps, enabled, is_default) in models {
+        for (id, caps, enabled, is_default, kind) in models {
             let id_for_default = id.clone();
             let id_for_toggle = id.clone();
             let id_for_delete = id.clone();
+            let id_for_kind = id.clone();
+            let id_for_key = id.clone();
             let id_for_probe = id.clone();
             let mut row = div()
                 .flex()
@@ -1865,6 +2035,50 @@ impl SettingsView {
                                     m.enabled = !m.enabled;
                                 }
                             });
+                        })),
+                )
+                // 类型可改：从 Ollama 换成 OpenAI 兼容（或反过来）不用重建条目
+                .child(
+                    Button::new(SharedString::from(format!("ai-kind-{id}")))
+                        .xsmall()
+                        .ghost()
+                        .label(if kind == AiProviderKind::Ollama {
+                            "Ollama"
+                        } else {
+                            "OpenAI"
+                        })
+                        .tooltip("点击切换协议类型：云厂商（deepseek 等）用 OpenAI")
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let id = id_for_kind.clone();
+                            crate::app::update_config(cx, move |cfg| {
+                                if let Some(m) = cfg.ai.models.iter_mut().find(|m| m.id == id) {
+                                    m.kind = match m.kind {
+                                        AiProviderKind::Ollama => AiProviderKind::OpenAiCompatible,
+                                        AiProviderKind::OpenAiCompatible => AiProviderKind::Ollama,
+                                    };
+                                }
+                            });
+                        })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("ai-key-{id}")))
+                        .xsmall()
+                        .ghost()
+                        .label("密钥")
+                        .tooltip("设置这个模型的 API Key 从哪来、是什么")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let id = id_for_key.clone();
+                            this.key_edit_id = Some(id.clone());
+                            this.key_notice = None;
+                            let current = crate::app::config(cx)
+                                .ai
+                                .models
+                                .iter()
+                                .find(|m| m.id == id)
+                                .map(|m| m.plain_key.clone())
+                                .unwrap_or_default();
+                            this.key_input
+                                .update(cx, |input, cx| input.set_value(current, window, cx));
                         })),
                 )
                 .child(
@@ -1959,11 +2173,35 @@ impl SettingsView {
                 .pt_2()
                 .child(Input::new(&self.new_model_id).small().w(px(200.)))
                 .child(Input::new(&self.new_model_base).small().w(px(180.)))
+                // 类型：本地 Ollama 走 native 协议，OpenAI 兼容端点覆盖
+                // deepseek / 通义 / 各家云厂商
+                .child(
+                    Button::new("ai-new-kind")
+                        .small()
+                        .ghost()
+                        .label(if self.new_model_kind == AiProviderKind::Ollama {
+                            "类型：Ollama"
+                        } else {
+                            "类型：OpenAI 兼容"
+                        })
+                        .tooltip("点击切换：云厂商（deepseek 等）选 OpenAI 兼容，并填它的地址")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.new_model_kind = match this.new_model_kind {
+                                AiProviderKind::Ollama => AiProviderKind::OpenAiCompatible,
+                                AiProviderKind::OpenAiCompatible => AiProviderKind::Ollama,
+                            };
+                            cx.notify();
+                        })),
+                )
                 .child(
                     Button::new("ai-add-model")
                         .small()
                         .outline()
-                        .label("添加为 Ollama 模型")
+                        .label(if self.new_model_kind == AiProviderKind::Ollama {
+                            "添加为 Ollama 模型"
+                        } else {
+                            "添加为 OpenAI 兼容模型"
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             let id = this.new_model_id.read(cx).value().trim().to_string();
                             let base = this.new_model_base.read(cx).value().trim().to_string();
@@ -1971,8 +2209,17 @@ impl SettingsView {
                                 this.model_notice = Some("请先填写模型名".into());
                                 return;
                             }
+                            let kind = this.new_model_kind;
+                            if kind == AiProviderKind::OpenAiCompatible && base.is_empty() {
+                                this.model_notice = Some(
+                                    "OpenAI 兼容模型要填地址（如 https://api.deepseek.com/v1）"
+                                        .into(),
+                                );
+                                return;
+                            }
                             let entry = crate::core::config::ModelEntry {
                                 id: id.clone(),
+                                kind,
                                 base_url: base,
                                 ..Default::default()
                             };
@@ -1999,6 +2246,166 @@ impl SettingsView {
         if let Some(notice) = &self.model_notice {
             block = block.child(div().text_xs().text_color(muted).child(notice.clone()));
         }
+
+        // ── 密钥编辑 ──
+        //
+        // 以前 key 只能靠手敲 `security add-generic-password` 写进 Keychain，
+        // 明文来源更是恒空——云厂商模型因此"配得上、用不了"。这里补上写入口。
+        if let Some(edit_id) = self.key_edit_id.clone() {
+            let source = crate::app::config(cx)
+                .ai
+                .models
+                .iter()
+                .find(|m| m.id == edit_id)
+                .map(|m| m.api_key_source)
+                .unwrap_or_default();
+            let source_label = match source {
+                KeySource::Keychain => "来源：Keychain",
+                KeySource::Env => "来源：环境变量",
+                KeySource::Plain => "来源：明文（有风险）",
+            };
+            block = block
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .pt_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(format!("{edit_id} 的密钥")),
+                        )
+                        .child(
+                            Button::new("ai-key-source")
+                                .xsmall()
+                                .ghost()
+                                .label(source_label)
+                                .tooltip("点击轮换：Keychain → 环境变量 → 明文")
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    let id = edit_id.clone();
+                                    crate::app::update_config(cx, move |cfg| {
+                                        if let Some(m) =
+                                            cfg.ai.models.iter_mut().find(|m| m.id == id)
+                                        {
+                                            m.api_key_source = match m.api_key_source {
+                                                KeySource::Keychain => KeySource::Env,
+                                                KeySource::Env => KeySource::Plain,
+                                                KeySource::Plain => KeySource::Keychain,
+                                            };
+                                        }
+                                    });
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&self.key_input).small()),
+                        )
+                        .child(
+                            Button::new("ai-key-save")
+                                .small()
+                                .outline()
+                                .label("保存")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let Some(id) = this.key_edit_id.clone() else {
+                                        return;
+                                    };
+                                    let secret = this.key_input.read(cx).value().trim().to_string();
+                                    if secret.is_empty() {
+                                        this.key_notice = Some("密钥不能为空".into());
+                                        return;
+                                    }
+                                    let source = crate::app::config(cx)
+                                        .ai
+                                        .models
+                                        .iter()
+                                        .find(|m| m.id == id)
+                                        .map(|m| m.api_key_source)
+                                        .unwrap_or_default();
+                                    match source {
+                                        KeySource::Keychain => {
+                                            // 写 Keychain（`security` 命令），不落 config.json
+                                            match crate::core::ai::keychain::MacKeychain
+                                                .set(&id, &secret)
+                                            {
+                                                Ok(()) => {
+                                                    this.key_notice =
+                                                        Some("已写入系统钥匙串".into())
+                                                }
+                                                Err(err) => {
+                                                    this.key_notice =
+                                                        Some(format!("写入失败：{err}"))
+                                                }
+                                            }
+                                        }
+                                        KeySource::Plain => {
+                                            let secret_for_cfg = secret;
+                                            crate::app::update_config(cx, move |cfg| {
+                                                if let Some(m) =
+                                                    cfg.ai.models.iter_mut().find(|m| m.id == id)
+                                                {
+                                                    m.plain_key = secret_for_cfg;
+                                                }
+                                            });
+                                            this.key_notice =
+                                                Some("已明文写入 config.json（注意权限）".into());
+                                        }
+                                        KeySource::Env => {
+                                            this.key_notice = Some(format!(
+                                                "环境变量来源请在启动环境里设置 {}",
+                                                crate::core::ai::keychain::KEY_ENV_VAR
+                                            ));
+                                        }
+                                    }
+                                })),
+                        )
+                        .child(
+                            Button::new("ai-key-clear")
+                                .small()
+                                .ghost()
+                                .label("清除")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let Some(id) = this.key_edit_id.clone() else {
+                                        return;
+                                    };
+                                    crate::core::ai::keychain::MacKeychain.delete(&id);
+                                    crate::app::update_config(cx, move |cfg| {
+                                        if let Some(m) =
+                                            cfg.ai.models.iter_mut().find(|m| m.id == id)
+                                        {
+                                            m.plain_key.clear();
+                                        }
+                                    });
+                                    this.key_notice = Some("已清除".into());
+                                })),
+                        )
+                        .child(
+                            Button::new("ai-key-close")
+                                .small()
+                                .ghost()
+                                .label("收起")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.key_edit_id = None;
+                                    this.key_notice = None;
+                                    cx.notify();
+                                })),
+                        ),
+                );
+
+            if let Some(notice) = &self.key_notice {
+                block = block.child(div().text_xs().text_color(muted).child(notice.clone()));
+            }
+        }
+
         block
     }
 
@@ -2366,6 +2773,7 @@ impl Render for SettingsView {
         // AI 分类额外挂一块「模型管理」：模型是列表、要能拉取与增删，
         // 元数据表（一行一项、取值/写入都是固定字段）表达不了，因此单独渲染。
         if self.tab == SettingsTab::Ai && query.is_empty() {
+            content = content.child(self.render_route(window, cx));
             content = content.child(self.render_actions(window, cx));
             content = content.child(self.render_models(window, cx));
             // 同一分类下再挂一块「快照」：列表类信息，元数据表表达不了
