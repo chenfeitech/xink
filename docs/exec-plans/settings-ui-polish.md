@@ -29,7 +29,7 @@
 | T-n | 内容 | 依赖 | 优先级 | 涉及文件 | 验收命令 | 关联 R-n | 状态 |
 |---|---|---|---|---|---|---|---|
 | T-1 | 分级与分类：`FieldTier` + `ADVANCED_IDS` 白名单；快捷键独立成 `SettingsTab::Keymap`；移除 `preview.debug_scroll_sync` 项 | — | P0 | `src/ui/settings.rs`、`tests/ui/settings.rs` | 新增 3 条测试 + G4 四连 | R-1 / R-2 / R-3 | ✅ |
-| T-2 | 描述精简：全部 desc ≤20 字；新增 `tip` 承载细节并挂 tooltip；keymap desc 同步；快捷键页顶部加「重启后生效」说明 | T-1 | P0 | `src/ui/settings.rs`、`src/core/keymap.rs` | 新增长度断言 + G4 四连 | R-4 | ⬜ |
+| T-2 | 描述精简：全部 desc ≤20 字；新增 `tip` 承载细节（标题旁 ⓘ 悬停）；keymap desc 同步；快捷键页顶部加「重启后生效」说明 | T-1 | P0 | `src/ui/settings.rs`、`src/core/keymap.rs`、`tests/ui/settings.rs` | 新增长度断言 + G4 四连 | R-4 | ✅ |
 | T-3 | 视觉：`GroupBox` 卡片分组、三级层级、控件右列 240 右对齐、行高改 `min_h(44)`、窗口 160+660=840 | T-2 | P1 | `src/ui/settings.rs` | G4 四连 + 人工 AC-6 / AC-12 | R-5 | ⬜ |
 | T-4 | 「高级」受控折叠（`advanced_open`）+ 搜索命中自动展开与高亮 | T-1 | P1 | `src/ui/settings.rs` | G4 四连 + 人工 AC-7 / AC-8 | R-1 / R-7 | ⬜ |
 | T-5 | AI 6 个列表面板改用与元数据分组同款容器 | T-3 | P2 | `src/ui/settings.rs` | G4 四连 + 人工 AC-11 | R-6 | ⬜ |
@@ -57,6 +57,19 @@ cargo test                 : 618 passed, 0 failed, 3 ignored（新增 3 条：�
 git diff --stat            : src/ui/settings.rs +94-14、tests/ui/settings.rs +66-1（与计划一致）
 ```
 
+### T-2 提交前（2026-10-28）
+
+```text
+cargo build                : Finished，0 warning
+cargo clippy --all-targets : 0 warning
+cargo fmt --check          : no diff
+cargo test                 : 619 passed, 0 failed, 3 ignored（新增 descriptions_are_short_enough）
+git diff --stat            : src/ui/settings.rs +155-48、src/core/keymap.rs +37-20、tests/ui/settings.rs +16（与计划一致）
+```
+
+描述精简明细：37 项超长（20 项元数据 + 17 项快捷键）全部压到 ≤20 字，
+最长由 88 字（preview.sync_mode）降到 6 字；被压掉的内容进了 `TIPS`（17 条）。
+
 ## 偏差记录
 
 1. **快捷键分类图标**：设计写 `IconName::Keyboard`，实测 `gpui_component::IconName`
@@ -64,3 +77,6 @@ git diff --stat            : src/ui/settings.rs +94-14、tests/ui/settings.rs +6
    改用 `IconName::SquareTerminal`，代码注释已注明。
 2. **`tip` 字段推迟到 T-2**：T-1 只引入 `tier`，`tip` 等描述精简时一起加，
    否则会有 `field is never read` 警告（G4 要求 0 warning）。
+3. **提示挂在标题旁的 ⓘ 而非整行 tooltip**：`div().tooltip()` 要的是
+   `Fn(&mut Window, &mut App) -> AnyView`，而 `&mut App` 上没有 `new_view`，
+   为一句提示单建一个 View 不划算，改用 `Button::tooltip(&str)`（框架已支持）。

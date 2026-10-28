@@ -167,6 +167,8 @@ pub struct SettingField {
     pub placeholder: &'static str,
     /// 使用频率分层：决定它出现在主视图还是「高级」里
     pub tier: FieldTier,
+    /// 悬停提示：描述压到 20 字以内后，细节放这里（空表示不显示提示）
+    pub tip: &'static str,
 }
 
 // ── 描述表的构造器（消除逐项重复代码） ──────────────────────────
@@ -216,9 +218,10 @@ fn bool_field(
         text_set: Rc::new(|_, _| {}),
         control,
         placeholder: "",
-        // 默认核心；要挪进「高级」的项在 `all_fields()` 末尾统一标注
-        // （见 `ADVANCED_IDS`），构造器签名保持不变
+        // 默认核心、无悬停提示；分层与提示都在 `all_fields()` 末尾统一注入
+        // （见 `ADVANCED_IDS` / `TIPS`），构造器签名保持不变
         tier: FieldTier::Core,
+        tip: "",
     }
 }
 
@@ -264,9 +267,10 @@ fn choice_field(
         text_set: Rc::new(|_, _| {}),
         control,
         placeholder: "",
-        // 默认核心；要挪进「高级」的项在 `all_fields()` 末尾统一标注
-        // （见 `ADVANCED_IDS`），构造器签名保持不变
+        // 默认核心、无悬停提示；分层与提示都在 `all_fields()` 末尾统一注入
+        // （见 `ADVANCED_IDS` / `TIPS`），构造器签名保持不变
         tier: FieldTier::Core,
+        tip: "",
     }
 }
 
@@ -307,9 +311,10 @@ fn number_field(
         text_set: Rc::new(|_, _| {}),
         control,
         placeholder: "",
-        // 默认核心；要挪进「高级」的项在 `all_fields()` 末尾统一标注
-        // （见 `ADVANCED_IDS`），构造器签名保持不变
+        // 默认核心、无悬停提示；分层与提示都在 `all_fields()` 末尾统一注入
+        // （见 `ADVANCED_IDS` / `TIPS`），构造器签名保持不变
         tier: FieldTier::Core,
+        tip: "",
     }
 }
 
@@ -362,9 +367,10 @@ fn text_field(
         text_set: set,
         control,
         placeholder: "",
-        // 默认核心；要挪进「高级」的项在 `all_fields()` 末尾统一标注
-        // （见 `ADVANCED_IDS`），构造器签名保持不变
+        // 默认核心、无悬停提示；分层与提示都在 `all_fields()` 末尾统一注入
+        // （见 `ADVANCED_IDS` / `TIPS`），构造器签名保持不变
         tier: FieldTier::Core,
+        tip: "",
     }
 }
 
@@ -425,7 +431,7 @@ fn all_fields() -> Vec<SettingField> {
         choice_field(
             "highlight.theme",
             "高亮主题",
-            "编辑区与预览区共用的语法配色，切换后两端同时生效",
+            "编辑区与预览区共用配色",
             Basic,
             "外观",
             None,
@@ -443,7 +449,7 @@ fn all_fields() -> Vec<SettingField> {
         number_field(
             "basic.icon_size",
             "图标大小",
-            "目录树与工具栏图标边长，范围 12–48 px",
+            "图标边长",
             Basic,
             "目录树",
             12.0,
@@ -525,7 +531,7 @@ fn all_fields() -> Vec<SettingField> {
         bool_field(
             "basic.show_all_files",
             "显示所有文件",
-            "目录树显示非笔记/图片的文件，以及点开头的隐藏项（`.git`、`node_modules`、`target` 等始终不显示）",
+            "显示非笔记与隐藏文件",
             Basic,
             "目录树",
             None,
@@ -536,7 +542,7 @@ fn all_fields() -> Vec<SettingField> {
         bool_field(
             "editor.auto_save",
             "自动保存",
-            "停止输入后自动写入磁盘；关闭后仍可用 Cmd-S 手动保存",
+            "停止输入后自动写盘",
             Editor,
             "编辑行为",
             None,
@@ -547,7 +553,7 @@ fn all_fields() -> Vec<SettingField> {
             number_field(
                 "editor.auto_save_delay_ms",
                 "自动保存延迟",
-                "停止输入后多久保存，范围 200–60000 ms",
+                "停止输入后多久写盘",
                 Editor,
                 "编辑行为",
                 200.0,
@@ -603,7 +609,7 @@ fn all_fields() -> Vec<SettingField> {
             bool_field(
                 "editor.show_line_numbers",
                 "显示行号",
-                "在编辑区左侧显示行号（编辑区基于代码编辑器控件，行号始终可用）",
+                "编辑区左侧显示行号",
                 Editor,
                 "编辑行为",
                 None,
@@ -620,7 +626,7 @@ fn all_fields() -> Vec<SettingField> {
         bool_field(
             "editor.soft_wrap",
             "软换行",
-            "长行折行显示（关闭后长行需横向滚动，但滚动同步更精确：一个源码行正好一个显示行）",
+            "长行折行显示",
             Editor,
             "编辑行为",
             None,
@@ -682,7 +688,7 @@ fn all_fields() -> Vec<SettingField> {
         number_field(
             "editor.data_file.indent",
             "JSON 缩进宽度",
-            "预览里 JSON 的缩进空格数，范围 1–8（YAML / TOML 序列化器不提供该配置）",
+            "JSON 缩进空格数",
             Editor,
             "数据文件",
             1.0,
@@ -695,7 +701,7 @@ fn all_fields() -> Vec<SettingField> {
         number_field(
             "editor.data_file.max_format_bytes",
             "格式化体积上限",
-            "超过该字节数就不再排版、直接显示原文；0 表示不限制（按 1MB 步进）",
+            "超过则不排版",
             Editor,
             "数据文件",
             0.0,
@@ -713,7 +719,7 @@ fn all_fields() -> Vec<SettingField> {
             choice_field(
                 "preview.image_display",
                 "图片显示",
-                "预览区图片的呈现方式（原始尺寸无法实现：渲染层会强制限制在预览宽度内）",
+                "图片的呈现方式",
                 Preview,
                 "渲染",
                 None,
@@ -744,7 +750,7 @@ fn all_fields() -> Vec<SettingField> {
             number_field(
                 "preview.image_width_percent",
                 "图片宽度",
-                "图片占预览区宽度的百分比，范围 20–100",
+                "占预览区宽度百分比",
                 Preview,
                 "渲染",
                 20.0,
@@ -850,7 +856,7 @@ fn all_fields() -> Vec<SettingField> {
         choice_field(
             "preview.density",
             "版面密度",
-            "预览留白与段间距：紧凑 / 适中 / 宽松",
+            "留白与段间距",
             Preview,
             "排版",
             None,
@@ -882,7 +888,7 @@ fn all_fields() -> Vec<SettingField> {
         bool_field(
             "preview.sync_scroll",
             "同步滚动",
-            "编辑区与预览区滚动位置互相同步（停止滚动约 0.25 秒后对齐一次；滚动过程中不动对端，避免抖动）",
+            "两端滚动位置同步",
             Preview,
             "同步",
             None,
@@ -892,7 +898,7 @@ fn all_fields() -> Vec<SettingField> {
         choice_field(
             "preview.sync_mode",
             "同步方式",
-            "比例跟随：两端按各自滚动百分比对齐，连续平滑（默认）；块锚点：按 Markdown 顶层块对齐，位置更准但块边界会跳；停止后对齐：滚动中不动对端，停下约 0.25 秒后对齐一次",
+            "滚动对齐方式",
             Preview,
             "同步",
             None,
@@ -921,7 +927,7 @@ fn all_fields() -> Vec<SettingField> {
         bool_field(
             "ai.enabled",
             "启用 AI",
-            "关闭时所有 AI 入口不可用，也不会发起任何网络请求",
+            "关闭则不发起网络请求",
             Ai,
             "连接",
             None,
@@ -931,7 +937,7 @@ fn all_fields() -> Vec<SettingField> {
         text_field(
             "ai.ollama.base_url",
             "Ollama 地址",
-            "本地 Ollama 的服务地址（默认 http://localhost:11434）",
+            "Ollama 服务地址",
             Ai,
             "连接",
             |c| c.ai.ollama.base_url.clone(),
@@ -940,7 +946,7 @@ fn all_fields() -> Vec<SettingField> {
         text_field(
             "ai.ollama.keep_alive",
             "模型常驻时长",
-            "Ollama keep_alive：5m 表示 5 分钟，-1 常驻，0 用完即卸",
+            "模型常驻时长",
             Ai,
             "连接",
             |c| c.ai.ollama.keep_alive.clone(),
@@ -949,7 +955,7 @@ fn all_fields() -> Vec<SettingField> {
         number_field(
             "ai.ollama.num_ctx",
             "上下文窗口",
-            "Ollama num_ctx：超过模型上限时会被自动夹回",
+            "上下文窗口",
             Ai,
             "连接",
             512.,
@@ -976,7 +982,7 @@ fn all_fields() -> Vec<SettingField> {
         number_field(
             "ai.max_context_chars",
             "上下文上限",
-            "发给模型的正文字符数上限，超出的部分会被截断并提示",
+            "发给模型的字符上限",
             Ai,
             "生成",
             1000.,
@@ -1031,7 +1037,7 @@ fn all_fields() -> Vec<SettingField> {
         bool_field(
             "ai.skills_enabled",
             "启用 Skills",
-            "库内 .xink/skills 与用户级 skills 是否参与命令面板",
+            "Skills 参与命令面板",
             Ai,
             "扩展",
             None,
@@ -1048,10 +1054,74 @@ fn all_fields() -> Vec<SettingField> {
         if ADVANCED_IDS.contains(&field.id) {
             field.tier = FieldTier::Advanced;
         }
+        if let Some(tip) = TIPS
+            .iter()
+            .find(|(id, _)| *id == field.id)
+            .map(|(_, tip)| *tip)
+        {
+            field.tip = tip;
+        }
         field
     })
     .collect()
 }
+
+/// 悬停提示：只给"描述一句话装不下"的项登记
+///
+/// 描述统一压到 20 字以内（有单测断言），被压掉的细节搬到这里，
+/// 悬停整行可见。没登记的项不显示气泡。
+pub const TIPS: &[(&str, &str)] = &[
+    ("basic.icon_size", "范围 12–48 px，影响目录树与工具栏"),
+    (
+        "basic.show_all_files",
+        "默认只显示笔记与图片；开启后非笔记文件与点开头的隐藏项也显示。\
+         `.git`、`node_modules`、`target` 始终不显示",
+    ),
+    ("editor.auto_save", "关闭后仍可用 Cmd-S 手动保存"),
+    ("editor.auto_save_delay_ms", "范围 200–60000 ms"),
+    (
+        "editor.soft_wrap",
+        "关闭后长行需横向滚动，但滚动同步更精确：一个源码行正好一个显示行",
+    ),
+    (
+        "editor.data_file.indent",
+        "范围 1–8。YAML / TOML 的序列化器不提供该配置，只对 JSON 生效",
+    ),
+    (
+        "editor.data_file.max_format_bytes",
+        "超过就原样显示不再排版；0 表示不限制，按 1MB 步进",
+    ),
+    (
+        "preview.image_display",
+        "原始尺寸做不到：渲染层会把图片限制在预览宽度内",
+    ),
+    ("preview.image_width_percent", "范围 20–100"),
+    (
+        "preview.sync_scroll",
+        "停止滚动约 0.25 秒后对齐一次；滚动过程中不动对端，避免抖动",
+    ),
+    (
+        "preview.sync_mode",
+        "比例跟随：按各自滚动百分比对齐，连续平滑（默认）。\
+         块锚点：按 Markdown 顶层块对齐，位置更准但块边界会跳。\
+         停止后对齐：滚动中不动对端，停下约 0.25 秒后对齐一次",
+    ),
+    ("ai.enabled", "关闭时所有 AI 入口不可用"),
+    ("ai.ollama.base_url", "默认 http://localhost:11434"),
+    (
+        "ai.ollama.keep_alive",
+        "Ollama keep_alive：5m 表示 5 分钟，-1 常驻，0 用完即卸",
+    ),
+    (
+        "ai.ollama.num_ctx",
+        "Ollama num_ctx：超过模型上限时会被自动夹回",
+    ),
+    ("ai.max_context_chars", "超出的部分会被截断并提示"),
+    (
+        "ai.skills_enabled",
+        "库内 .xink/skills 与用户级 skills 两级来源",
+    ),
+];
 
 /// 收进「高级」的设置项（低频 / 专家向）
 ///
@@ -1080,8 +1150,9 @@ pub const ADVANCED_IDS: &[&str] = &[
 /// 快捷键设置项：一个动作一行
 ///
 /// 值就是 `editor.keymap` 里的覆盖值；留空（或从没配过）表示用默认键位，
-/// 默认键位写在说明里，同时作为输入框的占位提示。
-/// 绑定只在启动时下发一次，所以改动**重启后生效**（说明里已标注）。
+/// 默认键位只作为输入框的占位提示。
+/// 绑定只在启动时下发一次，"重启后生效"这句在快捷键页顶部统一说一次，
+/// 不再逐项重复。
 fn keymap_fields() -> Vec<SettingField> {
     keymap::BINDINGS
         .iter()
@@ -2871,6 +2942,16 @@ impl Render for SettingsView {
         // 同样要 `min_h_0`：否则这一列会被自己的内容撑到"内容高度"，
         // 滚动区就有等于内容的高度，滚不动（同上面对话框内容层的坑）。
         let mut content = div().flex_1().min_w_0().min_h_0().flex_col().px_4().py_2();
+        // 快捷键那一页：16 项说明都一样，逐项重复一遍纯属噪音，提到页顶说一次
+        if self.tab == SettingsTab::Keymap {
+            content = content.child(
+                div()
+                    .text_xs()
+                    .pb_1()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("留空即用默认键位；改动在下次启动后生效"),
+            );
+        }
         let mut current_group = String::new();
         for field in &visible {
             if field.group != current_group {
@@ -2986,6 +3067,8 @@ impl SettingsView {
     }
 
     /// 单个设置项：标题 + 说明 + 控件 + 单项重置 + 状态标记
+    ///
+    /// 说明被压到 20 字以内，细节走悬停提示（`tip`），所以整行挂 tooltip。
     fn render_field(
         &mut self,
         field: &SettingField,
@@ -3020,6 +3103,18 @@ impl SettingsView {
                     .text_xs()
                     .text_color(cx.theme().warning)
                     .child(format!("⚠ 暂未生效 · {reason}")),
+            );
+        }
+        if !field.tip.is_empty() {
+            // 说明压到 20 字后装不下的细节放这里：一个 ⓘ，悬停看完整说明。
+            // 没用整行 tooltip——`div().tooltip()` 要的是 AnyView，
+            // 而 `&mut App` 上没有 new_view，为它单建一个 View 不值当
+            title = title.child(
+                Button::new(format!("{}-tip", field.id))
+                    .xsmall()
+                    .ghost()
+                    .label("ⓘ")
+                    .tooltip(field.tip),
             );
         }
         left = left.child(title);

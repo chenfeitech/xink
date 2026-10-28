@@ -191,6 +191,22 @@ fn keymap_fields_live_in_their_own_tab() {
     }
 }
 
+/// 说明 ≤20 字：长说明进 `TIPS`（悬停可见），主视图信息密度才压得下来
+#[test]
+fn descriptions_are_short_enough() {
+    // 一次列全部，省得改一个跑一次
+    let too_long: Vec<String> = all_fields()
+        .iter()
+        .filter(|field| field.desc.chars().count() > 20)
+        .map(|field| format!("{}({}字)", field.id, field.desc.chars().count()))
+        .collect();
+    assert!(
+        too_long.is_empty(),
+        "说明超过 20 字：{}",
+        too_long.join("、")
+    );
+}
+
 /// 排查用的 debug 项不给入口（配置字段保留，旧 `config.json` 里的值照旧生效）
 #[test]
 fn debug_only_field_has_no_settings_entry() {
