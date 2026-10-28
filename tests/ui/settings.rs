@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use super::{ADVANCED_IDS, FieldKind, FieldTier, SettingsTab, all_fields};
-use super::{capability_line, compact_num, vendor_of};
+use super::{capability_line, compact_num, truncate_chars, vendor_of};
 use crate::core::config::{AiProviderKind, AppConfig, ModelEntry};
 
 /// 描述表里的每一段命名空间（`id` 的第一段）
@@ -206,6 +206,16 @@ fn descriptions_are_short_enough() {
         "说明超过 20 字：{}",
         too_long.join("、")
     );
+}
+
+/// 列表里的提示词只做预览：短的照原样，超长截断并加省略号
+#[test]
+fn truncate_chars_keeps_short_text_and_marks_long() {
+    assert_eq!(truncate_chars("润色这一段", 100), "润色这一段");
+    let long: String = std::iter::repeat_n('词', 120).collect();
+    let out = truncate_chars(&long, 100);
+    assert_eq!(out.chars().count(), 101);
+    assert!(out.ends_with('…'));
 }
 
 /// 厂家归组只认 base_url 的域名：换厂家不用改数据结构，

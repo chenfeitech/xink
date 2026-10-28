@@ -1436,6 +1436,8 @@ mod layout {
     pub const CONTROL_W: f32 = 240.;
     /// 模型行的操作列宽：一行六个按钮，定宽才能让上下各行对齐
     pub const MODEL_ACTION_W: f32 = 340.;
+    /// 快捷动作行的操作列宽：一行五个按钮
+    pub const ACTION_ROW_W: f32 = 260.;
     /// 搜索无结果时的空态高度
     pub const EMPTY_H: f32 = 64.;
     /// 浮层高度：够放下大多数分类，超出部分由内容列滚动
@@ -1490,6 +1492,17 @@ fn vendor_of(model: &ModelEntry) -> (String, String) {
     } else {
         (name, host)
     }
+}
+
+/// 截断到 n 个字符，超出加省略号：列表里只做预览，完整内容编辑时看
+fn truncate_chars(text: &str, max: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max {
+        return text.to_string();
+    }
+    let mut out: String = chars.into_iter().take(max).collect();
+    out.push('…');
+    out
 }
 
 /// 128000 → `128k`，2_000_000 → `2M`
@@ -1830,32 +1843,23 @@ impl SettingsView {
             let id_toggle = action.id.clone();
             let id_edit = action.id.clone();
             let id_del = action.id.clone();
-            let prompt_preview: String = action.prompt.chars().take(40).collect();
+            // 编辑态：就地在这一行改，不再跳到底部那张（同时也用于「新增」的）表单
+            if self.action_edit_id.as_deref() == Some(id_edit.as_str()) {
+                block = block.child(self.render_action_editor(cx));
+                continue;
+            }
+            let prompt_preview = truncate_chars(&action.prompt, 100);
             let disabled = !action.enabled;
-            let row = div()
+
+            // 操作列定宽右对齐：上下各行的按钮左边缘才对得齐
+            let mut actions = div()
+                .flex_none()
+                .w(px(layout::ACTION_ROW_W))
                 .flex()
                 .items_center()
-                .gap_2()
-                .py_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .w(px(80.))
-                        .text_color(if disabled {
-                            muted
-                        } else {
-                            cx.theme().foreground
-                        })
-                        .child(action.name.clone()),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(prompt_preview),
-                )
+                .justify_end()
+                .gap_1();
+            actions = actions
                 // 范围：有选中用选中，还是始终整篇
                 .child(
                     Button::new(SharedString::from(format!("act-scope-{id_scope}")))
@@ -1925,6 +1929,7 @@ impl SettingsView {
                             let Some(action) = crate::app::config(cx).ai.action(&id_edit).cloned()
                             else {
                                 this.action_notice = Some("动作已不存在".into());
+                                cx.notify();
                                 return;
                             };
                             this.action_edit_id = Some(action.id.clone());
@@ -1936,6 +1941,8 @@ impl SettingsView {
                                 .update(cx, |input, cx| input.set_value(name, window, cx));
                             this.action_prompt
                                 .update(cx, |input, cx| input.set_value(prompt, window, cx));
+                            // 改的是视图自己的状态，没有 update_config 兜底刷窗口
+                            cx.notify();
                         })),
                 )
                 .child(
@@ -1955,6 +1962,36 @@ impl SettingsView {
                             this.action_notice = Some("已删除，可点「恢复内置默认」还原".into());
                         })),
                 );
+
+            // 主行放名称与操作；提示词另起一行小字，不再和按钮挤在一起
+            let row = div()
+                .flex_col()
+                .py_1()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(if disabled {
+                                    muted
+                                } else {
+                                    cx.theme().foreground
+                                })
+                                .child(action.name.clone()),
+                        )
+                        .child(actions),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .pt_1()
+                        .text_color(muted)
+                        .child(prompt_preview),
+                );
             block = block.child(row);
         }
 
@@ -1967,8 +2004,11 @@ impl SettingsView {
             );
         }
 
-        // ── 编辑 / 新增 ──
-        if self.action_edit_id.is_some() || self.action_is_new {
+        // ── 新增 ──
+        //
+        // 编辑已经行内化了，底部这张表单只管新增：编辑态时不显示，
+        // 免得两处共用同一对输入框（改这边、那边跟着变）
+        if self.action_is_new {
             block = block
                 .child(
                     div()
@@ -2267,6 +2307,62 @@ impl SettingsView {
         }
 
         block
+    }
+
+    /// 快捷动作的**行内编辑**：名称 + 提示词 + 保存 / 取消
+    ///
+    /// 以前点「编辑」是把内容填进列表底部那张表单（它同时也是「新增」用的），
+    /// 改一条要跑到列表末尾去找输入框；现在就地在这一行改，
+    /// 跟"点哪一行改哪一行"的表格编辑一个路子。
+    fn render_action_editor(&mut self, cx: &mut Context<SettingsView>) -> Div {
+        let id_for_save = self.action_edit_id.clone().unwrap_or_default();
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .py_1()
+            .child(Input::new(&self.action_name).small().w(px(120.)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&self.action_prompt).small()),
+            )
+            .child(
+                Button::new("act-inline-save")
+                    .xsmall()
+                    .outline()
+                    .label("保存")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let name = this.action_name.read(cx).value().trim().to_string();
+                        let prompt = this.action_prompt.read(cx).value().trim().to_string();
+                        if name.is_empty() || prompt.is_empty() {
+                            this.action_notice = Some("名称与提示词都不能为空".into());
+                            cx.notify();
+                            return;
+                        }
+                        let id = id_for_save.clone();
+                        crate::app::update_config(cx, move |cfg| {
+                            if let Some(a) = cfg.ai.actions.iter_mut().find(|a| a.id == id) {
+                                a.name = name;
+                                a.prompt = prompt;
+                            }
+                        });
+                        this.action_edit_id = None;
+                        this.action_notice = Some("已保存".into());
+                    })),
+            )
+            .child(
+                Button::new("act-inline-cancel")
+                    .xsmall()
+                    .ghost()
+                    .label("取消")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.action_edit_id = None;
+                        this.action_notice = None;
+                        cx.notify();
+                    })),
+            )
     }
 
     /// Ollama 区的「从 Ollama 拉取」：本地模型列表只能从 Ollama 那边拿

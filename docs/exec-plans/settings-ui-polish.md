@@ -34,6 +34,7 @@
 | T-4 | 「高级」受控折叠（`advanced_open`）+ 搜索命中自动展开与高亮 | T-1 | P1 | `src/ui/settings.rs` | G4 四连 + 人工 AC-7 / AC-8 | R-1 / R-7 | ✅ |
 | T-5 | AI 5 个列表面板改用与元数据分组同款容器（密钥面板仍就地挂在模型行下） | T-3 | P2 | `src/ui/settings.rs` | G4 四连 + 人工 AC-11 | R-6 | ✅ |
 | T-6 | AI 模型分区：Ollama 独立区 + 其余按厂家（base_url 域名）分列；模型行改两行（主行 + 能力小字）；操作列定宽 340 右对齐 | T-5 | P1 | `src/ui/settings.rs`、`tests/ui/settings.rs` | 新增加 3 条单测 + G4 四连 + 人工 AC-15 | R-8 / R-9 / R-10 | ✅ |
+| T-7 | 快捷动作：提示词移到名称下一行（预览截断 100 字）；「编辑」改行内就地编辑（保存 / 取消在这一行），底部表单只管新增 | T-5 | P1 | `src/ui/settings.rs`、`tests/ui/settings.rs` | 新增 1 条单测 + G4 四连 + 人工 AC-17 | R-11 / R-12 | ✅ |
 
 （计划阶段填充）
 
@@ -113,6 +114,16 @@ git diff --stat            : src/ui/settings.rs +477-267、tests/ui/settings.rs 
 
 T-6 拍板（用户 2026-10-28）：厂家按 base_url 域名自动归组（不改数据结构）、
 只做视觉分区仍逐模型配、能力小字含能力+上下文+工具、无地址模型进「其他」区。
+
+### T-7 提交前（2026-10-28）
+
+```text
+cargo build                : Finished，0 warning
+cargo clippy --all-targets : 0 warning
+cargo fmt --check          : no diff
+cargo test                 : 623 passed, 0 failed, 3 ignored（新增 truncate_chars 单测）
+git diff --stat            : src/ui/settings.rs +121-25、tests/ui/settings.rs +11（与计划一致）
+```
 
 ## 偏差记录
 
