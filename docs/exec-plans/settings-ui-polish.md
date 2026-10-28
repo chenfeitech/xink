@@ -31,7 +31,7 @@
 | T-1 | 分级与分类：`FieldTier` + `ADVANCED_IDS` 白名单；快捷键独立成 `SettingsTab::Keymap`；移除 `preview.debug_scroll_sync` 项 | — | P0 | `src/ui/settings.rs`、`tests/ui/settings.rs` | 新增 3 条测试 + G4 四连 | R-1 / R-2 / R-3 | ✅ |
 | T-2 | 描述精简：全部 desc ≤20 字；新增 `tip` 承载细节（标题旁 ⓘ 悬停）；keymap desc 同步；快捷键页顶部加「重启后生效」说明 | T-1 | P0 | `src/ui/settings.rs`、`src/core/keymap.rs`、`tests/ui/settings.rs` | 新增长度断言 + G4 四连 | R-4 | ✅ |
 | T-3 | 视觉：`GroupBox` 卡片分组、四级层级（页标题/分组标题/项标题/说明）、控件右列 240 右对齐、行高改 `min_h(44)`、窗口 180+660=840 | T-2 | P1 | `src/ui/settings.rs` | G4 四连 + 人工 AC-6 / AC-12 | R-5 | ✅ |
-| T-4 | 「高级」受控折叠（`advanced_open`）+ 搜索命中自动展开与高亮 | T-1 | P1 | `src/ui/settings.rs` | G4 四连 + 人工 AC-7 / AC-8 | R-1 / R-7 | ⬜ |
+| T-4 | 「高级」受控折叠（`advanced_open`）+ 搜索命中自动展开与高亮 | T-1 | P1 | `src/ui/settings.rs` | G4 四连 + 人工 AC-7 / AC-8 | R-1 / R-7 | ✅ |
 | T-5 | AI 6 个列表面板改用与元数据分组同款容器 | T-3 | P2 | `src/ui/settings.rs` | G4 四连 + 人工 AC-11 | R-6 | ⬜ |
 
 （计划阶段填充）
@@ -80,6 +80,16 @@ cargo test                 : 619 passed, 0 failed, 3 ignored
 git diff --stat            : src/ui/settings.rs +51-25（与计划一致）
 ```
 
+### T-4 提交前（2026-10-28）
+
+```text
+cargo build                : Finished，0 warning
+cargo clippy --all-targets : 0 warning
+cargo fmt --check          : no diff
+cargo test                 : 619 passed, 0 failed, 3 ignored
+git diff --stat            : src/ui/settings.rs +36-1（与计划一致）
+```
+
 ## 偏差记录
 
 1. **快捷键分类图标**：设计写 `IconName::Keyboard`，实测 `gpui_component::IconName`
@@ -87,6 +97,11 @@ git diff --stat            : src/ui/settings.rs +51-25（与计划一致）
    改用 `IconName::SquareTerminal`，代码注释已注明。
 2. **`tip` 字段推迟到 T-2**：T-1 只引入 `tier`，`tip` 等描述精简时一起加，
    否则会有 `field is never read` 警告（G4 要求 0 warning）。
-3. **提示挂在标题旁的 ⓘ 而非整行 tooltip**：`div().tooltip()` 要的是
+3. **「高级」放在每个分组卡片内，而不是全局一张卡片**：设计文档 §3.1
+   写的是"收进一个默认折叠的「高级」卡片"。实现时发现全局一张会把
+   图标大小、字体行高、JSON 缩进、keep_alive 混在一起，分区反而更乱；
+   改成每个分组卡片底部一段「高级（N 项）」，分组语义保留，
+   展开状态仍是全局一个 `advanced_open`。
+4. **提示挂在标题旁的 ⓘ 而非整行 tooltip**：`div().tooltip()` 要的是
    `Fn(&mut Window, &mut App) -> AnyView`，而 `&mut App` 上没有 `new_view`，
    为一句提示单建一个 View 不划算，改用 `Button::tooltip(&str)`（框架已支持）。

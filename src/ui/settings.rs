@@ -1381,6 +1381,12 @@ pub struct SettingsView {
     new_model_base: Entity<InputState>,
     /// 「新增模型」的 provider 类型（Ollama / OpenAI 兼容）
     new_model_kind: AiProviderKind,
+    /// 「高级」段是否展开
+    ///
+    /// 受控状态：改任何一个设置都会触发 `update_config` → 重绘，
+    /// 用组件库 `Accordion` 那种元素内状态会被重绘打回初始值，所以自己存。
+    /// 不持久化——关掉设置就回到收起，免得为一个 UI 状态加一个配置字段。
+    advanced_open: bool,
     /// 正在编辑密钥的模型 id（`None` 表示没在编辑）
     key_edit_id: Option<String>,
     key_input: Entity<InputState>,
@@ -1471,6 +1477,7 @@ impl SettingsView {
             new_model_base,
             new_model_kind: AiProviderKind::default(),
             key_edit_id: None,
+            advanced_open: false,
             key_input,
             key_notice: None,
             key_task: None,
@@ -2973,6 +2980,9 @@ impl Render for SettingsView {
                 _ => groups.push((field.group, vec![field])),
             }
         }
+        // 搜索命中高级项时自动展开，否则"搜到了却看不见"
+        let advanced_open = self.advanced_open
+            || (!query.is_empty() && visible.iter().any(|f| f.tier == FieldTier::Advanced));
         for (name, items) in groups {
             // 卡片标题：与设置项标题拉开一级（项标题 text_sm，说明 text_xs）
             let title = div()
@@ -2983,8 +2993,33 @@ impl Render for SettingsView {
             let mut card = GroupBox::new()
                 .with_variant(GroupBoxVariant::Fill)
                 .title(title);
-            for field in items {
+
+            let (core, advanced): (Vec<&SettingField>, Vec<&SettingField>) =
+                items.into_iter().partition(|f| f.tier == FieldTier::Core);
+            for field in core {
                 card = card.child(self.render_field(field, &cfg, cx));
+            }
+            if !advanced.is_empty() {
+                card = card.child(
+                    Button::new(format!("advanced-{name}"))
+                        .xsmall()
+                        .ghost()
+                        .label(format!(
+                            "{} 高级（{} 项）",
+                            if advanced_open { "▾" } else { "▸" },
+                            advanced.len()
+                        ))
+                        .tooltip("低频项，收起来不占地方")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.advanced_open = !this.advanced_open;
+                            cx.notify();
+                        })),
+                );
+                if advanced_open {
+                    for field in advanced {
+                        card = card.child(self.render_field(field, &cfg, cx));
+                    }
+                }
             }
             content = content.child(div().pb_2().child(card));
         }
