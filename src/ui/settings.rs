@@ -1252,6 +1252,8 @@ pub struct SettingsView {
     key_input: Entity<InputState>,
     /// 密钥区的提示 / 错误
     key_notice: Option<String>,
+    /// 写 Keychain 的后台任务（`security` 首次会弹系统授权框，不能在主线程等）
+    key_task: Option<Task<()>>,
     /// 拉取模型列表的后台任务
     model_task: Option<Task<()>>,
     /// 模型管理区的提示 / 错误
@@ -1334,6 +1336,7 @@ impl SettingsView {
             key_edit_id: None,
             key_input,
             key_notice: None,
+            key_task: None,
             model_task: None,
             model_notice: None,
             confirm_clear_snapshots: false,
@@ -1995,6 +1998,7 @@ impl SettingsView {
             let id_for_probe = id.clone();
             let mut row = div()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .py_1()
@@ -2079,6 +2083,9 @@ impl SettingsView {
                                 .unwrap_or_default();
                             this.key_input
                                 .update(cx, |input, cx| input.set_value(current, window, cx));
+                            // 本地状态变了必须自己 notify：改的不是配置，
+                            // 没有 `update_config` 兜底刷窗口
+                            cx.notify();
                         })),
                 )
                 .child(
@@ -2162,6 +2169,11 @@ impl SettingsView {
                 );
             let _ = &mut row;
             block = block.child(row);
+            // 密钥面板就地展开在被点的这一行下面：挂到列表末尾会被长列表
+            // 顶到滚动视口外面，看着就像"点了没反应"
+            if self.key_edit_id.as_deref() == Some(id.as_str()) {
+                block = block.child(self.render_key_panel(cx));
+            }
         }
 
         // ── 手动新增 ──
@@ -2247,18 +2259,39 @@ impl SettingsView {
             block = block.child(div().text_xs().text_color(muted).child(notice.clone()));
         }
 
-        // ── 密钥编辑 ──
-        //
-        // 以前 key 只能靠手敲 `security add-generic-password` 写进 Keychain，
-        // 明文来源更是恒空——云厂商模型因此"配得上、用不了"。这里补上写入口。
+        block
+    }
+
+    /// 单个模型的密钥面板：来源轮换 + 写入 / 清除
+    ///
+    /// 以前 key 只能靠手敲 `security add-generic-password` 写进 Keychain，
+    /// 明文来源更是恒空——云厂商模型因此"配得上、用不了"。这里补上写入口。
+    ///
+    /// 调用方负责把它挂在**被编辑那一行下面**（见 `render_models`）。
+    fn render_key_panel(&mut self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let primary = cx.theme().primary;
+        let mut block = div().flex_col().gap_1();
         if let Some(edit_id) = self.key_edit_id.clone() {
-            let source = crate::app::config(cx)
+            let model = crate::app::config(cx)
                 .ai
                 .models
                 .iter()
                 .find(|m| m.id == edit_id)
-                .map(|m| m.api_key_source)
-                .unwrap_or_default();
+                .cloned();
+            let Some(model) = model else {
+                // 编辑期间这个模型被删了：面板就地收起，不留一个指向空的操作区
+                self.key_edit_id = None;
+                return block;
+            };
+            let source = model.api_key_source;
+            // 用真实解析链路判"配没配"，而不是看某个字段：Keychain 里存着、
+            // 但配置上看不见的情况也能显示出来
+            let configured = crate::core::ai::keychain::resolve_api_key(
+                &model,
+                &crate::core::ai::keychain::MacKeychain,
+            )
+            .is_some();
             let source_label = match source {
                 KeySource::Keychain => "来源：Keychain",
                 KeySource::Env => "来源：环境变量",
@@ -2276,6 +2309,16 @@ impl SettingsView {
                                 .text_xs()
                                 .text_color(muted)
                                 .child(format!("{edit_id} 的密钥")),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(if configured { primary } else { muted })
+                                .child(if configured {
+                                    "已配置（重新输入后保存即覆盖）"
+                                } else {
+                                    "未配置"
+                                }),
                         )
                         .child(
                             Button::new("ai-key-source")
@@ -2296,6 +2339,7 @@ impl SettingsView {
                                             };
                                         }
                                     });
+                                    cx.notify();
                                 })),
                         ),
                 )
@@ -2315,13 +2359,14 @@ impl SettingsView {
                                 .small()
                                 .outline()
                                 .label("保存")
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_click(cx.listener(|this, _, window, cx| {
                                     let Some(id) = this.key_edit_id.clone() else {
                                         return;
                                     };
                                     let secret = this.key_input.read(cx).value().trim().to_string();
                                     if secret.is_empty() {
                                         this.key_notice = Some("密钥不能为空".into());
+                                        cx.notify();
                                         return;
                                     }
                                     let source = crate::app::config(cx)
@@ -2333,19 +2378,35 @@ impl SettingsView {
                                         .unwrap_or_default();
                                     match source {
                                         KeySource::Keychain => {
-                                            // 写 Keychain（`security` 命令），不落 config.json
-                                            match crate::core::ai::keychain::MacKeychain
-                                                .set(&id, &secret)
-                                            {
-                                                Ok(()) => {
-                                                    this.key_notice =
-                                                        Some("已写入系统钥匙串".into())
-                                                }
-                                                Err(err) => {
-                                                    this.key_notice =
-                                                        Some(format!("写入失败：{err}"))
-                                                }
-                                            }
+                                            // 写 Keychain（`security` 命令），不落 config.json。
+                                            // 首次会弹系统授权框，等在主线程上会把界面冻住，
+                                            // 因此扔后台跑
+                                            let id_for_task = id.clone();
+                                            let secret_for_task = secret.clone();
+                                            this.key_notice = Some("正在写入钥匙串…".into());
+                                            let task = cx.background_spawn(async move {
+                                                crate::core::ai::keychain::MacKeychain
+                                                    .set(&id_for_task, &secret_for_task)
+                                            });
+                                            this.key_task = Some(cx.spawn_in(
+                                                window,
+                                                async move |this, window| {
+                                                    let result = task.await;
+                                                    _ = this.update_in(
+                                                        window,
+                                                        |this, _window, cx| {
+                                                            this.key_notice = Some(match result {
+                                                                Ok(()) => "已写入系统钥匙串".into(),
+                                                                Err(err) => format!(
+                                                                    "写入失败：{err}；\
+                                                                     可换「明文」来源"
+                                                                ),
+                                                            });
+                                                            cx.notify();
+                                                        },
+                                                    );
+                                                },
+                                            ));
                                         }
                                         KeySource::Plain => {
                                             let secret_for_cfg = secret;
@@ -2366,6 +2427,9 @@ impl SettingsView {
                                             ));
                                         }
                                     }
+                                    // 写 Keychain / 提示走环境变量这两条路都不改配置，
+                                    // 没有 `update_config` 兜底，必须自己 notify
+                                    cx.notify();
                                 })),
                         )
                         .child(
@@ -2386,6 +2450,7 @@ impl SettingsView {
                                         }
                                     });
                                     this.key_notice = Some("已清除".into());
+                                    cx.notify();
                                 })),
                         )
                         .child(
