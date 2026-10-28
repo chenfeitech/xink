@@ -1572,15 +1572,10 @@ impl SettingsView {
     fn render_route(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
         let cfg = crate::app::config(cx);
         let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
 
         let mut block = div()
             .flex_col()
             .gap_1()
-            .pt_3()
-            .mt_2()
-            .border_t_1()
-            .border_color(border)
             .child(
                 div()
                     .text_sm()
@@ -1727,15 +1722,10 @@ impl SettingsView {
     fn render_actions(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
         let cfg = crate::app::config(cx);
         let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
 
         let mut block = div()
             .flex_col()
             .gap_1()
-            .pt_3()
-            .mt_2()
-            .border_t_1()
-            .border_color(border)
             .child(
                 div()
                     .text_sm()
@@ -2035,16 +2025,11 @@ impl SettingsView {
     fn render_models(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
         let cfg = crate::app::config(cx);
         let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
         let primary = cx.theme().primary;
 
         let mut block = div()
             .flex_col()
             .gap_1()
-            .pt_3()
-            .mt_2()
-            .border_t_1()
-            .border_color(border)
             .child(div().text_sm().font_weight(FontWeight(600.)).child("模型"));
 
         // ── 拉取 ──
@@ -2618,6 +2603,18 @@ impl SettingsView {
         block
     }
 
+    /// AI 面板与元数据分组同款容器：一张 GroupBox 卡片
+    ///
+    /// 这几块各自维护本地状态、不进元数据表，但外观必须和元数据分组一致，
+    /// 否则 AI 页和其它页看着不是一套东西。
+    fn panel_card(content: Div) -> Div {
+        div().pb_2().child(
+            GroupBox::new()
+                .with_variant(GroupBoxVariant::Fill)
+                .child(content),
+        )
+    }
+
     /// AI 改前快照：自动轮转之外，给一个手动清空的入口（需求 A8.4）
     ///
     /// 快照是"AI 改坏了能回退"的唯一手段（项目没有撤销栈），所以数量要看得见、
@@ -2626,17 +2623,12 @@ impl SettingsView {
         use crate::core::ai::snapshot::{MAX_SNAPSHOTS, SNAPSHOT_DIR, clear, count};
 
         let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
         let dir = crate::state::workspace::app_data_dir().join(SNAPSHOT_DIR);
         let total = count(&dir);
 
         let mut block = div()
             .flex_col()
             .gap_1()
-            .pt_3()
-            .mt_2()
-            .border_t_1()
-            .border_color(border)
             .child(div().text_sm().font_weight(FontWeight(600.)).child("快照"));
 
         block = block.child(div().text_xs().text_color(muted).child(format!(
@@ -2693,7 +2685,6 @@ impl SettingsView {
     /// 元数据表（一行一项、取值 / 写入都是固定字段）表达不了。
     fn render_skills(&mut self, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
         let cfg = crate::app::config(cx);
         let root = cx
             .try_global::<AppState>()
@@ -2705,36 +2696,29 @@ impl SettingsView {
         }
         let (found, issues) = self.skills_cache.clone().unwrap_or_default();
 
-        let mut block = div()
-            .flex_col()
-            .gap_1()
-            .pt_3()
-            .mt_2()
-            .border_t_1()
-            .border_color(border)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_sm()
-                            .font_weight(FontWeight(600.))
-                            .child("Skills"),
-                    )
-                    .child(
-                        Button::new("ai-rescan-skills")
-                            .small()
-                            .outline()
-                            .label("重新扫描")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.skills_cache = None;
-                                cx.notify();
-                            })),
-                    ),
-            );
+        let mut block = div().flex_col().gap_1().child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_sm()
+                        .font_weight(FontWeight(600.))
+                        .child("Skills"),
+                )
+                .child(
+                    Button::new("ai-rescan-skills")
+                        .small()
+                        .outline()
+                        .label("重新扫描")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.skills_cache = None;
+                            cx.notify();
+                        })),
+                ),
+        );
 
         block = block.child(
             div()
@@ -3039,13 +3023,13 @@ impl Render for SettingsView {
         // AI 分类额外挂一块「模型管理」：模型是列表、要能拉取与增删，
         // 元数据表（一行一项、取值/写入都是固定字段）表达不了，因此单独渲染。
         if self.tab == SettingsTab::Ai && query.is_empty() {
-            content = content.child(self.render_route(window, cx));
-            content = content.child(self.render_actions(window, cx));
-            content = content.child(self.render_models(window, cx));
+            content = content.child(Self::panel_card(self.render_route(window, cx)));
+            content = content.child(Self::panel_card(self.render_actions(window, cx)));
+            content = content.child(Self::panel_card(self.render_models(window, cx)));
             // 同一分类下再挂一块「快照」：列表类信息，元数据表表达不了
-            content = content.child(self.render_snapshots(cx));
+            content = content.child(Self::panel_card(self.render_snapshots(cx)));
             // Skills 同理：条目来自运行时发现，且要逐个启停
-            content = content.child(self.render_skills(cx));
+            content = content.child(Self::panel_card(self.render_skills(cx)));
         } else {
             // 切走就是放弃"确认清空"
             self.confirm_clear_snapshots = false;

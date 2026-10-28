@@ -32,7 +32,7 @@
 | T-2 | 描述精简：全部 desc ≤20 字；新增 `tip` 承载细节（标题旁 ⓘ 悬停）；keymap desc 同步；快捷键页顶部加「重启后生效」说明 | T-1 | P0 | `src/ui/settings.rs`、`src/core/keymap.rs`、`tests/ui/settings.rs` | 新增长度断言 + G4 四连 | R-4 | ✅ |
 | T-3 | 视觉：`GroupBox` 卡片分组、四级层级（页标题/分组标题/项标题/说明）、控件右列 240 右对齐、行高改 `min_h(44)`、窗口 180+660=840 | T-2 | P1 | `src/ui/settings.rs` | G4 四连 + 人工 AC-6 / AC-12 | R-5 | ✅ |
 | T-4 | 「高级」受控折叠（`advanced_open`）+ 搜索命中自动展开与高亮 | T-1 | P1 | `src/ui/settings.rs` | G4 四连 + 人工 AC-7 / AC-8 | R-1 / R-7 | ✅ |
-| T-5 | AI 6 个列表面板改用与元数据分组同款容器 | T-3 | P2 | `src/ui/settings.rs` | G4 四连 + 人工 AC-11 | R-6 | ⬜ |
+| T-5 | AI 5 个列表面板改用与元数据分组同款容器（密钥面板仍就地挂在模型行下） | T-3 | P2 | `src/ui/settings.rs` | G4 四连 + 人工 AC-11 | R-6 | ✅ |
 
 （计划阶段填充）
 
@@ -88,6 +88,16 @@ cargo clippy --all-targets : 0 warning
 cargo fmt --check          : no diff
 cargo test                 : 619 passed, 0 failed, 3 ignored
 git diff --stat            : src/ui/settings.rs +36-1（与计划一致）
+```
+
+### T-5 提交前（2026-10-28）
+
+```text
+cargo build                : Finished，0 warning
+cargo clippy --all-targets : 0 warning
+cargo fmt --check          : no diff
+cargo test                 : 619 passed, 0 failed, 3 ignored
+git diff --stat            : src/ui/settings.rs +40-56（与计划一致）
 ```
 
 ## 偏差记录
