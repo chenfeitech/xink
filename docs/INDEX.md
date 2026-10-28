@@ -84,7 +84,7 @@
 | [keymap-wiring-design.md](./config/keymap-wiring-design.md) | `editor.keymap` 接线：绑定表 / 覆盖解析 / 设置界面入口（L3 重启生效） | `core/keymap.rs`、`actions.rs`、`main.rs`、`ui/settings.rs` | ✅ 已实施（2026-10-26，待人工验收） |
 | [settings-ui-design.md](./config/settings-ui-design.md) | 设置窗口的交互与视觉设计 | `ui/settings.rs` | ✅（D5 搜索框曾只回显不可用，2026-10-20 已修复） |
 | [settings-ui-polish-requirements.md](./config/settings-ui-polish-requirements.md) | 设置界面优化需求：配置项梳理（核心/高级）、描述精简、Obsidian 风格布局（R-1…R-7） | `ui/settings.rs`、`core/keymap.rs` | ✅ **G1 已过**（2026-10-28 用户拍板 6 项） |
-| [settings-ui-polish-design.md](./config/settings-ui-polish-design.md) | 同上技术设计：tier 分级 + 受控高级折叠 + GroupBox 卡片 + 控件右列 + 加宽 840，P1–P5 分期 | `ui/settings.rs`、`core/keymap.rs` | 📝 **待用户确认（G2）**（2026-10-28） |
+| [settings-ui-polish-design.md](./config/settings-ui-polish-design.md) | 同上技术设计：tier 分级 + 受控高级折叠 + GroupBox 卡片 + 控件右列 + 加宽 840，T-1–T-5 分期 | `ui/settings.rs`、`core/keymap.rs` | ✅ **G2 已确认，T-1–T-5 已实施**（2026-10-28，分支 `feature/settings-ui-polish`）；人工验收见 [ACCEPTANCE.md §18](./ACCEPTANCE.md) |
 
 ## 7. 多库 — `docs/vault/`
 
