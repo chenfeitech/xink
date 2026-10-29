@@ -32,7 +32,7 @@
 | T-2 | 气泡重做：角色图标 + 双方底色 + `theme.radius` + hover + 折叠 affordance | T-1 | P0 | `src/ui/ai.rs`、`src/ui/tokens.rs` | G4 四连 + 人工 AC-5 / AC-6 | R-3 | ✅ |
 | T-3 | 输入区：`Textarea` 替换 `Input`；模式指示与「回到对话」；快捷动作当前项高亮 | T-2 | P1 | `src/ui/ai.rs`、`src/ui/tokens.rs` | G4 四连 + 人工 AC-7 | R-4 | ✅ |
 | T-4 | 状态行分区（图标 + 错误用 `danger`）；空态容器；损坏会话兜底测试 | T-3 | P1 | `src/ui/ai.rs`、`src/ui/tokens.rs`、`tests/state/ai_sessions.rs` | 新增加 1 条测试 + G4 四连 + 人工 AC-11 | R-5 | ✅ |
-| T-5 | 评审条 + `plan.rs` 卡片化；命令面板 `Icon` + `Kbd`；AI 按钮选中态；删 `eprintln!` | T-1 | P2 | `src/ui/editor.rs`、`src/ui/ai/plan.rs`、`src/ui/command.rs` | G4 四连 + 人工 AC-8 / AC-10 | R-6 / R-8 | ⬜ |
+| T-5 | 评审条 + `plan.rs` 卡片化；命令面板 `Icon` + 底部 `Kbd` 键位提示；AI 按钮选中态；删 `eprintln!` | T-4 | P2 | `src/ui/editor.rs`、`src/ui/ai/plan.rs`、`src/ui/command.rs`、`src/ui/tokens.rs` | G4 四连 + 人工 AC-8 / AC-10 | R-6 / R-8 | ✅ |
 | T-6 | 可拖拽调高：`v_resizable` + `ResizableState`，范围 160–600 | T-4 | P2 | `src/ui/editor.rs`、`src/ui/ai.rs` | G4 四连 + 人工 AC-9 / AC-12 | R-2 | ⬜ |
 
 （计划阶段填充）
@@ -92,6 +92,21 @@ git diff --stat            : src/ui/ai.rs +62-18、src/ui/tokens.rs +2、tests/s
 
 边界 E4（模型输出非 UTF-8）判定为**不适用**：Rust `String` 保证合法 UTF-8，
 唯一的字节→字符串转换在 `core/ai/keychain.rs:33/53`，已用 `from_utf8_lossy`。
+
+### T-5 提交前（2026-10-29）
+
+```text
+cargo build                : Finished，0 warning
+cargo clippy --all-targets : 0 warning
+cargo fmt --check          : no diff
+cargo test                 : 624 passed, 0 failed, 3 ignored
+git diff --stat            : src/ui/{command,editor,ai/plan,tokens}.rs +106-28
+```
+
+键位提示的落点调整：命令面板的候选是文件与 AI 动作，**都不是 gpui 的
+`Action`**，查不到各自绑定（`Kbd::binding_for_action` 用不上）。
+改为在面板底部提示面板自己的操作键（↑↓ 移动 / ⏎ 打开 / esc 关闭），
+用 `Kbd` 组件画（键位来自 `Keystroke::parse`，解析不出就不画该键）。
 
 `Size::XSmall` 用不了（`gpui_kit::*` 里 `Size` 是另一个泛型类型，
 Icon::size 要的是 `impl Into<Length>`），沿用项目既有写法

@@ -31,6 +31,7 @@ use crate::core::media::editor_language;
 use crate::core::note::is_markdown;
 use crate::core::sync::{AnchorTable, GestureGuard, ScrollAnchor, Side, SyncGuard};
 use crate::core::{Note, tab_key};
+use crate::ui::tokens;
 use crate::ui::{AiChat, AiChatEvent};
 use std::sync::Arc;
 
@@ -1672,11 +1673,6 @@ impl EditorPanel {
             self.ai_chat = Some(chat);
         }
         self.ai_open = !self.ai_open;
-        // 开关状态打一行：快捷键到底有没有走到这里，一眼就能看出来
-        eprintln!(
-            "[xink] AI 对话条：{}",
-            if self.ai_open { "打开" } else { "关闭" }
-        );
         if self.ai_open
             && let Some(chat) = &self.ai_chat
         {
@@ -2198,20 +2194,27 @@ impl EditorPanel {
                 .w(px(REVIEW_CARD_W))
                 .flex_none()
                 .flex_col()
-                .gap_0()
-                .px_2()
-                .py_1()
-                .rounded(px(6.))
+                .gap(px(tokens::SPACE_XS))
+                .px(px(tokens::SPACE_SM))
+                .py(px(tokens::SPACE_XS))
+                // 圆角跟主题（原来是写死的 px(6.)），底色用卡片色
+                // ——以前有边框没底色，不像卡片
+                .rounded(tokens::card_radius(cx))
                 .border_1()
-                .border_color(border);
+                .border_color(border)
+                .bg(tokens::card_bg(cx));
 
             // 标题行：点一下把编辑区选中到这一块
             let mut head = div()
                 .id(SharedString::from(format!("ai-review-focus-{ix}")))
                 .flex()
                 .items_center()
-                .gap_1()
+                .gap(px(tokens::SPACE_XS))
                 .cursor_pointer()
+                .rounded(tokens::card_radius(cx))
+                .px(px(tokens::SPACE_XS))
+                // 可点却一直没 hover 反馈
+                .hover(|s| s.bg(tokens::hover_bg(cx)))
                 .child(div().text_xs().text_color(muted).child(title))
                 .on_click(cx.listener(move |this, _, _, cx| this.focus_block(ix, cx)));
             if resolved {
@@ -2564,7 +2567,7 @@ impl EditorPanel {
             ))
             // AI 入口：与 Cmd-Shift-A 同一个开关。只有快捷键的话，
             // 这个对话条对没看过设计文档的人等于不存在——补个看得见的按钮。
-            .child(Self::ai_button(cx))
+            .child(self.ai_button(cx))
             .into_any_element()
     }
 
@@ -2618,12 +2621,18 @@ impl EditorPanel {
     ///
     /// 对话条是"贴着编辑区"的形态（`docs/ai/ai-assistant-design.md` D1），
     /// 因此入口也放在编辑区自己的工具栏上：点了就在正下方展开。
-    fn ai_button(cx: &mut Context<Self>) -> impl IntoElement {
+    fn ai_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let icon_size = crate::app::config(cx).basic.icon_size;
-        Button::new("fmt-ai")
+        // 对话条开着时用 primary：以前点了之后看不出来是开是关
+        let mut button = Button::new("fmt-ai")
             .small()
-            .ghost()
-            .icon(Icon::new(IconName::Bot).with_size(Size::Size(px(icon_size as f32))))
+            .icon(Icon::new(IconName::Bot).with_size(Size::Size(px(icon_size as f32))));
+        button = if self.ai_open {
+            button.primary()
+        } else {
+            button.ghost()
+        };
+        button
             .tooltip_with_action(
                 "AI 对话：针对这篇笔记提问或改写（对话条在编辑区下方）",
                 &ToggleAiChat,

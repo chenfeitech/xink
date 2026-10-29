@@ -39,6 +39,16 @@ pub fn row_radius(cx: &App) -> Pixels {
     cx.theme().radius
 }
 
+/// 卡片圆角（评审卡片、库任务条目）：直接跟主题
+pub fn card_radius(cx: &App) -> Pixels {
+    cx.theme().radius
+}
+
+/// 卡片底色：以前这些卡片有圆角没底色，看着不像卡片
+pub fn card_bg(cx: &App) -> Hsla {
+    cx.theme().group_box
+}
+
 // ── 语义色 ────────────────────────────────────────────
 
 /// 悬停底色：全项目统一口径

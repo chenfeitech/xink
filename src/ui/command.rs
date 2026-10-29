@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::WindowExt;
+// `gpui_kit::*` 里的 `Size` 是另一个泛型类型，组件库的 Size 要显式导入
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
+use gpui_kit::component::kbd::Kbd;
+use gpui_kit::component::{Icon, IconName, Sizable, Size};
 use gpui_kit::*;
 
 use crate::app::AppState;
@@ -22,6 +25,7 @@ use crate::core::media::{ai_excluded, is_editable_text};
 use crate::core::vault::{FileNode, Vault};
 use crate::state::workspace::app_data_dir;
 use crate::ui::tabs;
+use crate::ui::tokens;
 
 /// 最多展示的匹配条数：候选可能上万，全量装进列表会让测量与渲染都变慢
 const MAX_RESULTS: usize = 50;
@@ -238,31 +242,47 @@ impl Render for CommandPalette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         // 预先取好文本：items 的构造器要 `move`，不能在闭包里再借用 self
-        let rows: Vec<(String, Vec<usize>, Option<String>)> = self
+        // 第四位是"是不是 AI 入口"：决定条目用哪个图标
+        let rows: Vec<(String, Vec<usize>, Option<String>, bool)> = self
             .matches
             .iter()
             .zip(self.hits.iter())
             .filter_map(|(ix, hits)| {
-                self.files
-                    .get(*ix)
-                    .map(|c| (c.label.clone(), hits.clone(), c.hint.clone()))
+                self.files.get(*ix).map(|c| {
+                    (
+                        c.label.clone(),
+                        hits.clone(),
+                        c.hint.clone(),
+                        c.ai.is_some(),
+                    )
+                })
             })
             .collect();
         let notice = self.notice.clone().unwrap_or_default();
 
-        Command::new(&self.state)
+        let palette = Command::new(&self.state)
             // 自己算匹配与排序，组件只负责渲染与键盘导航
             .filterable(false)
             .bordered(false)
             .placeholder("搜索文件名…")
             .max_h(px(LIST_MAX_HEIGHT))
-            .items(rows.into_iter().map(|(label, hits, hint)| {
+            .items(rows.into_iter().map(|(label, hits, hint, is_ai)| {
                 CommandItem::new().child(move |_, cx| {
                     let mut row = div()
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap_2()
+                        .gap(px(tokens::SPACE_SM))
+                        // 条目以前没有任何图标：文件和 AI 动作长得一样
+                        .child(
+                            Icon::new(if is_ai {
+                                IconName::Bot
+                            } else {
+                                IconName::FileText
+                            })
+                            .with_size(Size::Size(px(14.)))
+                            .text_color(cx.theme().muted_foreground),
+                        )
                         .child(highlighted_label(&label, &hits, cx));
                     // 渲染闭包是 `Fn`（每帧都可能再调一次），不能把 hint 移走
                     if let Some(hint) = hint.clone() {
@@ -294,8 +314,42 @@ impl Render for CommandPalette {
                 let row = path.row;
                 entity.update(cx, |this, cx| this.confirm(row, window, cx));
             })
-            .on_cancel(close_palette)
+            .on_cancel(close_palette);
+
+        div().flex_col().child(palette).child(hint_row(cx))
     }
+}
+
+/// 面板底部的键位提示
+///
+/// 命令面板以前一个按键提示都没有。条目的候选是文件与 AI 动作，都不是
+/// gpui 的 `Action`、没有绑定可查，所以这里提示的是面板自己的操作键。
+fn hint_row(cx: &App) -> Div {
+    let muted = cx.theme().muted_foreground;
+    let mut row = div()
+        .flex()
+        .items_center()
+        .gap(px(tokens::SPACE_XS))
+        .px(px(tokens::SPACE_SM))
+        .py(px(tokens::SPACE_XS))
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .text_xs()
+        .text_color(muted);
+    for (ix, (key, label)) in [("up", "移动"), ("enter", "打开"), ("escape", "关闭")]
+        .iter()
+        .enumerate()
+    {
+        if ix > 0 {
+            row = row.child(div().child("·"));
+        }
+        // 键位解析不出来就不画这个键，不显示空标签
+        if let Ok(stroke) = Keystroke::parse(key) {
+            row = row.child(Kbd::new(stroke));
+        }
+        row = row.child(div().child(*label));
+    }
+    row
 }
 
 /// 把路径按命中位置切段渲染：命中的字符加粗并染色。
