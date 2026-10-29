@@ -107,6 +107,9 @@ impl ModelCache {
     ///
     /// 只更新**能力类字段**（上下文上限、能力列表），绝不覆盖用户改过的参数——
     /// 否则每次「拉取」都会把用户调好的 num_ctx / temperature 冲掉。
+    ///
+    /// 能力列表额外尊重 `capabilities_pinned`：用户在界面上手动改过的话，
+    /// 拉取不再覆盖（`merge_into` 本来就是"厂商声明"的来源，用户勾的是权威）。
     /// 返回新增的模型数量。
     pub fn merge_into(&self, entries: &mut Vec<ModelEntry>) -> usize {
         let mut added = 0;
@@ -114,7 +117,9 @@ impl ModelCache {
             match entries.iter_mut().find(|e| e.id == found.name) {
                 Some(entry) => {
                     entry.context_limit = found.context_length;
-                    entry.capabilities = found.capabilities.clone();
+                    if !entry.capabilities_pinned {
+                        entry.capabilities = found.capabilities.clone();
+                    }
                 }
                 None => {
                     entries.push(ModelEntry::discovered(found));

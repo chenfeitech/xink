@@ -633,7 +633,16 @@ pub struct ModelEntry {
     /// 来自 `/api/tags` 的 context_length；None 时按默认 num_ctx 用
     pub context_limit: Option<u32>,
     /// 来自 `/api/tags`：`completion` / `tools` / `thinking` / `vision`
+    ///
+    /// 说明文案见 `core/ai/capability.rs` 的 `info()`。
+    /// OpenAI 兼容端点没有能力来源，这一项靠 `capability::infer()` 给默认值。
     pub capabilities: Vec<String>,
+    /// 用户**手动改过**能力清单：`true` 时 `/api/tags` 与静态表都不再覆盖它
+    ///
+    /// 用独立 bool 而不是把 `capabilities` 改成 `Option`：后者的 `Some`
+    /// 分不清是「Ollama 拉回来的」「静态表推断的」还是「用户勾的」——
+    /// 只有最后一种才不该被覆盖。
+    pub capabilities_pinned: bool,
     /// 是否启用工具阶段（连接测试通过才置 true）
     pub tools_enabled: bool,
     /// 列表里停用
@@ -858,6 +867,7 @@ impl Default for ModelEntry {
             params: AiModelParams::default(),
             context_limit: None,
             capabilities: Vec::new(),
+            capabilities_pinned: false,
             tools_enabled: false,
             enabled: true,
             last_checked_ms: 0,
