@@ -12,6 +12,7 @@
 //! 3. 只产出 [`StreamEvent`]，UI 侧负责渲染与节流。
 
 pub mod agent_loop;
+pub mod capability;
 pub mod context;
 pub mod diff;
 pub mod keychain;
