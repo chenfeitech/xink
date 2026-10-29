@@ -32,6 +32,11 @@ pub fn bubble_radius(cx: &App) -> Pixels {
     if base < px(4.) { px(10.) } else { base * 2. }
 }
 
+/// 整行可点元素的小圆角（折叠占位、块标题）：直接跟主题
+pub fn row_radius(cx: &App) -> Pixels {
+    cx.theme().radius
+}
+
 // ── 语义色 ────────────────────────────────────────────
 
 /// 悬停底色：全项目统一口径
@@ -53,6 +58,11 @@ pub fn user_bubble_bg(cx: &App) -> Hsla {
 /// 从 accent 色算气泡底色：纯函数，便于单测（`user_bubble_bg` 走这里）
 pub fn bubble_bg_from_accent(accent: Hsla) -> Hsla {
     accent.opacity(0.12)
+}
+
+/// 比 hover 再重一档：气泡自身底色已经很淡，hover 用它才看得出变化
+pub fn selected_bg(cx: &App) -> Hsla {
+    cx.theme().accent.opacity(0.18)
 }
 
 /// AI 气泡底色：以前**没有**底色，只靠左右对齐和用户气泡区分

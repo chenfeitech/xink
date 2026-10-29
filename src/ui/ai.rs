@@ -19,9 +19,11 @@ use std::time::{Duration, Instant};
 use gpui_kit::base::TextView;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
+// `gpui_kit::*` 里的 `Size` 是另一个泛型类型，组件库的 Size 要显式导入
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::{Icon, IconName, Size};
 use gpui_kit::*;
 
 use crate::app::{AppState, config};
@@ -1437,17 +1439,30 @@ impl Render for AiChat {
             // 过程块（工具 / 校验 / diff）仍是"标题 + 可折叠正文"。
             if let Block::User { text, .. } | Block::Assistant { text, .. } = block {
                 let mine = matches!(block, Block::User { .. });
-                if !mine && text.is_empty() && self.busy {
-                    continue;
-                }
                 // 外层是整行容器，靠 `justify` 决定气泡贴哪一边：
                 // 比给气泡自身设 `align_self` 稳（不受父容器 align-items 影响）
-                let row = div().w_full().flex();
+                let row = div()
+                    .w_full()
+                    .flex()
+                    .items_start()
+                    .gap(px(tokens::SPACE_XS));
                 let row = if mine {
                     // 用户消息贴右、AI 回复贴左
                     row.justify_end()
                 } else {
                     row.justify_start()
+                };
+                // 角色标识：以前只靠左右对齐区分是谁说的
+                let role = |mine: bool| {
+                    div().flex_none().pt(px(tokens::SPACE_SM)).child(
+                        Icon::new(if mine {
+                            IconName::CircleUser
+                        } else {
+                            IconName::Bot
+                        })
+                        .with_size(Size::Size(px(14.)))
+                        .text_color(muted),
+                    )
                 };
                 if collapsed {
                     // 收起后没有标题可点，留一行极简提示（对齐方向保持原样）
@@ -1458,12 +1473,36 @@ impl Render for AiChat {
                                 .text_xs()
                                 .text_color(muted)
                                 .cursor_pointer()
+                                .rounded(tokens::row_radius(cx))
+                                .px(px(tokens::SPACE_XS))
+                                .hover(|s| s.bg(tokens::hover_bg(cx)))
                                 .on_click(
                                     cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)),
                                 )
                                 .child("…（点击展开）"),
                         ),
                     );
+                    continue;
+                }
+                // 等首个字：以前直接跳过，界面上什么都看不到（只有状态行一行字）
+                if !mine && text.is_empty() {
+                    if self.busy {
+                        history = history.child(
+                            row.child(role(mine)).child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(tokens::SPACE_XS))
+                                    .py(px(tokens::SPACE_XS))
+                                    .child(
+                                        Icon::new(IconName::Loader)
+                                            .with_size(Size::Size(px(14.)))
+                                            .text_color(muted),
+                                    )
+                                    .child(div().text_xs().text_color(muted).child("生成中…")),
+                            ),
+                        );
+                    }
                     continue;
                 }
                 let mut bubble = div()
@@ -1475,6 +1514,8 @@ impl Render for AiChat {
                     .px(px(tokens::SPACE_MD))
                     .py(px(tokens::SPACE_SM))
                     .cursor_pointer()
+                    // 气泡可点（折叠/展开），得有 hover 才看得出
+                    .hover(|s| s.bg(tokens::selected_bg(cx)))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)));
                 if mine {
                     // 用户消息：accent 淡底 + 文字右对齐（底色走主题，不再手搓 HSL）
@@ -1484,15 +1525,18 @@ impl Render for AiChat {
                     // 只靠左右对齐和用户消息区分）
                     bubble = bubble.text_left().bg(tokens::ai_bubble_bg(cx));
                 }
-                history = history.child(
-                    row.child(
-                        bubble.child(
-                            TextView::markdown(("ai-body", ix), text.clone())
-                                .selectable(true)
-                                .text_sm(),
-                        ),
-                    ),
+                let bubble = bubble.child(
+                    TextView::markdown(("ai-body", ix), text.clone())
+                        .selectable(true)
+                        .text_sm(),
                 );
+                // 角色图标贴气泡外侧：AI 在左、用户在右
+                let row = if mine {
+                    row.child(bubble).child(role(mine))
+                } else {
+                    row.child(role(mine)).child(bubble)
+                };
+                history = history.child(row);
                 continue;
             }
             let (title, body) = match block {
@@ -1526,8 +1570,12 @@ impl Render for AiChat {
                     .id(("ai-block", ix))
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap(px(tokens::SPACE_XS))
                     .cursor_pointer()
+                    .rounded(tokens::row_radius(cx))
+                    .px(px(tokens::SPACE_XS))
+                    // 标题行可点（折叠/展开），补上 hover 反馈
+                    .hover(|s| s.bg(tokens::hover_bg(cx)))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)))
                     .child(div().text_xs().text_color(muted).child(if collapsed {
                         "▸"
