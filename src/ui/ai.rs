@@ -28,7 +28,7 @@ use gpui_kit::*;
 
 use crate::app::{AppState, config};
 use crate::core::ai::agent_loop::{self, LoopEvent, LoopRequest};
-use crate::core::ai::context::{ContextScope, assemble};
+use crate::core::ai::context::{ContextScope, PreparedContext, assemble};
 use crate::core::ai::diff::{DiffLine, diff_lines};
 use crate::core::ai::keychain::{MacKeychain, resolve_api_key};
 /// 库级任务的计划面板（M3-P1）
@@ -367,6 +367,22 @@ fn code_fence(text: &str) -> String {
     format!("{fence}\n{text}\n{fence}")
 }
 
+/// 上下文装配的提示文案：被截断时补上"去哪调"
+///
+/// 单独抽出来是为了能单测——`AiChat::take_context` 要 `&mut self`，测它得先
+/// 造一个 `AiChat`（要窗口与 cx），而这里只是字符串拼接。
+///
+/// 提示要能行动：光说"内容超过预算"用户不知道去哪个设置项改。
+fn context_notice(prepared: &PreparedContext) -> Option<String> {
+    prepared.notice.clone().map(|text| {
+        if prepared.truncated {
+            format!("{text}（设置 · AI 里调大「上下文上限」）")
+        } else {
+            text
+        }
+    })
+}
+
 /// 结果怎么落到笔记里
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApplyKind {
@@ -424,6 +440,12 @@ pub struct AiChat {
     pending: Option<PendingEdit>,
     error: Option<String>,
     notice: Option<String>,
+    /// `notice` 是不是**警告**级（上下文被截断）：true 时状态行用红字 + 警告图标，
+    /// false 时是灰字 + 信息图标——"已写入改前快照"这类中性说明不该被染红。
+    ctx_truncated: bool,
+    /// 生成预算耗尽（`StreamEvent::Truncated`）：模型是"到顶就停"而不是正常收尾，
+    /// 结果多半是半截的，但请求本身成功了。
+    out_truncated: bool,
     usage: Option<Usage>,
     /// 本次发给模型的正文预估 token 数（粗估，用于状态行提示预算）
     input_tokens: Option<usize>,
@@ -485,6 +507,8 @@ impl AiChat {
             pending: None,
             error: None,
             notice: None,
+            ctx_truncated: false,
+            out_truncated: false,
             usage: None,
             input_tokens: None,
             elapsed_ms: None,
@@ -501,6 +525,17 @@ impl AiChat {
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |state, cx| state.focus(window, cx));
+    }
+
+    /// 记下上下文装配的结果
+    ///
+    /// 截断是**警告**，但以前它和"已写入改前快照"这类中性说明共用 `notice`
+    /// 与同一个灰色，一句"内容超过预算"混在耗时 / tokens 里扫一眼就漏掉
+    /// ——这才是"后半篇没被处理"却毫无察觉的原因。
+    /// 现在分级：`ctx_truncated` 决定状态行用红字还是灰字。
+    fn take_context(&mut self, prepared: &PreparedContext) {
+        self.ctx_truncated = prepared.truncated;
+        self.notice = context_notice(prepared);
     }
 
     /// 本次请求的上下文字符预算：全局上限与模型窗口取小者
@@ -590,7 +625,7 @@ impl AiChat {
             0,
             self.context_budget(cx),
         );
-        self.notice = prepared.notice.clone();
+        self.take_context(&prepared);
         self.input_tokens = Some(crate::core::ai::estimate_tokens(&prepared.text));
         self.pending = Some(PendingEdit {
             path,
@@ -650,7 +685,7 @@ impl AiChat {
         };
         let cfg = config(cx);
         let prepared = assemble(scope, &selection, &whole, cursor, self.context_budget(cx));
-        self.notice = prepared.notice.clone();
+        self.take_context(&prepared);
         self.input_tokens = Some(crate::core::ai::estimate_tokens(&prepared.text));
         // 落法同样由动作声明：Insert 是"往里加内容"，判成替换会删掉其余部分
         let kind = match action.apply {
@@ -729,7 +764,7 @@ impl AiChat {
         };
         let cfg = config(cx);
         let prepared = assemble(scope, &selection, &whole, cursor, self.context_budget(cx));
-        self.notice = prepared.notice.clone();
+        self.take_context(&prepared);
         self.input_tokens = Some(crate::core::ai::estimate_tokens(&prepared.text));
         // 落地方式由**结果**决定（`classify_and_record`）：与原文对得上就进
         // 评审条逐块决定，对不上自动降级成插入，不会闷头替换整篇。
@@ -762,6 +797,9 @@ impl AiChat {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // 上一轮的"结果不全"不该留到这一轮；放在最前面，未配置 / 没模型
+        // 这类提前返回的分支也一并清掉
+        self.out_truncated = false;
         let cfg = config(cx);
         if !cfg.ai.is_ready() {
             // 未启用与没选模型是两件事，提示要能区分
@@ -957,9 +995,14 @@ impl AiChat {
                 self.usage = Some(usage);
                 false
             }
-            // 预算耗尽（协议侧 `length`）：本身不是错误，请求照常走完，
-            // 只是结果不全。落到状态行的红字提示在 T-2 接线。
-            StreamEvent::Truncated => false,
+            // 预算耗尽（协议侧 `length`）：请求是成功的，只是结果不全。
+            // 以前它与正常收尾在界面上完全同形，用户看到的是半截答案
+            // 却以为 AI 就这样。这里只记标志，状态行的红字在下面渲染。
+            StreamEvent::Truncated => {
+                self.out_truncated = true;
+                cx.notify();
+                false
+            }
             StreamEvent::Done => {
                 self.finish(window, cx);
                 true
@@ -1938,12 +1981,28 @@ impl Render for AiChat {
         if let Some(tokens) = self.input_tokens {
             status = status.child(stat(None, format!("上下文约 {tokens} tokens"), muted));
         }
+        // 中性说明保持灰字；上下文被截断是警告，升为红字——两者共用
+        // `notice` 一个字段，靠 `ctx_truncated` 分级（见 `take_context`）
         if let Some(notice) = &self.notice {
-            status = status.child(stat(Some(IconName::Info), notice.clone(), muted));
+            let (icon, color) = if self.ctx_truncated {
+                (IconName::CircleAlert, danger)
+            } else {
+                (IconName::Info, muted)
+            };
+            status = status.child(stat(Some(icon), notice.clone(), color));
         }
         // 错误单独一档：以前和普通提示一样是灰字，看不出是出问题了
         if let Some(err) = &self.error {
             status = status.child(stat(Some(IconName::CircleAlert), err.clone(), danger));
+        }
+        // 生成预算耗尽：请求成功但结果是半截的。排最后——比"上下文超限"
+        // 更直接地影响这一轮的可用性。
+        if self.out_truncated {
+            status = status.child(stat(
+                Some(IconName::CircleAlert),
+                "生成到预算上限就停了，结果不完整（设置 · AI 里调大「最大生成」）".to_string(),
+                danger,
+            ));
         }
 
         // 高度由外层 `v_resizable` 的面板给（`size_full` 接住它），

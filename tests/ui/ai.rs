@@ -6,10 +6,48 @@
 //! 只测不依赖窗口的那部分：代码围栏的转义、折叠状态的初值与切换。
 //! "能不能选中 / 复制"是框架 `TextView` 的行为，只能人工验收。
 
-use super::{Block, code_fence};
+use super::{Block, code_fence, context_notice};
+use crate::core::ai::context::PreparedContext;
 use crate::core::ai::diff::DiffLine;
 use crate::state::ai_sessions::StoredBlock;
 use gpui_kit::hsla;
+
+/// 上下文截断的提示：必须补上"去哪调"，否则用户只知道超预算、不知道改哪里
+#[test]
+fn context_notice_says_where_to_fix_when_truncated() {
+    let prepared = PreparedContext {
+        text: "前半篇…".into(),
+        truncated: true,
+        notice: Some("内容超过预算，本次只发送第 1–40 行".into()),
+    };
+    let notice = context_notice(&prepared).expect("截断时一定有提示");
+    assert!(notice.starts_with("内容超过预算"), "{notice:?}");
+    assert!(
+        notice.contains("上下文上限"),
+        "要点明去哪个设置项：{notice:?}"
+    );
+}
+
+/// 中性说明不能被当成警告：`notice` 还承载"已写入改前快照"这类内容
+#[test]
+fn context_notice_leaves_neutral_text_alone() {
+    let prepared = PreparedContext {
+        text: String::new(),
+        truncated: false,
+        notice: Some("已写入改前快照".into()),
+    };
+    assert_eq!(context_notice(&prepared).as_deref(), Some("已写入改前快照"));
+}
+
+#[test]
+fn context_notice_is_none_when_nothing_to_say() {
+    let prepared = PreparedContext {
+        text: String::new(),
+        truncated: true,
+        notice: None,
+    };
+    assert!(context_notice(&prepared).is_none());
+}
 
 #[test]
 fn code_fence_wraps_text_in_three_backticks() {
