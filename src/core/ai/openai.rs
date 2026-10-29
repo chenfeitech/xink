@@ -194,11 +194,10 @@ fn frame_to_events(
             }
         }
     }
-    if choice
-        .get("finish_reason")
-        .and_then(|v| v.as_str())
-        .is_some()
-    {
+    // 非末帧的 `finish_reason` 恒为 `null`（`.as_str()` 取不到），拿到字符串就是收尾帧。
+    // 顺带判值：`"length"` 是预算耗尽，与 Ollama 的 `done_reason` 同理
+    // （见 `ollama.rs` 的同一段注释）——不判就等于把半截结果当成完整回复。
+    if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
         // 收尾时才把攒好的调用发出去：参数此刻才拼完整
         for draft in drafts.drain(..) {
             if draft.name.is_empty() {
@@ -208,6 +207,9 @@ fn frame_to_events(
                 name: draft.name,
                 arguments: draft.arguments,
             }));
+        }
+        if reason == "length" {
+            out.push(StreamEvent::Truncated);
         }
         out.push(StreamEvent::Done);
     }

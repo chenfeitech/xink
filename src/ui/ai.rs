@@ -957,6 +957,9 @@ impl AiChat {
                 self.usage = Some(usage);
                 false
             }
+            // 预算耗尽（协议侧 `length`）：本身不是错误，请求照常走完，
+            // 只是结果不全。落到状态行的红字提示在 T-2 接线。
+            StreamEvent::Truncated => false,
             StreamEvent::Done => {
                 self.finish(window, cx);
                 true

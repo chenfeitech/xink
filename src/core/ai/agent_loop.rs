@@ -131,9 +131,10 @@ pub fn run(
             StreamEvent::ToolCall(call) => calls.push(call),
             StreamEvent::Usage(usage) => last_usage = Some(usage),
             StreamEvent::Failed(err) => failed = Some(err),
-            // 思维链与结束信号在 loop 里不用：思维链不回灌，
-            // 结束由本函数自己判定
-            StreamEvent::Thinking(_) | StreamEvent::Done => {}
+            // 思维链与结束信号在 loop 里不用：思维链不回灌，结束由本函数自己判定。
+            // 预算耗尽同样不处理：loop 只关心"有没有工具调用"与"正文是否为空"，
+            // 半截答案在这里会被照常收下；"结果可能不全"由 UI 侧（`ui/ai.rs`）提示。
+            StreamEvent::Thinking(_) | StreamEvent::Truncated | StreamEvent::Done => {}
         })?;
         if let Some(err) = failed {
             return Err(err);

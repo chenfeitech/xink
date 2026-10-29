@@ -287,6 +287,13 @@ fn frame_to_events(line: &str, usage: &mut Usage, out: &mut Vec<StreamEvent>) {
             .as_u64()
             .map(|ns| ns / 1_000_000)
             .or_else(|| value["total_duration"].as_u64().map(|ns| ns / 1_000_000));
+        // 预算耗尽与正常收尾在协议上都是 `done:true`，只有 `done_reason` 能区分：
+        // 不读它就等于把"写了一半就停"当成一次成功的回复。
+        // 只认字面量 `"length"`，其余取值（`"stop"` / `"unload"` / 字段缺失）
+        // 一律按未截断处理。
+        if value["done_reason"].as_str() == Some("length") {
+            out.push(StreamEvent::Truncated);
+        }
         out.push(StreamEvent::Done);
     }
 }

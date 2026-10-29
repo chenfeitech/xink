@@ -151,6 +151,16 @@ pub enum StreamEvent {
     /// provider 已统一成 JSON 文本；`ToolCall::arguments` 为空串表示无参数。
     ToolCall(ToolCall),
     Usage(Usage),
+    /// 生成预算耗尽：协议侧 `done_reason` / `finish_reason` 为 `"length"`，
+    /// 模型是"到顶就停"而不是正常收尾，结果多半是半截的。
+    ///
+    /// **不是** [`AiError::Truncated`]——那个表示连接中断（并且被判为可重试，
+    /// 见 [`is_retryable`]）；预算耗尽重试一遍只是再烧一次 token，没有意义，
+    /// 所以它是"已经拿到结果、只是结果不全"，不是错误。
+    ///
+    /// 必须在 [`Self::Done`] **之前**发出：UI 收到 `Done` 就收尾了
+    /// （`ui/ai.rs` 的 `finish()`），之后再来的事件没有落点。
+    Truncated,
     Done,
     Failed(AiError),
 }

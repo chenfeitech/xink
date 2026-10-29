@@ -117,6 +117,53 @@ fn 默认生成参数给足预算() {
     assert!(!params.think, "默认关闭思考");
 }
 
+// ── 生成预算耗尽（`finish_reason`）──────────────────────────
+//
+// 与 Ollama 的 `done_reason` 同一件事：预算耗尽（`"length"`）和正常收尾
+// （`"stop"`）都是"收到字符串"，只判断"有没有值"会把两者混为一谈。
+
+#[test]
+fn finish_reason_为_length_时先发截断再发完成() {
+    use crate::core::ai::openai::frame_to_events;
+    use crate::core::ai::{StreamEvent, Usage};
+
+    let mut usage = Usage::default();
+    let mut events = Vec::new();
+    let mut drafts = Vec::new();
+    frame_to_events(
+        r#"{"choices":[{"delta":{},"finish_reason":"length"}]}"#,
+        &mut usage,
+        &mut events,
+        &mut drafts,
+    );
+    assert_eq!(
+        events,
+        vec![StreamEvent::Truncated, StreamEvent::Done],
+        "截断必须在 Done 之前"
+    );
+}
+
+#[test]
+fn finish_reason_为_stop_或_null_时不发截断() {
+    use crate::core::ai::openai::frame_to_events;
+    use crate::core::ai::{StreamEvent, Usage};
+
+    for payload in [
+        r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        // 非末帧的 finish_reason 恒为 null：`.as_str()` 取不到，不该有任何事件
+        r#"{"choices":[{"delta":{"content":"你"},"finish_reason":null}]}"#,
+    ] {
+        let mut usage = Usage::default();
+        let mut events = Vec::new();
+        let mut drafts = Vec::new();
+        frame_to_events(payload, &mut usage, &mut events, &mut drafts);
+        assert!(
+            !events.iter().any(|ev| matches!(ev, StreamEvent::Truncated)),
+            "{payload} 不该判为截断：{events:?}"
+        );
+    }
+}
+
 // ── 请求体 ────────────────────────────────────────────────────
 //
 // 请求体是与远端之间的契约：字段写错不会在本地报错，只会表现为"对端 400"
