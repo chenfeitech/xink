@@ -110,6 +110,8 @@
 | [ai-ui-overhaul-requirements.md](./ai/ai-ui-overhaul-requirements.md) | AI 交互界面全面优化需求：视觉规范 token 化、气泡/输入/状态行重做、交互细节（hover/键位/拖拽）、明暗一致（R-1…R-8） | `ui/ai.rs`、`ui/editor.rs`、`ui/ai/plan.rs`、`ui/command.rs` | ✅ **已实施并合入 main**（2026-10-29，`f02b331`）；人工验收见 [ACCEPTANCE.md §19](./ACCEPTANCE.md) |
 | [ai-ui-overhaul-design.md](./ai/ai-ui-overhaul-design.md) | 同上技术设计：新建 `ui/tokens.rs` 全局视觉规范 + 四块 UI 重做，P1–P6 分期 | 同上 + 新增 `ui/tokens.rs` | ✅ **已实施并合入 main**（2026-10-29，`f02b331`） |
 | [multi-model-architecture-design.md](./ai/multi-model-architecture-design.md) | 多模型可插拔架构：Provider 注册表、统一 `CompletionRequest` 接口、能力差异（流式 / 上下文 / 工具）兼容、重试与备用模型、按场景路由、扩展边界 | `core/ai/mod.rs`、`core/ai/keychain.rs`、`core/config.rs`、`ui/{ai,settings}.rs` | ✅ **P0–P4 已实施**（2026-10-28）；人工验收见 [ACCEPTANCE.md §17](./ACCEPTANCE.md) |
+| [ai-output-truncation-requirements.md](./ai/ai-output-truncation-requirements.md) | AI 结果"不全面"：`num_predict` 默认 1024 且设置里没有出口、`done_reason`/`finish_reason=="length"` 无识别 → 输出与上下文两类截断都静默发生 | `core/ai/{ollama,openai,mod}.rs`、`core/config.rs`、`ui/{ai,settings}.rs` | ✅ **G1 已过**（2026-10-29 用户拍板：只暴露设置项 + 截断可见化，不动默认值） |
+| [ai-output-truncation-design.md](./ai/ai-output-truncation-design.md) | 同上技术设计：新增 `StreamEvent::Truncated` 变体、状态行两条红字、模型行「最大生成」档位下拉；P1–P3 分期 | 同上 | 📝 **待用户确认（G2）**（2026-10-29） |
 
 ## 9. 规范与其它（docs/ 根目录）
 
