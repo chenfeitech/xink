@@ -11,6 +11,7 @@ use gpui_kit::*;
 use crate::app::{ActiveDocChanged, AppState};
 use crate::core::index::IndexChanged;
 use crate::ui::tabs;
+use crate::ui::tokens;
 
 pub struct BacklinkPanel {
     focus_handle: FocusHandle,
@@ -123,7 +124,7 @@ impl Render for BacklinkPanel {
                     .px_2()
                     .text_sm()
                     .cursor_pointer()
-                    .hover(|s| s.bg(cx.theme().accent.opacity(0.12)))
+                    .hover(|s| s.bg(tokens::hover_bg(cx)))
                     .child(title)
                     .child(
                         div()

@@ -16,6 +16,7 @@ use gpui_kit::*;
 use crate::app::AppState;
 use crate::core::search::{Hit, search_files};
 use crate::ui::tabs;
+use crate::ui::tokens;
 
 /// 输入防抖：连续输入时只搜最后一次
 const DEBOUNCE: Duration = Duration::from_millis(200);
@@ -148,7 +149,7 @@ impl Render for SearchView {
                                 .py_1()
                                 .text_sm()
                                 .cursor_pointer()
-                                .hover(|s| s.bg(cx.theme().accent.opacity(0.12)))
+                                .hover(|s| s.bg(tokens::hover_bg(cx)))
                                 .child(div().font_weight(gpui_kit::FontWeight::BOLD).child(name))
                                 .child(
                                     div()

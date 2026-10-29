@@ -14,6 +14,7 @@ use crate::core::ai::tasks::{self, TaskKind};
 use crate::core::index::IndexChanged;
 use crate::ui::ai::plan;
 use crate::ui::tabs;
+use crate::ui::tokens;
 
 pub struct TagsPanel {
     focus_handle: FocusHandle,
@@ -194,7 +195,7 @@ impl Render for TagsPanel {
                         .py_1()
                         .text_sm()
                         .cursor_pointer()
-                        .hover(|s| s.bg(cx.theme().accent.opacity(0.12)))
+                        .hover(|s| s.bg(tokens::hover_bg(cx)))
                         .child(title)
                         .on_click(move |_, window, cx| {
                             tabs::open_note_at(target.clone(), None, window, cx);
@@ -276,7 +277,7 @@ impl Render for TagsPanel {
                     .justify_between()
                     .text_sm()
                     .cursor_pointer()
-                    .hover(|s| s.bg(cx.theme().accent.opacity(0.12)))
+                    .hover(|s| s.bg(tokens::hover_bg(cx)))
                     .child(format!("#{name}"))
                     .child(div().text_xs().text_color(muted).child(count.to_string()))
                     .on_click(cx.listener(move |this, _, _, cx| {

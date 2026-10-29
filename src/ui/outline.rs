@@ -15,6 +15,7 @@ use gpui_kit::*;
 use crate::app::AppState;
 use crate::core::markdown::{DocFacts, parse_facts};
 use crate::ui::tabs;
+use crate::ui::tokens;
 
 /// 大纲里条目缩进的最大层级：`######` 之后不再继续缩进，否则文本区太窄
 const MAX_INDENT_LEVEL: u8 = 6;
@@ -182,7 +183,7 @@ impl Render for OutlinePanel {
                         muted
                     })
                     .cursor_pointer()
-                    .hover(|s| s.bg(cx.theme().accent.opacity(0.12)))
+                    .hover(|s| s.bg(tokens::hover_bg(cx)))
                     .child(text)
                     .on_click(move |_, window, cx| {
                         if !target.as_os_str().is_empty() {

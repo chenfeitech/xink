@@ -45,40 +45,10 @@ use crate::core::search::{Hit, search_files};
 use crate::state::ai_sessions::{self, StoredBlock};
 use crate::state::workspace::app_data_dir;
 
-/// 等待首个响应字节的预算（Ollama 冷启动实测数秒）
-/// 对话区最大高度：超过就让对话区自己滚，编辑区不被压扁
-///
-/// 180 太小：一轮问答就撑满，更早的轮次全在视口外，看起来像"只有一轮"。
-const HISTORY_MAX_H: f32 = 260.;
-/// 单个展开块的最大高度
-///
-/// 块内自带垂直滚动：工具结果动辄几百行，不收口的话它会把对话区撑到很高，
-/// 外层那 260px 再怎么滚也看不全——块内滚动让"看细节"和"看全部轮次"互不干扰。
-const BODY_MAX_H: f32 = 220.;
-/// 气泡最大宽度（占对话区宽度的比例）：太长的一行读起来累
-const BUBBLE_MAX_W: f32 = 0.78;
-/// 气泡圆角：固定值，不取 `theme.radius`（后者可能为 0，那样气泡就是方块）
-const BUBBLE_RADIUS: f32 = 12.;
-
-/// 用户气泡的浅蓝底（HSL 度 / 百分比写法，见下面 `bubble_bg`）
-const BUBBLE_BG_LIGHT: (f32, f32, f32) = (210., 100., 92.);
-/// 深色主题下换深蓝，气泡自带对比度，不依赖主题前景色
-const BUBBLE_BG_DARK: (f32, f32, f32) = (212., 55., 30.);
-
-/// 用户气泡的底色
-///
-/// **坑**：gpui 的 `hsla(h, s, l, a)` 四个分量都是 **0..1**（不是 360 度 / 100
-/// 百分比），超出的会被 `clamp` 掉。写成 `hsla(210., 100., 92., 1.)` 会被夹成
-/// `(1,1,1,1)` = 纯白，看上去就是"底色没生效"。
-/// 因此这里统一按 HSL(度, %, %) 写常量，构造时再换算到 0..1。
-fn bubble_bg(is_dark: bool) -> Hsla {
-    let (h, s, l) = if is_dark {
-        BUBBLE_BG_DARK
-    } else {
-        BUBBLE_BG_LIGHT
-    };
-    hsla(h / 360., s / 100., l / 100., 1.)
-}
+// 尺寸与配色的取值统一在 `crate::ui::tokens`：这里不再自己写死数字，
+// 也不再手搓颜色（`bubble_bg` 的 `hsla()` 是全项目唯一一处不跟主题的颜色）。
+use crate::ui::tokens;
+use crate::ui::tokens::{AI_BODY_MAX_H, AI_BUBBLE_MAX_W, AI_HISTORY_MAX_H};
 
 /// 对话条发出的事件（目前只有"关闭"）
 pub enum AiChatEvent {
@@ -1373,9 +1343,9 @@ impl Render for AiChat {
         let header = div()
             .flex()
             .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
+            .gap(px(tokens::SPACE_SM))
+            .px(px(tokens::SPACE_SM))
+            .py(px(tokens::SPACE_XS))
             .border_t_1()
             .border_color(border)
             .child(if !cfg.ai.enabled {
@@ -1445,14 +1415,14 @@ impl Render for AiChat {
         let mut history = div()
             .id("ai-history")
             .track_scroll(&self.history_scroll)
-            .max_h(px(HISTORY_MAX_H))
+            .max_h(px(AI_HISTORY_MAX_H))
             .min_h_0()
             .w_full()
             .overflow_y_scroll()
             .flex_col()
-            .gap_1()
-            .px_2()
-            .py_1();
+            .gap(px(tokens::SPACE_XS))
+            .px(px(tokens::SPACE_SM))
+            .py(px(tokens::SPACE_XS));
         if self.blocks.is_empty() {
             history = history.child(
                 div()
@@ -1498,20 +1468,21 @@ impl Render for AiChat {
                 }
                 let mut bubble = div()
                     .id(("ai-bubble", ix))
-                    .max_w(relative(BUBBLE_MAX_W))
-                    // 圆角写死而不是取 `theme.radius`：有的主题把 radius 设成 0，
-                    // 气泡就成了方块。气泡圆角是设计决定，不跟主题走。
-                    .rounded(px(BUBBLE_RADIUS))
-                    .px_3()
-                    .py_2()
+                    .max_w(relative(AI_BUBBLE_MAX_W))
+                    // 圆角跟主题走（`tokens::bubble_radius`），但兜一个下限：
+                    // 主题把 radius 设成 0 时气泡会变方块
+                    .rounded(tokens::bubble_radius(cx))
+                    .px(px(tokens::SPACE_MD))
+                    .py(px(tokens::SPACE_SM))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)));
                 if mine {
-                    // 用户消息：浅蓝底 + 内边距 + 圆角 + 文字右对齐
-                    bubble = bubble.text_right().bg(bubble_bg(cx.theme().is_dark()));
+                    // 用户消息：accent 淡底 + 文字右对齐（底色走主题，不再手搓 HSL）
+                    bubble = bubble.text_right().bg(tokens::user_bubble_bg(cx));
                 } else {
-                    // AI 回复：无背景色 + 文字左对齐
-                    bubble = bubble.text_left();
+                    // AI 回复：muted 底 + 文字左对齐（以前没有任何底色，
+                    // 只靠左右对齐和用户消息区分）
+                    bubble = bubble.text_left().bg(tokens::ai_bubble_bg(cx));
                 }
                 history = history.child(
                     row.child(
@@ -1575,7 +1546,7 @@ impl Render for AiChat {
                     .id(("ai-body-box", ix))
                     .w_full()
                     .min_h_0()
-                    .max_h(px(BODY_MAX_H))
+                    .max_h(px(AI_BODY_MAX_H))
                     .overflow_y_scroll()
                     .child(child)
                     .into_any_element()
@@ -1634,7 +1605,12 @@ impl Render for AiChat {
         }
 
         // ── 快捷动作 ──
-        let mut actions = div().flex().flex_wrap().gap_1().px_2().pb_1();
+        let mut actions = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(tokens::SPACE_XS))
+            .px(px(tokens::SPACE_SM))
+            .pb(px(tokens::SPACE_XS));
         // 从配置读，而不是代码里的枚举：用户新增 / 停用 / 改名都会立刻反映
         for action in config(cx).ai.active_actions() {
             let id = action.id.clone();
@@ -1662,12 +1638,18 @@ impl Render for AiChat {
         }
 
         // ── 输入行 ──
-        let mut input_row = div().flex().items_center().gap_2().px_2().pb_2().child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(Input::new(&self.input).small()),
-        );
+        let mut input_row = div()
+            .flex()
+            .items_center()
+            .gap(px(tokens::SPACE_SM))
+            .px(px(tokens::SPACE_SM))
+            .pb(px(tokens::SPACE_SM))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&self.input).small()),
+            );
         if self.busy {
             input_row = input_row.child(
                 Button::new("ai-stop")
@@ -1757,7 +1739,12 @@ impl Render for AiChat {
         }
 
         // ── 状态行 ──
-        let mut status = div().flex().items_center().gap_2().px_2().pb_1();
+        let mut status = div()
+            .flex()
+            .items_center()
+            .gap(px(tokens::SPACE_SM))
+            .px(px(tokens::SPACE_SM))
+            .pb(px(tokens::SPACE_XS));
         if self.busy {
             status = status.child(
                 div()
