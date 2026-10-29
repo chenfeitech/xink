@@ -1103,7 +1103,10 @@ impl AiConfig {
 // ── 合法区间校正 ──────────────────────────────────────────────
 
 /// 各项配置的合法区间，越界值会被 `sanitize` 夹回区间内
-mod limit {
+///
+/// `pub` 是给 UI 用的：设置界面的控件范围要跟这里对齐，否则会出现
+/// "能选 131072、落盘被夹回 8192" 这种表里不一。
+pub mod limit {
     pub const FONT_SIZE: (f32, f32) = (8.0, 72.0);
     pub const LINE_HEIGHT: (f32, f32) = (0.8, 3.0);
     pub const ICON_SIZE: (u32, u32) = (12, 48);

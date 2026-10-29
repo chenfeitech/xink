@@ -11,8 +11,32 @@
 use std::collections::HashSet;
 
 use super::{ADVANCED_IDS, FieldKind, FieldTier, SettingsTab, all_fields};
-use super::{capability_line, compact_num, truncate_chars, vendor_of};
+use super::{capability_line, compact_num, ctx_options, truncate_chars, vendor_of};
 use crate::core::config::{AiProviderKind, AppConfig, ModelEntry};
+
+/// 上下文窗口的档位必须按模型上限过滤
+///
+/// 不过滤的话，选了超限的档会被 `sanitize()` 悄悄夹回
+/// （`config.rs` 的 `AI_NUM_CTX` 校正）：界面显示一个数、生效的是另一个，
+/// 比不列这一档更糟。
+#[test]
+fn ctx_options_filters_steps_above_the_model_limit() {
+    // 模型没报上限（`/api/tags` 未必给 `context_length`）：全列，由 sanitize 兜底
+    assert_eq!(ctx_options(None).len(), 6);
+    assert_eq!(ctx_options(Some(4096)), vec![4096]);
+    assert_eq!(ctx_options(Some(16384)), vec![4096, 8192, 16384]);
+}
+
+#[test]
+fn ctx_options_stays_usable_below_the_smallest_step() {
+    // 上限低于最小档：至少给一档，否则下拉是空的、没法选
+    assert_eq!(ctx_options(Some(2048)), vec![2048]);
+    for cap in [512, 2048, 4096, 100_000] {
+        let options = ctx_options(Some(cap));
+        assert!(!options.is_empty(), "cap={cap} 至少要有一档");
+        assert!(options.iter().all(|v| *v <= cap), "cap={cap}：{options:?}");
+    }
+}
 
 /// 描述表里的每一段命名空间（`id` 的第一段）
 ///

@@ -29,7 +29,7 @@ use crate::core::ai::skills;
 use crate::core::config::{
     AiActionApply, AiActionConfig, AiActionScope, AiProviderKind, AiScenario, AppConfig,
     FontWeight, ImageDisplay, KeySource, LinkOpen, ModelEntry, OutputLang, PreviewDensity,
-    ScrollSyncMode, ThemeMode, builtin_actions,
+    ScrollSyncMode, ThemeMode, builtin_actions, limit,
 };
 use crate::core::keymap;
 use crate::core::theme::PRESET_THEMES;
@@ -1548,6 +1548,165 @@ fn capability_line(model: &ModelEntry) -> String {
     parts.join(" · ")
 }
 
+// ── 逐模型参数的档位 ───────────────────────────────────
+//
+// `num_predict` / `num_ctx` / `temperature` 都在 `ModelEntry.params` 上，
+// 请求体读的就是它（`ollama.rs:224-228`）——做成全局项没有意义。
+//
+// 既有的 `number_field` / `dropdown` 都用不了：它们的 `set` 是裸函数指针，
+// 捕获不了模型 id；输入框状态存在 `inputs: HashMap<&'static str, _>`
+// （key 是 `'static str`），逐模型的运行时 id 也放不进去。
+// 所以做成档位下拉：这三个参数本来就是粗粒度选择，不需要精确到个位数。
+
+/// 生成预算（token）档位
+///
+/// 起点 10240 是用户定的（2026-10-29）：默认 1024 对长文改写不够，但改默认值
+/// 影响面更大，于是保留默认值、把可选档位整体抬上去。
+const NUM_PREDICT_STEPS: [u32; 3] = [10240, 20480, 32768];
+/// 上下文窗口（token）档位：再按模型上限过滤，见 [`ctx_options`]
+const NUM_CTX_STEPS: [u32; 6] = [4096, 8192, 16384, 32768, 65536, 131072];
+/// 温度档位（默认 0.7 在其中）
+const TEMPERATURE_STEPS: [&str; 6] = ["0.0", "0.3", "0.7", "1.0", "1.5", "2.0"];
+
+/// 上下文窗口的可选档位：只留不超过模型上限的那些
+///
+/// 不过滤的话，选了超限的档会被 `sanitize()` 悄悄夹回（`config.rs:984-988`），
+/// 界面显示 131072、实际生效 8192 —— 比不列这一档更糟。
+fn ctx_options(context_limit: Option<u32>) -> Vec<u32> {
+    // 注意别把变量叫 `limit`：那会遮蔽 `config::limit` 模块
+    let Some(cap) = context_limit else {
+        // 模型没报上限（`/api/tags` 未必给 `context_length`）：全列，
+        // 由 `sanitize()` 按 `AI_NUM_CTX.1` 兜底
+        return NUM_CTX_STEPS.to_vec();
+    };
+    let mut out: Vec<u32> = NUM_CTX_STEPS
+        .iter()
+        .copied()
+        .filter(|step| *step <= cap)
+        .collect();
+    if out.is_empty() {
+        // 上限低于最小档：至少给一档，否则下拉是空的、没法选
+        out.push(cap.max(limit::AI_NUM_CTX.0));
+    }
+    out
+}
+
+/// 模型行上可以直接改的参数
+#[derive(Clone, Copy)]
+enum ModelParam {
+    /// 单次最多生成多少 token
+    NumPredict,
+    /// 一次请求带进去多少 token 的上下文
+    NumCtx,
+    Temperature,
+}
+
+impl ModelParam {
+    /// 元素 id 的后缀：逐模型，多个模型不能撞 id
+    fn key(self) -> &'static str {
+        match self {
+            Self::NumPredict => "np",
+            Self::NumCtx => "ctx",
+            Self::Temperature => "temp",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::NumPredict => "最大生成",
+            Self::NumCtx => "上下文",
+            Self::Temperature => "温度",
+        }
+    }
+
+    fn tip(self) -> &'static str {
+        match self {
+            Self::NumPredict => "单次最多生成多少 token：不够就写一半停了，结果是截断的",
+            Self::NumCtx => "一次请求带进去多少 token 的上下文；只列出不超过本模型上限的档位",
+            Self::Temperature => "越大越发散，越小越稳定",
+        }
+    }
+
+    fn options(self, model: &ModelEntry) -> Vec<String> {
+        match self {
+            Self::NumPredict => NUM_PREDICT_STEPS.iter().map(|v| v.to_string()).collect(),
+            Self::NumCtx => ctx_options(model.context_limit)
+                .iter()
+                .map(|v| v.to_string())
+                .collect(),
+            Self::Temperature => TEMPERATURE_STEPS.iter().map(|v| v.to_string()).collect(),
+        }
+    }
+
+    /// 当前值：不在档位里（手改过 `config.json`）也照实显示
+    fn current(self, model: &ModelEntry) -> String {
+        match self {
+            Self::NumPredict => model.params.num_predict.to_string(),
+            Self::NumCtx => model.params.num_ctx.to_string(),
+            Self::Temperature => format!("{:.1}", model.params.temperature),
+        }
+    }
+
+    fn write(self, cfg: &mut AppConfig, model_id: &str, value: &str) {
+        let Some(model) = cfg.ai.models.iter_mut().find(|m| m.id == model_id) else {
+            return;
+        };
+        // 选项由 `options()` 生成，解析失败不可能发生；真发生了就忽略
+        match self {
+            Self::NumPredict => {
+                if let Ok(v) = value.parse() {
+                    model.params.num_predict = v;
+                }
+            }
+            Self::NumCtx => {
+                if let Ok(v) = value.parse() {
+                    model.params.num_ctx = v;
+                }
+            }
+            Self::Temperature => {
+                if let Ok(v) = value.parse() {
+                    model.params.temperature = v;
+                }
+            }
+        }
+        // 夹取（`num_ctx` 不超过模型上限等）由 `sanitize()` 统一做，
+        // `update_config` 会跑一遍
+    }
+}
+
+/// 逐模型参数的档位下拉
+///
+/// 与 [`dropdown`] 唯一的区别：写入时要带上模型 id。
+fn model_param_control(model_id: &str, param: ModelParam, model: &ModelEntry) -> AnyElement {
+    let element_id = SharedString::from(format!("ai-param-{}-{model_id}", param.key()));
+    let options = param.options(model);
+    let model_id = model_id.to_string();
+    DropdownButton::new(element_id.clone())
+        .button(
+            Button::new(element_id)
+                .xsmall()
+                .outline()
+                .label(param.current(model))
+                .tooltip(param.tip()),
+        )
+        .dropdown_menu(move |menu, _window, _cx| {
+            let mut menu = menu;
+            for option in &options {
+                let value = option.clone();
+                let model_id = model_id.clone();
+                menu = menu.item(PopupMenuItem::new(value.clone()).on_click(move |_, _, cx| {
+                    let model_id = model_id.clone();
+                    let value = value.clone();
+                    crate::app::update_config(cx, move |cfg| {
+                        param.write(cfg, &model_id, &value);
+                    });
+                }));
+            }
+            menu
+        })
+        .into_any_element()
+}
+
 impl SettingsView {
     /// 把焦点交给搜索框（浮层打开 / 重复触发时调用）
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2665,6 +2824,31 @@ impl SettingsView {
                     .text_color(muted)
                     .child(capability_line(model)),
             )
+            .child({
+                // 三个参数横排：标签定宽，各组的下拉左边缘才对得齐
+                let mut params = div().flex().items_center().gap_2().pt_1();
+                for param in [
+                    ModelParam::NumPredict,
+                    ModelParam::NumCtx,
+                    ModelParam::Temperature,
+                ] {
+                    params = params.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .w(px(layout::FIELD_LABEL_W))
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(param.label()),
+                            )
+                            .child(model_param_control(&id, param, model)),
+                    );
+                }
+                params
+            })
     }
 
     /// 单个模型的密钥面板：来源轮换 + 写入 / 清除
