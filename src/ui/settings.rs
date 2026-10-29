@@ -1639,10 +1639,13 @@ impl ModelParam {
     }
 
     /// 当前值：不在档位里（手改过 `config.json`）也照实显示
-    fn current(self, model: &ModelEntry) -> String {
+    ///
+    /// `num_ctx` 取的是**生效值**：`None` 时显示全局值。外观上与"锁定了同一个
+    /// 数"没区别——因为行为本来也没区别（全局默认就是同一个值）。
+    fn current(self, model: &ModelEntry, global_num_ctx: u32) -> String {
         match self {
             Self::NumPredict => model.params.num_predict.to_string(),
-            Self::NumCtx => model.params.num_ctx.to_string(),
+            Self::NumCtx => model.params.num_ctx.unwrap_or(global_num_ctx).to_string(),
             Self::Temperature => format!("{:.1}", model.params.temperature),
         }
     }
@@ -1659,8 +1662,9 @@ impl ModelParam {
                 }
             }
             Self::NumCtx => {
+                // 选了档位就是"这个模型单独设过"，从此不再跟随全局
                 if let Ok(v) = value.parse() {
-                    model.params.num_ctx = v;
+                    model.params.num_ctx = Some(v);
                 }
             }
             Self::Temperature => {
@@ -1677,7 +1681,12 @@ impl ModelParam {
 /// 逐模型参数的档位下拉
 ///
 /// 与 [`dropdown`] 唯一的区别：写入时要带上模型 id。
-fn model_param_control(model_id: &str, param: ModelParam, model: &ModelEntry) -> AnyElement {
+fn model_param_control(
+    model_id: &str,
+    param: ModelParam,
+    model: &ModelEntry,
+    global_num_ctx: u32,
+) -> AnyElement {
     let element_id = SharedString::from(format!("ai-param-{}-{model_id}", param.key()));
     let options = param.options(model);
     let model_id = model_id.to_string();
@@ -1686,7 +1695,7 @@ fn model_param_control(model_id: &str, param: ModelParam, model: &ModelEntry) ->
             Button::new(element_id)
                 .xsmall()
                 .outline()
-                .label(param.current(model))
+                .label(param.current(model, global_num_ctx))
                 .tooltip(param.tip()),
         )
         .dropdown_menu(move |menu, _window, _cx| {
@@ -2638,6 +2647,8 @@ impl SettingsView {
         let id_for_probe = id.clone();
         let enabled = model.enabled;
         let kind = model.kind;
+        // 逐模型没设过 `num_ctx` 时跟随全局：下拉要显示**生效值**
+        let global_num_ctx = crate::app::config(cx).ai.ollama.num_ctx;
 
         let mut actions = div()
             .flex_none()
@@ -2844,7 +2855,7 @@ impl SettingsView {
                                     .text_color(muted)
                                     .child(param.label()),
                             )
-                            .child(model_param_control(&id, param, model)),
+                            .child(model_param_control(&id, param, model, global_num_ctx)),
                     );
                 }
                 params

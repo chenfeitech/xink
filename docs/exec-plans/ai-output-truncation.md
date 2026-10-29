@@ -31,6 +31,7 @@
 | T-1 | `StreamEvent` 新增 `Truncated` 变体；Ollama 解析 `done_reason=="length"`、OpenAI 解析 `finish_reason=="length"`；补全部 match 分支 | — | P0 | `src/core/ai/{mod,ollama,openai,agent_loop}.rs`、`src/ui/ai.rs` | T-1 / T-2 / T-4 测试 + G4 四连 | R-2 | ✅（`34c60db`） |
 | T-2 | `AiChat` 加 `out_truncated` / `ctx_truncated`（请求前重置）；状态行两条红字；`assemble` 的 `truncated` 不再丢弃 | T-1 | P0 | `src/ui/ai.rs` | T-4 + G4 四连 + 人工 AC-7 / AC-8 | R-2 / R-3 / R-4 | ✅（`a4f2c6a`） |
 | T-3 | 模型行三个参数档位下拉（最大生成 / 上下文窗口 / 温度）；`ctx_options()` 纯函数按 `context_limit` 过滤档位 | T-1 | P1 | `src/ui/settings.rs`、`src/core/config.rs` | T-3 / T-5 + G4 四连 + 人工 AC-6 / AC-10 | R-1 / R-5 | ✅（`df46f79`） |
+| T-4 | 全局 `ai.ollama.num_ctx` / `keep_alive` 改为逐模型 `params` 的默认来源（方案 B，设计 §11）：字段改 `Option`、新增 `ResolvedParams` 与 `params_for()`、`sanitize()` 迁移旧默认值 | T-3 | P1 | `src/core/config.rs`、`src/core/ai/{mod,ollama,agent_loop,probe}.rs`、`src/ui/{ai,settings}.rs` | T-6 / T-7 / T-4 + G4 四连 + 人工 AC-11 | R-6 | ⬜ |
 
 ## 待用户拍板
 

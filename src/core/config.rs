@@ -504,15 +504,53 @@ pub enum OutputLang {
 #[serde(default)]
 pub struct AiModelParams {
     /// 上下文窗口（Ollama `options.num_ctx`），必须 ≤ 模型的 context_length
-    pub num_ctx: u32,
+    ///
+    /// `None` = **跟随全局** `OllamaConfig::num_ctx`；`Some` = 这个模型单独设过，
+    /// 不再被全局值带走。解析入口见 [`AiConfig::params_for`]。
+    pub num_ctx: Option<u32>,
     /// 最大生成 token（Ollama `num_predict` / OpenAI `max_tokens`）
     pub num_predict: u32,
     pub temperature: f32,
     /// 是否允许思考（Ollama native 专有；兼容端点忽略此参数）
     pub think: bool,
     /// 模型常驻时长（Ollama `keep_alive`），如 "5m"、"-1"、"0"
+    ///
+    /// `None` = 跟随全局 `OllamaConfig::keep_alive`，语义同 [`Self::num_ctx`]。
+    pub keep_alive: Option<String>,
+}
+
+/// 已解析的生成参数：两个 `Option` 字段都已回落到全局值
+///
+/// 与 [`AiModelParams`] 分成两个类型，是为了让"忘了解析"变成**编译错误**——
+/// 直接把带 `Option` 的 params 塞进请求体，`num_ctx` / `keep_alive` 会整个消失，
+/// 而请求照常发出，症状要跑到 Ollama 那边才看得出来。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedParams {
+    pub num_ctx: u32,
+    pub num_predict: u32,
+    pub temperature: f32,
+    pub think: bool,
     pub keep_alive: String,
 }
+
+impl Default for ResolvedParams {
+    /// 等价于"逐模型没设过 + 全局配置也是默认值"的解析结果
+    ///
+    /// 探针之类不关心参数的场合用它，避免各处自己编一套数字。
+    fn default() -> Self {
+        Self {
+            num_ctx: OllamaConfig::default().num_ctx,
+            num_predict: AiModelParams::default().num_predict,
+            temperature: AiModelParams::default().temperature,
+            think: AiModelParams::default().think,
+            keep_alive: OllamaConfig::default().keep_alive,
+        }
+    }
+}
+
+/// 旧配置里写死的值：等于它们就当作"没单独设过"（见 `sanitize` 的迁移）
+const LEGACY_NUM_CTX: u32 = 8192;
+const LEGACY_KEEP_ALIVE: &str = "5m";
 
 /// 用模型的场合
 ///
@@ -793,7 +831,8 @@ pub struct AiConfig {
 impl Default for AiModelParams {
     fn default() -> Self {
         Self {
-            num_ctx: 8192,
+            // None = 跟随全局 `OllamaConfig::num_ctx`，全局默认值也是 8192
+            num_ctx: None,
             // 1024 对长文改写不够：写到一半就停在 `done_reason:"length"`，
             // 而且协议层以前认不出截断，界面上表现为"AI 处理不全面"却毫无提示。
             // 8192 是 2026-10-29 定的新默认值；还是不够就在模型行上调档位
@@ -801,7 +840,8 @@ impl Default for AiModelParams {
             num_predict: 8192,
             temperature: 0.7,
             think: false,
-            keep_alive: "5m".into(),
+            // None = 跟随全局 `OllamaConfig::keep_alive`，全局默认值也是 "5m"
+            keep_alive: None,
         }
     }
 }
@@ -984,11 +1024,20 @@ impl AiConfig {
                 model.params.temperature,
                 (limit::AI_TEMPERATURE.0, limit::AI_TEMPERATURE.1),
             );
+            // 旧配置里写死的值等于当时的默认值 → 视为"没单独设过"，改回跟随全局。
+            // 这条迁移**无害**：全局默认本来就是 8192 / "5m"，
+            // `None`（跟随全局 → 8192）与 `Some(8192)` 行为完全一致。
+            if model.params.num_ctx == Some(LEGACY_NUM_CTX) {
+                model.params.num_ctx = None;
+            }
+            if model.params.keep_alive.as_deref() == Some(LEGACY_KEEP_ALIVE) {
+                model.params.keep_alive = None;
+            }
             let max_ctx = model.context_limit.unwrap_or(limit::AI_NUM_CTX.1);
-            model.params.num_ctx = model
-                .params
-                .num_ctx
-                .clamp(limit::AI_NUM_CTX.0, max_ctx.max(limit::AI_NUM_CTX.0));
+            if let Some(num_ctx) = model.params.num_ctx {
+                model.params.num_ctx =
+                    Some(num_ctx.clamp(limit::AI_NUM_CTX.0, max_ctx.max(limit::AI_NUM_CTX.0)));
+            }
         }
         // 选中的模型被删掉或停用了：清空选择，避免"看着配好了却发不出去"
         if !self.default_model.is_empty() && self.active_model().is_none() {
@@ -996,6 +1045,29 @@ impl AiConfig {
         }
         self.sanitize_routing();
         self.sanitize_actions();
+    }
+
+    /// 这个模型实际生效的生成参数：**逐模型值优先，没设过的跟随全局 Ollama 配置**
+    ///
+    /// `num_ctx` / `keep_alive` 在 `AiModelParams` 里是 `Option`：`None` 表示
+    /// "这个模型没单独设过"，此时取 `ollama.num_ctx` / `ollama.keep_alive`。
+    /// 全局那两项以前是**死配置**（只在设置界面读写、不进请求），
+    /// 这条链路是它们唯一的生效路径。
+    ///
+    /// 返回 [`ResolvedParams`] 而不是 `AiModelParams`，这样调用方拿不到
+    /// `Option`、不可能"忘了解析就发"。
+    pub fn params_for(&self, model: &ModelEntry) -> ResolvedParams {
+        let params = &model.params;
+        ResolvedParams {
+            num_ctx: params.num_ctx.unwrap_or(self.ollama.num_ctx),
+            num_predict: params.num_predict,
+            temperature: params.temperature,
+            think: params.think,
+            keep_alive: params
+                .keep_alive
+                .clone()
+                .unwrap_or_else(|| self.ollama.keep_alive.clone()),
+        }
     }
 
     /// **唯一的模型解析入口**

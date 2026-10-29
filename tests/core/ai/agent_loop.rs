@@ -9,7 +9,7 @@ use super::{LoopEvent, LoopRequest, MAX_VERIFY_RETRY, run};
 use crate::core::ai::tools::ToolHost;
 use crate::core::ai::verify::LinkIndex;
 use crate::core::ai::{AiError, ChatMessage, CompletionRequest, Provider, StreamEvent, Usage};
-use crate::core::config::AiModelParams;
+use crate::core::config::ResolvedParams;
 use crate::core::index::Resolution;
 use crate::core::search::Hit;
 
@@ -107,7 +107,7 @@ fn request<'a>(
     LoopRequest {
         endpoint: "http://localhost/fake".into(),
         model: "fake".into(),
-        params: AiModelParams::default(),
+        params: ResolvedParams::default(),
         api_key: None,
         messages: vec![ChatMessage::user("帮我看看")],
         tools_enabled,

@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use crate::core::ai::{ChatMessage, CompletionRequest};
-use crate::core::config::AiModelParams;
+use crate::core::config::{AiModelParams, ResolvedParams};
 
 use super::build_body;
 
@@ -176,10 +176,10 @@ fn request(tools: Vec<serde_json::Value>) -> CompletionRequest {
         endpoint: crate::core::ai::openai::chat_endpoint("https://api.example.com/v1"),
         model: "gpt-x".into(),
         messages: vec![ChatMessage::system("你是助手"), ChatMessage::user("你好")],
-        params: AiModelParams {
+        params: ResolvedParams {
             temperature: 0.5,
             num_predict: 512,
-            ..AiModelParams::default()
+            ..ResolvedParams::default()
         },
         api_key: Some("sk-test".into()),
         first_byte_timeout: Duration::from_secs(30),

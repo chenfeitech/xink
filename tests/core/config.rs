@@ -594,14 +594,14 @@ fn ai_num_ctx_is_clamped_by_the_models_own_context_limit() {
             ModelEntry {
                 context_limit: Some(4096),
                 params: AiModelParams {
-                    num_ctx: 1_000_000,
+                    num_ctx: Some(1_000_000),
                     ..AiModelParams::default()
                 },
                 ..model("small")
             },
             ModelEntry {
                 params: AiModelParams {
-                    num_ctx: u32::MAX,
+                    num_ctx: Some(u32::MAX),
                     ..AiModelParams::default()
                 },
                 ..model("unknown")
@@ -611,12 +611,12 @@ fn ai_num_ctx_is_clamped_by_the_models_own_context_limit() {
     };
     ai.sanitize();
     // 模型自己声明的上下文上限更小，按它来；没声明的按全局上限
-    assert_eq!(ai.models[0].params.num_ctx, 4096);
-    assert_eq!(ai.models[1].params.num_ctx, 1_048_576);
+    assert_eq!(ai.models[0].params.num_ctx, Some(4096));
+    assert_eq!(ai.models[1].params.num_ctx, Some(1_048_576));
 
-    ai.models[0].params.num_ctx = 0;
+    ai.models[0].params.num_ctx = Some(0);
     ai.sanitize();
-    assert_eq!(ai.models[0].params.num_ctx, 512, "下限不能被压穿");
+    assert_eq!(ai.models[0].params.num_ctx, Some(512), "下限不能被压穿");
 }
 
 #[test]
@@ -644,6 +644,83 @@ fn ai_num_predict_is_clamped() {
 /// 1024 会把长文改写截断在半句（`done_reason:"length"`），而协议层以前
 /// 认不出截断，用户看到的就是"AI 处理不全面"却毫无提示。钉住新默认值，
 /// 免得哪天被当成"随手写的数字"改回小值。
+/// 逐模型没设过 `num_ctx` / `keep_alive` 时跟随全局 Ollama 配置
+///
+/// 全局那两项以前是死配置（只在设置界面读写、不进请求），这条链路是它们
+/// 唯一的生效路径。
+#[test]
+fn ai_params_for_falls_back_to_the_global_ollama_config() {
+    let mut ai = AiConfig::default();
+    ai.ollama.num_ctx = 16_384;
+    ai.ollama.keep_alive = "10m".into();
+    let resolved = ai.params_for(&ModelEntry {
+        // 都没单独设过
+        params: AiModelParams::default(),
+        ..model("m1")
+    });
+    assert_eq!(resolved.num_ctx, 16_384, "None 应跟随全局");
+    assert_eq!(resolved.keep_alive, "10m");
+}
+
+/// 单独设过的不被全局带走
+#[test]
+fn ai_params_for_keeps_per_model_overrides() {
+    let mut ai = AiConfig::default();
+    ai.ollama.num_ctx = 16_384;
+    ai.ollama.keep_alive = "10m".into();
+    let resolved = ai.params_for(&ModelEntry {
+        params: AiModelParams {
+            num_ctx: Some(4096),
+            keep_alive: Some("0".into()),
+            ..AiModelParams::default()
+        },
+        ..model("m1")
+    });
+    assert_eq!(resolved.num_ctx, 4096, "单独设过的不该被全局覆盖");
+    assert_eq!(resolved.keep_alive, "0");
+}
+
+/// 旧配置里写死的默认值视作"没单独设过"
+///
+/// 迁移要无害：全局默认本来就是 8192 / "5m"，改不改成 `None` 行为都一样，
+/// 所以用户不改全局就什么都感觉不到。
+#[test]
+fn ai_legacy_params_are_treated_as_not_overridden() {
+    let mut ai = AiConfig {
+        models: vec![
+            ModelEntry {
+                params: AiModelParams {
+                    num_ctx: Some(8192),
+                    keep_alive: Some("5m".into()),
+                    ..AiModelParams::default()
+                },
+                ..model("legacy")
+            },
+            ModelEntry {
+                // 不是旧默认值：必须原样留着，不能当成没设过
+                params: AiModelParams {
+                    num_ctx: Some(4096),
+                    keep_alive: Some("-1".into()),
+                    ..AiModelParams::default()
+                },
+                ..model("custom")
+            },
+        ],
+        ..AiConfig::default()
+    };
+    ai.sanitize();
+    assert_eq!(ai.models[0].params.num_ctx, None);
+    assert_eq!(ai.models[0].params.keep_alive, None);
+    assert_eq!(ai.models[1].params.num_ctx, Some(4096));
+    assert_eq!(ai.models[1].params.keep_alive, Some("-1".into()));
+
+    // 迁移后跟随全局，而全局默认也是 8192 / "5m" —— 行为不变
+    let legacy = ai.models[0].clone();
+    let resolved = ai.params_for(&legacy);
+    assert_eq!(resolved.num_ctx, 8192);
+    assert_eq!(resolved.keep_alive, "5m");
+}
+
 #[test]
 fn ai_num_predict_default_covers_a_long_rewrite() {
     assert_eq!(AiModelParams::default().num_predict, 8192);

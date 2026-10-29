@@ -52,12 +52,16 @@ fn 合并进配置只更新能力字段() {
         id: "qwen3.5:0.8b".into(),
         ..Default::default()
     };
-    mine.params.num_ctx = 4096; // 用户改过
+    mine.params.num_ctx = Some(4096); // 用户改过
     cfg.models.push(mine);
 
     assert_eq!(cache.merge_into(&mut cfg.models), 0, "已存在的不应新增");
     assert_eq!(cfg.models[0].context_limit, Some(262144));
-    assert_eq!(cfg.models[0].params.num_ctx, 4096, "用户参数不能被覆盖");
+    assert_eq!(
+        cfg.models[0].params.num_ctx,
+        Some(4096),
+        "用户参数不能被覆盖"
+    );
 }
 
 #[test]

@@ -6,7 +6,7 @@
 
 use crate::core::ai::ollama::{OllamaProvider, build_body, chat_endpoint, list_models, probe};
 use crate::core::ai::{ChatMessage, CompletionRequest, Provider, StreamEvent};
-use crate::core::config::AiModelParams;
+use crate::core::config::ResolvedParams;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -38,7 +38,7 @@ fn 流式能拿到正文() {
         endpoint: chat_endpoint(BASE),
         model,
         messages: vec![ChatMessage::user("用一句话说明什么是本地优先软件")],
-        params: AiModelParams {
+        params: ResolvedParams {
             think: false,
             num_predict: 64,
             ..Default::default()
@@ -83,7 +83,7 @@ fn request(tools: Vec<serde_json::Value>, keep_alive: &str) -> CompletionRequest
         endpoint: chat_endpoint("http://localhost:11434"),
         model: "qwen3.5:0.8b".into(),
         messages: vec![ChatMessage::user("你好")],
-        params: AiModelParams {
+        params: ResolvedParams {
             num_ctx: 4096,
             num_predict: 1024,
             temperature: 0.3,

@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use super::tools::{ToolCall, ToolHost, specs};
 use super::verify::{LinkIndex, VerifyIssue};
-use crate::core::config::AiModelParams;
+use crate::core::config::ResolvedParams;
 
 use super::{
     AiError, ChatMessage, CompletionRequest, Provider, StreamEvent, Usage, tools as tool_mod,
@@ -28,7 +28,7 @@ pub const MAX_VERIFY_RETRY: u8 = 2;
 pub struct LoopRequest<'a> {
     pub endpoint: String,
     pub model: String,
-    pub params: AiModelParams,
+    pub params: ResolvedParams,
     pub api_key: Option<String>,
     /// 起始消息（system / user 已组装好）
     pub messages: Vec<ChatMessage>,

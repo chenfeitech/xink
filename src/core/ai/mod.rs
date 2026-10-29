@@ -53,7 +53,7 @@ pub use prompt::KNOWN_TAGS_PLACEHOLDER;
 #[allow(unused_imports)]
 pub use snapshot::{snapshot_name, write_snapshot};
 
-use crate::core::config::{AiModelParams, AiProviderKind};
+use crate::core::config::{AiProviderKind, ResolvedParams};
 use tools::ToolCall;
 
 /// 对话角色
@@ -118,7 +118,12 @@ pub struct CompletionRequest {
     pub endpoint: String,
     pub model: String,
     pub messages: Vec<ChatMessage>,
-    pub params: AiModelParams,
+    /// 已解析的生成参数（全局配置已回落完毕）
+    ///
+    /// 用 [`ResolvedParams`] 而不是 `AiModelParams`：后者的 `num_ctx` /
+    /// `keep_alive` 是 `Option`，直接发会让这两个字段整个消失。
+    /// 走 [`AiConfig::params_for`] 构造。
+    pub params: ResolvedParams,
     pub api_key: Option<String>,
     /// 等待首个响应字节的预算（含 Ollama 冷加载，实测秒级）
     pub first_byte_timeout: Duration,

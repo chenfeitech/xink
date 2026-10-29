@@ -20,7 +20,7 @@ use super::{AiError, ChatMessage, CompletionRequest, StreamEvent};
 use crate::core::ai::Provider;
 use crate::core::ai::keychain::{MacKeychain, resolve_api_key};
 use crate::core::ai::openai::OpenAiProvider;
-use crate::core::config::{AiConfig, AiModelParams, AiProviderKind, ModelEntry};
+use crate::core::config::{AiConfig, AiProviderKind, ModelEntry, ResolvedParams};
 
 /// 测试一个模型：通不通、支不支持工具、花了多久
 pub fn probe_model(cfg: &AiConfig, model: &ModelEntry) -> ProbeResult {
@@ -51,11 +51,11 @@ fn probe_compatible(
         endpoint: endpoint.to_string(),
         model: model.to_string(),
         messages: vec![ChatMessage::user("ping")],
-        params: AiModelParams {
+        params: ResolvedParams {
             // 只要 1 个 token：探针看的是"通不通"和"会不会调工具"
             num_predict: 1,
             think: false,
-            ..AiModelParams::default()
+            ..ResolvedParams::default()
         },
         api_key,
         first_byte_timeout: timeout,

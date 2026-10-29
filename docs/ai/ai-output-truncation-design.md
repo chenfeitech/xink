@@ -237,6 +237,8 @@ model.params.num_predict = model
 | T-3 | `num_predict` 越界被 `sanitize()` 夹回 `AI_NUM_PREDICT` | `tests/core/config.rs`（若已有 `sanitize` 测试则并入） |
 | T-4 | 既有测试全绿（尤其 `tests/core/ai/agent_loop.rs`、`tests/ui/ai.rs`、`tests/ui/settings.rs`） | 全仓 |
 | T-5 | `ctx_options(context_limit)`：`None` 时给全档；`Some(4096)` 时只给 ≤4096 的档；上限低于最小档时至少给一档 | `tests/ui/settings.rs` |
+| T-6 | `params_for()`：`num_ctx` 为 `None` 时回落全局 `ollama.num_ctx`；`Some` 时不被全局覆盖 | `tests/core/config.rs` |
+| T-7 | 迁移规则：旧配置里的 `8192` / `"5m"` 被 `sanitize()` 归为 `None`（未覆盖）；不等于旧默认的值保持不动 | `tests/core/config.rs` |
 
 ### 7.2 要人工（登记进 `docs/ACCEPTANCE.md`）
 
@@ -287,5 +289,91 @@ AC-6 / AC-7 / AC-8 / AC-9（见需求 §5）——涉及真实模型、真实长
 | **P1** | `StreamEvent::Truncated` 变体；Ollama `done_reason`、OpenAI `finish_reason=="length"` 解析；补全部 match 分支 | `src/core/ai/{mod,ollama,openai,agent_loop}.rs` | R-2 | T-1 / T-2 / T-4 + G4 四连 |
 | **P2** | `AiChat` 加 `out_truncated` / `ctx_truncated`；状态行两条红字；`assemble` 的 `truncated` 不再丢 | `src/ui/ai.rs` | R-2 / R-3 / R-4 | T-4 + G4 四连 + 人工 AC-7 / AC-8 |
 | **P3** | 模型行三个参数的档位下拉（最大生成 / 上下文窗口 / 温度）；`num_ctx` 档位按 `context_limit` 过滤（抽成纯函数便于单测） | `src/ui/settings.rs` | R-1 / R-5 | T-3 / T-5 / T-4 + G4 四连 + 人工 AC-6 / AC-10 |
+| **P4** | 全局 `ai.ollama.num_ctx` / `keep_alive` 改为逐模型 `params` 的默认来源（方案 B，见 §11） | `src/core/{config.rs,ai/{mod,ollama,agent_loop,probe}.rs}`、`src/ui/{ai,settings}.rs` | R-6 | T-6 / T-7 / T-4 + G4 四连 + 人工 AC-11 |
 
 每期可独立编译验证，不存在"全做完才能编"的任务。
+
+---
+
+## 11. 追加：全局 Ollama 配置的落点（R-6）
+
+> 2026-10-29 追加。需求 §6-Q7 拍板方案 B。
+
+### 11.1 问题
+
+`ai.ollama.num_ctx` / `keep_alive` 只在 `settings.rs` 里被读写，**不进请求**：
+
+```rust
+// ollama.rs:224-228
+"options": {
+    "num_ctx": req.params.num_ctx,        // ← ModelEntry.params，逐模型
+    "keep_alive": req.params.keep_alive,
+}
+```
+
+用户在设置里改了全局值，请求纹丝不动 —— 比没有这个设置项更坑。
+
+### 11.2 为什么必须改数据模型
+
+`ModelEntry.params.num_ctx` 是 `u32` 且有默认值 8192，**区分不出**
+"用户没设过"和"用户就想要 8192"。所以"让全局值生效"唯一干净的落点是：
+
+```rust
+pub struct AiModelParams {
+    /// None = 跟随全局 `OllamaConfig.num_ctx`
+    pub num_ctx: Option<u32>,
+    pub num_predict: u32,
+    pub temperature: f32,
+    pub think: bool,
+    /// None = 跟随全局 `OllamaConfig.keep_alive`
+    pub keep_alive: Option<String>,
+}
+```
+
+### 11.3 迁移规则与"无害性"
+
+老配置里写死的 `"num_ctx": 8192` 会被 serde 读成 `Some(8192)` —— 那就还是
+"已覆盖"，改全局依旧不生效。所以 `sanitize()` 里补一条：
+
+```rust
+// 旧配置里写死的值等于当时的默认值 → 视为"没单独设过"
+if model.params.num_ctx == Some(LEGACY_NUM_CTX) { model.params.num_ctx = None; }
+if model.params.keep_alive.as_deref() == Some(LEGACY_KEEP_ALIVE) { model.params.keep_alive = None; }
+```
+
+这条迁移**无害**：全局默认本来就是 8192 / `"5m"`，
+"`None`（跟随全局 → 8192）"与"`Some(8192)`"行为完全一致。
+用户不改全局，什么都感觉不到。
+
+唯一副作用（已告知用户并确认）：改全局到别的值后，那些"还是旧默认"的模型
+会跟着走；想给某个模型固定住，就在它的档位里重选一次（选完写 `Some`，不再跟随）。
+
+### 11.4 用类型防漏解析
+
+`Option` 一旦进了请求体就是 bug（`num_ctx` 会整个消失）。所以解析结果用
+**另一个类型**，让"忘了解析"变成编译错误：
+
+```rust
+/// 已解析的生成参数：`Option` 字段都已回落到全局值
+pub struct ResolvedParams {
+    pub num_ctx: u32,
+    pub num_predict: u32,
+    pub temperature: f32,
+    pub think: bool,
+    pub keep_alive: String,
+}
+
+impl AiConfig {
+    /// 逐模型值优先，没设过的跟随全局 Ollama 配置
+    pub fn params_for(&self, model: &ModelEntry) -> ResolvedParams { ... }
+}
+```
+
+`CompletionRequest.params` 与 `LoopRequest.params` 改用 `ResolvedParams`；
+`ollama.rs` 里直接取值，不可能出现"没解析就发"。
+
+### 11.5 界面上的表现
+
+档位下拉显示的是**解析后的生效值**：`None` 的模型显示全局值（如 8192），
+外观上与"锁定了 8192"没有区别 —— 因为行为本来也没区别。
+拉开菜单选某一档即写 `Some`，从此不再跟随全局。

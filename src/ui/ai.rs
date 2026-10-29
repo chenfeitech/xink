@@ -822,7 +822,9 @@ impl AiChat {
             endpoint: cfg.ai.endpoint_for(&model),
             model: model.id.clone(),
             messages,
-            params: model.params.clone(),
+            // 走 `params_for`：`num_ctx` / `keep_alive` 要在这一层回落到
+            // 全局 Ollama 配置（逐模型没设过就跟随全局）
+            params: cfg.ai.params_for(&model),
             api_key: resolve_api_key(&model, &MacKeychain),
             first_byte_timeout: Duration::from_secs(cfg.ai.first_byte_timeout_secs),
             silence_timeout: Duration::from_secs(cfg.ai.timeout_secs),
@@ -865,7 +867,8 @@ impl AiChat {
             let loop_messages = request.messages.clone();
             let endpoint = cfg.ai.endpoint_for(&agent_model);
             let model_id = agent_model.id.clone();
-            let params = agent_model.params.clone();
+            // 同样走 `params_for`：全局 Ollama 配置在这里回落到逐模型参数上
+            let params = cfg.ai.params_for(&agent_model);
             let api_key = resolve_api_key(&agent_model, &MacKeychain);
             let max_steps = cfg.ai.max_steps as u8;
             let max_tool_chars = cfg.ai.max_tool_chars;
@@ -929,7 +932,7 @@ impl AiChat {
             endpoint: cfg.ai.endpoint_for(m),
             model: m.id.clone(),
             messages: request.messages.clone(),
-            params: m.params.clone(),
+            params: cfg.ai.params_for(m),
             api_key: resolve_api_key(m, &MacKeychain),
             first_byte_timeout: request.first_byte_timeout,
             silence_timeout: request.silence_timeout,
