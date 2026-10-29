@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::base::TextViewState;
 use gpui_kit::base::dock::TabGroup;
 use gpui_kit::base::input::{Diagnostic, Position};
+use gpui_kit::base::{ResizableState, resizable_panel, v_resizable};
 use gpui_kit::component::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent};
@@ -67,6 +68,9 @@ pub struct EditorPanel {
     /// 编辑器下方的 AI 对话条：按需创建一次，关闭只是隐藏（保留历史）
     ai_chat: Option<Entity<AiChat>>,
     ai_open: bool,
+    /// 正文与 AI 对话条之间的分隔状态：对话条以前高度写死 260，只能看不能调。
+    /// 状态存在这里（不进 config.json），关掉设置回到默认高度。
+    ai_split: Entity<ResizableState>,
     status: SharedString,
     /// 滚动同步方向锁：谁先滚谁在一段时间内独占推动同步，对端回显一律吸收
     /// （取代旧的"单值 EPS 比较"，后者既会 ping-pong 也会吃掉用户滚动）
@@ -343,6 +347,7 @@ impl EditorPanel {
             save_task: None,
             ai_chat: None,
             ai_open: false,
+            ai_split: cx.new(|_| ResizableState::default()),
             ai_review: None,
             review_fill: None,
             status: SharedString::default(),
@@ -2997,14 +3002,29 @@ impl Render for EditorPanel {
             view = view.child(bar);
         }
 
-        view = view.child(body);
-
-        // AI 对话条：贴在编辑区下方，聊天对象就是当前这篇笔记
-        if self.ai_open
-            && let Some(chat) = &self.ai_chat
-        {
-            view = view.child(chat.clone());
+        // 正文与 AI 对话条之间是可拖的分隔条：以前对话条高度写死在
+        // `ai.rs` 里（`AI_HISTORY_MAX_H`），只能看不能调。
+        //
+        // 两个面板**始终**都在，关掉的那个用 `visible(false)` 塌成 0 高：
+        // 槽位数不随开关变化，`ResizableState` 才能记住拖过的高度，
+        // 而不是每次打开都重置。
+        let mut ai_panel = resizable_panel()
+            .visible(self.ai_open && self.ai_chat.is_some())
+            .size(px(tokens::AI_PANEL_DEFAULT_H))
+            .size_range(px(tokens::AI_PANEL_MIN_H)..px(tokens::AI_PANEL_MAX_H))
+            // 窗口缩放时正文吸收差值，对话条保持用户拖出来的高度
+            .fixed();
+        if let Some(chat) = &self.ai_chat {
+            ai_panel = ai_panel.child(chat.clone());
         }
+        view = view.child(
+            div().flex_1().min_h_0().overflow_hidden().child(
+                v_resizable("editor-ai-split")
+                    .with_state(&self.ai_split)
+                    .child(resizable_panel().child(body))
+                    .child(ai_panel),
+            ),
+        );
 
         view = view.child(
             div()

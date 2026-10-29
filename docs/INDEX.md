@@ -108,7 +108,7 @@
 | [ai-skills-design.md](./ai/ai-skills-design.md) | M2 Skills：`SKILL.md` 发现 / 解析 / 库内+用户级两级来源、命令面板 `AI:` 入口、`references/` 按需加载、设置里启停 | `core/ai/skills.rs`、`core/ai/{prompt,tools}.rs`、`ui/{command,ai,editor,settings}.rs` | ✅ **已实施**（2026-10-26，待人工验收） |
 | [ai-m3-library-tasks-design.md](./ai/ai-m3-library-tasks-design.md) | M3 库级任务：只读执行计划（逐条可取消）+ 批量改盘（快照 / 原子写 / 索引刷新）+ 分批停下与中断恢复；P1 先做规则可判定的批量标签动作 | `core/ai/tasks.rs`、`ui/ai/plan.rs`、`ui/tags.rs` | ✅ **已实施**（2026-10-27，待人工验收） |
 | [ai-ui-overhaul-requirements.md](./ai/ai-ui-overhaul-requirements.md) | AI 交互界面全面优化需求：视觉规范 token 化、气泡/输入/状态行重做、交互细节（hover/键位/拖拽）、明暗一致（R-1…R-8） | `ui/ai.rs`、`ui/editor.rs`、`ui/ai/plan.rs`、`ui/command.rs` | ✅ **G1 已过**（2026-10-29 用户拍板 4 项） |
-| [ai-ui-overhaul-design.md](./ai/ai-ui-overhaul-design.md) | 同上技术设计：新建 `ui/tokens.rs` 全局视觉规范 + 四块 UI 重做，P1–P6 分期 | 同上 + 新增 `ui/tokens.rs` | 📝 **待用户确认（G2）**（2026-10-29） |
+| [ai-ui-overhaul-design.md](./ai/ai-ui-overhaul-design.md) | 同上技术设计：新建 `ui/tokens.rs` 全局视觉规范 + 四块 UI 重做，P1–P6 分期 | 同上 + 新增 `ui/tokens.rs` | ✅ **G2 已过**（2026-10-29 用户确认） |
 | [multi-model-architecture-design.md](./ai/multi-model-architecture-design.md) | 多模型可插拔架构：Provider 注册表、统一 `CompletionRequest` 接口、能力差异（流式 / 上下文 / 工具）兼容、重试与备用模型、按场景路由、扩展边界 | `core/ai/mod.rs`、`core/ai/keychain.rs`、`core/config.rs`、`ui/{ai,settings}.rs` | ✅ **P0–P4 已实施**（2026-10-28）；人工验收见 [ACCEPTANCE.md §17](./ACCEPTANCE.md) |
 
 ## 9. 规范与其它（docs/ 根目录）
@@ -124,6 +124,9 @@
 
 ## 10. 已知缺口（文档说要做、代码还没做）
 
+- **AI 交互界面改版待人工验收**：`feature/ai-ui-overhaul` 上 T-1…T-6 已全部实施、G4 四连全绿，
+  但 hover 三态、明暗两套主题、拖拽手感、命令面板键位提示只能肉眼确认，
+  验收清单见 [ACCEPTANCE.md §19](./ACCEPTANCE.md)；未验收前不合并 main。
 - **编辑区 Markdown 高亮待人工验收**：feature 与代码已就绪（`editor-syntax-highlight-eval.md`），
   但着色效果、代码块 injection、明暗跟随都只能肉眼确认，尚未验收。
 - **编辑区与预览区的高亮已合并为一套配色源**：`highlight.theme` → 预置主题 `xink`

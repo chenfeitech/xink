@@ -50,7 +50,7 @@ use crate::state::workspace::app_data_dir;
 // 尺寸与配色的取值统一在 `crate::ui::tokens`：这里不再自己写死数字，
 // 也不再手搓颜色（`bubble_bg` 的 `hsla()` 是全项目唯一一处不跟主题的颜色）。
 use crate::ui::tokens;
-use crate::ui::tokens::{AI_BODY_MAX_H, AI_BUBBLE_MAX_W, AI_HISTORY_MAX_H};
+use crate::ui::tokens::{AI_BODY_MAX_H, AI_BUBBLE_MAX_W};
 
 /// 对话条发出的事件（目前只有"关闭"）
 pub enum AiChatEvent {
@@ -1479,11 +1479,12 @@ impl Render for AiChat {
         // `overflow_y_scrollbar()` 是组件库的封装，它会把元素包进一层
         // `size_full()` 的滚动壳、并**覆盖掉调用方的 id 与 `track_scroll`**
         // （handle 由它按 id 自己管），这样我们自己那个 handle 就滚不动了。
-        // 原生写法：height 由 `max_h` 收口（内容超出就是溢出），滚谁由 `track_scroll` 说了算。
+        // 高度不再写死：对话条由外层 `v_resizable` 定高，这里吃掉剩下的
+        // 空间（`flex_1`），内容超出就在内部滚。
         let mut history = div()
             .id("ai-history")
             .track_scroll(&self.history_scroll)
-            .max_h(px(AI_HISTORY_MAX_H))
+            .flex_1()
             .min_h_0()
             .w_full()
             .overflow_y_scroll()
@@ -1942,10 +1943,12 @@ impl Render for AiChat {
             status = status.child(stat(Some(IconName::CircleAlert), err.clone(), danger));
         }
 
+        // 高度由外层 `v_resizable` 的面板给（`size_full` 接住它），
+        // 不能再 `flex_none`：那样高度只由内容决定，拖多少都是一样高。
         div()
             .id("ai-chat")
-            .flex_none()
-            .w_full()
+            .size_full()
+            .min_h_0()
             .flex()
             .flex_col()
             .bg(theme.background)
