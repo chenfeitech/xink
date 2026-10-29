@@ -3,8 +3,8 @@
 //! 由 `src/core/ai/capability.rs` 用 `#[path]` 挂载（`Cargo.toml` 里
 //! `autotests = false`，tests/ 不是集成测试目录）。
 
-use super::{KNOWN, infer, info};
-use crate::core::config::AiProviderKind;
+use super::{KNOWN, effective, infer, info};
+use crate::core::config::{AiProviderKind, ModelEntry};
 
 // ── 字典 ──────────────────────────────────────────────
 
@@ -130,6 +130,56 @@ fn 认不出来返回空而不是乱猜() {
     );
     // base_url 为空也不能崩
     assert!(infer(AiProviderKind::OpenAiCompatible, "", "").is_empty());
+}
+
+// ── 展示用清单 ────────────────────────────────────────
+
+/// Ollama 拉回来的能力要原样用，不掺推断
+#[test]
+fn effective_用已存的能力() {
+    let model = ModelEntry {
+        id: "qwen3.5:0.8b".into(),
+        kind: AiProviderKind::Ollama,
+        capabilities: vec!["completion".into(), "vision".into()],
+        ..Default::default()
+    };
+    assert_eq!(effective(&model), vec!["completion", "vision"]);
+}
+
+/// OpenAI 兼容侧没来源时用推断值，不留白
+#[test]
+fn effective_为空时回落到推断值() {
+    let model = ModelEntry {
+        id: "deepseek-chat".into(),
+        kind: AiProviderKind::OpenAiCompatible,
+        base_url: "https://api.deepseek.com".into(),
+        ..Default::default()
+    };
+    assert_eq!(effective(&model), vec!["completion", "tools"]);
+}
+
+/// 用户手动改过就以用户为准——哪怕是空（全删了不该自动填回来）
+#[test]
+fn effective_手动改过的优先且空也算数() {
+    let model = ModelEntry {
+        id: "deepseek-chat".into(),
+        kind: AiProviderKind::OpenAiCompatible,
+        base_url: "https://api.deepseek.com".into(),
+        capabilities: vec!["thinking".into()],
+        capabilities_pinned: true,
+        ..Default::default()
+    };
+    assert_eq!(effective(&model), vec!["thinking"]);
+
+    let cleared = ModelEntry {
+        capabilities: Vec::new(),
+        capabilities_pinned: true,
+        ..model
+    };
+    assert!(
+        effective(&cleared).is_empty(),
+        "用户全删了就不该被推断值填回来"
+    );
 }
 
 #[test]

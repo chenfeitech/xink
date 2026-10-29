@@ -16,7 +16,7 @@
 //! 声明支持 tools，真发工具过去返回 500。所以运行时权威判据一直是探针实测的
 //! `tools_enabled`（`ui/ai.rs:861`），本模块只负责"让用户看见"。
 
-use crate::core::config::AiProviderKind;
+use crate::core::config::{AiProviderKind, ModelEntry};
 
 // ── 字典 ──────────────────────────────────────────────
 //
@@ -114,6 +114,20 @@ pub fn infer(kind: AiProviderKind, base_url: &str, model_id: &str) -> Vec<String
         caps.push("tools".into());
     }
     caps
+}
+
+/// 这个模型**展示用**的能力清单
+///
+/// 优先级：用户手动改过的 > 已存的（Ollama 从 `/api/tags` 拉回来的）> 推断值。
+///
+/// 推断值**不落盘**：它只是猜测，写进去就变成"用户没改过但看起来像改过"
+/// 的值，下次厂商改了也刷不掉。每次渲染现算即可（`infer` 是纯函数，很便宜）。
+pub fn effective(model: &ModelEntry) -> Vec<String> {
+    // 手动改过就以用户勾的为准——哪怕是空（用户全删了，不该自动填回来）
+    if model.capabilities_pinned || !model.capabilities.is_empty() {
+        return model.capabilities.clone();
+    }
+    infer(model.kind, &model.base_url, &model.id)
 }
 
 /// 从 base_url 取主机名小写（拿不到就是 `None`）

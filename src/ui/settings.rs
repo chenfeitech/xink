@@ -24,6 +24,7 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Size};
 use gpui_kit::*;
 
 use crate::app::AppState;
+use crate::core::ai::capability;
 use crate::core::ai::keychain::SecretStore;
 use crate::core::ai::skills;
 use crate::core::config::{
@@ -1522,22 +1523,22 @@ fn compact_num(value: u32) -> String {
     }
 }
 
-/// 模型能力的一行小字：能力 + 上下文 + 工具结论 + 启用状态
+/// 模型信息的那行小字：上下文 + 工具结论 + 启用状态
 ///
-/// 以前这些和模型名、按钮挤在同一行，挤不下就换行、一换行就对不齐；
-/// 现在单独一行，主行只留模型名与操作。
-fn capability_line(model: &ModelEntry) -> String {
+/// **不含能力列表**——能力改成了 chip 行（见 [`capability_row`]），每个 chip
+/// 悬停能看到含义与用途，挤在一行小字里做不到。
+///
+/// 拆成纯字符串是为了能单测：chip 行是元素，测不了文案。
+fn capability_summary(model: &ModelEntry) -> String {
     let mut parts = Vec::new();
-    if !model.capabilities.is_empty() {
-        parts.push(model.capabilities.join(" / "));
-    }
     if let Some(limit) = model.context_limit {
         parts.push(format!("上下文 {}", compact_num(limit)));
     }
     // 能力是厂商声明的，tools_enabled 是连接测试实测的（设计 D5），分开说
+    let caps = capability::effective(model);
     if model.tools_enabled {
         parts.push("工具调用已实测".into());
-    } else if model.capabilities.iter().any(|c| c == "tools") {
+    } else if caps.iter().any(|c| c == "tools") {
         parts.push("工具调用待实测".into());
     } else {
         parts.push("不支持工具调用".into());
@@ -1546,6 +1547,84 @@ fn capability_line(model: &ModelEntry) -> String {
         parts.push("已停用".into());
     }
     parts.join(" · ")
+}
+
+/// 能力 chip 行
+///
+/// 每项一个小按钮，**悬停看含义与用途**——挤在一行小字里做不到"说明"。
+/// 末尾「编辑」可以勾选增删：OpenAI 兼容端点没有能力来源，只能靠用户补。
+fn capability_row(model: &ModelEntry) -> Div {
+    let caps = capability::effective(model);
+    let id = model.id.clone();
+
+    let mut row = div().flex().flex_wrap().items_center().gap_1();
+    if caps.is_empty() {
+        // 认不出来就明说，不留白（需求 R-5）
+        row = row.child(
+            Button::new(SharedString::from(format!("cap-unknown-{id}")))
+                .xsmall()
+                .ghost()
+                .label("未知")
+                .tooltip("没能识别出这个模型的能力：点右侧「编辑」可手动指定"),
+        );
+    }
+    for cap in &caps {
+        let info = capability::info(cap);
+        row = row.child(
+            Button::new(SharedString::from(format!("cap-{id}-{cap}")))
+                .xsmall()
+                .ghost()
+                .label(info.label)
+                .tooltip(format!("{}\n{}", info.meaning, info.usage)),
+        );
+    }
+    row.child(edit_caps_control(&id, &caps))
+}
+
+/// 「编辑」下拉：列出所有已知能力，已选的带勾选
+fn edit_caps_control(model_id: &str, caps: &[String]) -> AnyElement {
+    let element_id = SharedString::from(format!("cap-edit-{model_id}"));
+    let model_id = model_id.to_string();
+    let caps = caps.to_vec();
+    DropdownButton::new(element_id.clone())
+        .button(Button::new(element_id).xsmall().ghost().label("编辑"))
+        .dropdown_menu(move |menu, _window, _cx| {
+            let mut menu = menu;
+            for cap in capability::KNOWN {
+                let has = caps.iter().any(|c| c == cap);
+                let info = capability::info(cap);
+                let model_id = model_id.clone();
+                let cap = cap.to_string();
+                menu = menu.item(PopupMenuItem::new(info.label).checked(has).on_click(
+                    move |_, _, cx| {
+                        let model_id = model_id.clone();
+                        let cap = cap.clone();
+                        crate::app::update_config(cx, move |cfg| {
+                            toggle_capability(cfg, &model_id, &cap);
+                        });
+                    },
+                ));
+            }
+            menu
+        })
+        .into_any_element()
+}
+
+/// 勾选 / 取消一项能力，并把清单标记为"用户手动改过"
+fn toggle_capability(cfg: &mut AppConfig, model_id: &str, cap: &str) {
+    let Some(model) = cfg.ai.models.iter_mut().find(|m| m.id == model_id) else {
+        return;
+    };
+    // 先固化当前**展示出来**的清单再加删：否则从推断值起步时，
+    // 用户勾第一项会把推断出来的其它项冲掉。
+    let mut caps = capability::effective(model);
+    if caps.iter().any(|c| c == cap) {
+        caps.retain(|c| c != cap);
+    } else {
+        caps.push(cap.to_string());
+    }
+    model.capabilities = caps;
+    model.capabilities_pinned = true;
 }
 
 // ── 逐模型参数的档位 ───────────────────────────────────
@@ -2776,10 +2855,14 @@ impl SettingsView {
                                     {
                                         m.tools_enabled = tools;
                                         // 能力列表跟着探针结论走：
-                                        // 声明有但实际不支持的，要摘掉
-                                        m.capabilities.retain(|c| c != "tools");
-                                        if tools {
-                                            m.capabilities.push("tools".into());
+                                        // 声明有但实际不支持的，要摘掉。
+                                        // 但用户**手动改过**清单的，探针不动它
+                                        // （实测结论仍写 tools_enabled，那才是运行时判据）
+                                        if !m.capabilities_pinned {
+                                            m.capabilities.retain(|c| c != "tools");
+                                            if tools {
+                                                m.capabilities.push("tools".into());
+                                            }
                                         }
                                         m.last_checked_ms = crate::core::ai::models::now_ms();
                                     }
@@ -2828,12 +2911,14 @@ impl SettingsView {
                     )
                     .child(actions),
             )
+            // 能力 chip 行：悬停看说明，末尾「编辑」可勾选增删
+            .child(capability_row(model))
             .child(
                 div()
                     .text_xs()
                     .pt_1()
                     .text_color(muted)
-                    .child(capability_line(model)),
+                    .child(capability_summary(model)),
             )
             .child({
                 // 三个参数横排：标签定宽，各组的下拉左边缘才对得齐

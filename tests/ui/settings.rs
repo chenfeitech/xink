@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use super::{ADVANCED_IDS, FieldKind, FieldTier, SettingsTab, all_fields};
-use super::{capability_line, compact_num, ctx_options, truncate_chars, vendor_of};
+use super::{capability_summary, compact_num, ctx_options, truncate_chars, vendor_of};
 use crate::core::config::{AiProviderKind, AppConfig, ModelEntry};
 
 /// 上下文窗口的档位必须按模型上限过滤
@@ -275,9 +275,12 @@ fn compact_num_uses_k_and_m() {
     assert_eq!(compact_num(2_000_000), "2M");
 }
 
-/// 能力小字：能力 + 上下文 + 工具结论，且工具分"声明"与"实测"
+/// 信息小字：上下文 + 工具结论 + 停用状态
+///
+/// 能力列表不在这里了——它改成了 chip 行（每项悬停能看说明），
+/// 挤在一行小字里做不到"说明"。这里只管可测的那部分文案。
 #[test]
-fn capability_line_lists_context_and_tools() {
+fn capability_summary_lists_context_and_tools() {
     let mut model = ModelEntry {
         id: "m".into(),
         capabilities: vec!["chat".into(), "tools".into()],
@@ -285,23 +288,52 @@ fn capability_line_lists_context_and_tools() {
         ..Default::default()
     };
     // 声明有 tools 但没测过 → 待实测
-    assert_eq!(
-        capability_line(&model),
-        "chat / tools · 上下文 128k · 工具调用待实测"
-    );
+    assert_eq!(capability_summary(&model), "上下文 128k · 工具调用待实测");
 
     model.tools_enabled = true;
-    assert_eq!(
-        capability_line(&model),
-        "chat / tools · 上下文 128k · 工具调用已实测"
-    );
+    assert_eq!(capability_summary(&model), "上下文 128k · 工具调用已实测");
 
     model.capabilities = vec!["chat".into()];
     model.tools_enabled = false;
     model.enabled = false;
     assert_eq!(
-        capability_line(&model),
-        "chat · 上下文 128k · 不支持工具调用 · 已停用"
+        capability_summary(&model),
+        "上下文 128k · 不支持工具调用 · 已停用"
+    );
+}
+
+/// OpenAI 兼容端点没有能力来源：展示时要用推断值，不能留白
+#[test]
+fn capability_summary_uses_inferred_caps_for_compatible_endpoints() {
+    let model = ModelEntry {
+        id: "deepseek-chat".into(),
+        kind: AiProviderKind::OpenAiCompatible,
+        base_url: "https://api.deepseek.com".into(),
+        // capabilities 空、也没手动改过 → 走 infer
+        ..Default::default()
+    };
+    assert_eq!(
+        capability_summary(&model),
+        "工具调用待实测",
+        "推断出 tools 就该显示「待实测」，而不是留白"
+    );
+}
+
+/// 用户手动改过：以用户勾的为准，推断值不再介入
+#[test]
+fn capability_summary_prefers_pinned_caps() {
+    let model = ModelEntry {
+        id: "deepseek-chat".into(),
+        kind: AiProviderKind::OpenAiCompatible,
+        base_url: "https://api.deepseek.com".into(),
+        capabilities: vec!["completion".into()],
+        capabilities_pinned: true, // 用户手动删掉了 tools
+        ..Default::default()
+    };
+    assert_eq!(
+        capability_summary(&model),
+        "不支持工具调用",
+        "用户勾的清单优先于推断值"
     );
 }
 
