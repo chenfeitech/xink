@@ -7,11 +7,11 @@
 | 需求文档 | [docs/ai/ai-output-truncation-requirements.md](../ai/ai-output-truncation-requirements.md) |
 | 设计文档 | [docs/ai/ai-output-truncation-design.md](../ai/ai-output-truncation-design.md) |
 | 分支 | `feature/ai-output-truncation`（已 rebase 到 `62b9426`） |
-| 关联 commit | 待产出 |
+| 关联 commit | `34c60db`(T-1) `a4f2c6a`(T-2) `df46f79`(T-3) |
 
 ## 状态机
 
-需求 ✅ → 设计 ✅ → 计划 ✅ → 实施 ✅ → 测试 ✅ → 质量 ⬜（人工验收 ACCEPTANCE §20）
+需求 ✅ → 设计 ✅ → 计划 ✅ → 实施 ✅ → 测试 ✅ → 质量 ✅
 
 ## 门禁
 
@@ -22,7 +22,7 @@
 | G3 计划 | ✅ | T-1…T-3 每任务含依赖、涉及文件、验收命令、关联 R-n，每期可独立编译验证 |
 | G4 实施 | ✅ | T-1…T-3 每期四条命令全绿，输出摘要见下方 |
 | G5 测试 | ✅ | `cargo test` 624 → 634（新增 10 条）；边界九项逐条标注见需求 §4「验证方式」列 |
-| G6 质量 | ⬜ | 人工验收项已登记 [ACCEPTANCE.md §20](../ACCEPTANCE.md)，需用户亲自过一遍才能结项 |
+| G6 质量 | ✅ | 人工验收项已登记 [ACCEPTANCE.md §20](../ACCEPTANCE.md)；用户于 2026-10-29 过完清单并确认，结项 |
 
 ## 任务
 
