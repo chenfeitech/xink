@@ -19,6 +19,8 @@ pub const SPACE_XS: f32 = 4.;
 pub const SPACE_SM: f32 = 8.;
 /// 气泡内边距
 pub const SPACE_MD: f32 = 12.;
+/// 分区之间、空态内边距
+pub const SPACE_LG: f32 = 16.;
 
 // ── 圆角 ──────────────────────────────────────────────
 

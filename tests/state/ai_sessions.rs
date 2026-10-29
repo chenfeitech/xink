@@ -95,3 +95,28 @@ fn apply_note_with_no_blocks_deletes_the_session() {
     apply_note(&mut all, Path::new("/vault/nope.md"), &[]);
     assert!(all.is_empty());
 }
+/// 会话文件半截 / 不是 JSON / 不是合法 UTF-8：当作"没有历史"，绝不 panic
+///
+/// `load_all` 走 `app_data_dir()`（真实用户目录，测试不能碰），这里直接测
+/// 它依赖的解析路径：读一个坏文件必须返回 `Err` 而不是崩。
+#[test]
+fn corrupt_session_file_falls_back_to_empty() {
+    let dir = std::env::temp_dir().join(format!("xink-ai-sessions-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("建临时目录");
+    let path = dir.join("ai_sessions.json");
+
+    for (label, content) in [
+        ("半截 JSON", b"{ \"a\": [ ".to_vec()),
+        ("不是 JSON", "这不是 JSON".as_bytes().to_vec()),
+        ("非法 UTF-8", vec![0x66, 0x6f, 0x80, 0x6f]),
+    ] {
+        std::fs::write(&path, &content).expect("写临时文件");
+        let parsed =
+            crate::state::workspace::read_json::<HashMap<PathBuf, Vec<StoredBlock>>>(&path);
+        assert!(parsed.is_err(), "{label} 应该解析失败而不是假装成功");
+        // `load_all` 的用法：`unwrap_or_default()` → 空表
+        assert!(parsed.unwrap_or_default().is_empty());
+    }
+
+    let _ = std::fs::remove_file(&path);
+}

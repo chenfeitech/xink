@@ -1332,6 +1332,7 @@ impl Render for AiChat {
         let border = theme.border;
         let primary = theme.primary;
         let warning = theme.warning;
+        let danger = theme.danger;
         let cfg = config(cx);
         // 顶栏显示的是"这次请求实际会用哪个"，与路由结果保持一致
         let current_model = self
@@ -1491,11 +1492,25 @@ impl Render for AiChat {
             .px(px(tokens::SPACE_SM))
             .py(px(tokens::SPACE_XS));
         if self.blocks.is_empty() {
+            // 空态：以前是裸的一行小字，没有容器也没有图标
             history = history.child(
                 div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("可以直接提问；要改笔记时用下面的动作，或者说“把这段改成……”"),
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(tokens::SPACE_XS))
+                    .py(px(tokens::SPACE_LG))
+                    .child(
+                        Icon::new(IconName::Bot)
+                            .with_size(Size::Size(px(20.)))
+                            .text_color(muted),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child("可以直接提问；要改笔记时用下面的动作，或者说“把这段改成……”"),
+                    ),
             );
         }
         for (ix, block) in self.blocks.iter().enumerate() {
@@ -1858,31 +1873,50 @@ impl Render for AiChat {
         }
 
         // ── 状态行 ──
+        //
+        // 以前是一串 text_xs 平铺：耗时、工具次数、tokens、错误挤在一起，
+        // 错误还是灰字。现在一格一格排，错误单独用 danger。
         let mut status = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(tokens::SPACE_SM))
             .px(px(tokens::SPACE_SM))
             .pb(px(tokens::SPACE_XS));
+        // 一格：可选图标 + 文字。数值类（耗时、tokens）本来就有单位，
+        // 不加图标；状态类（生成中 / 工具 / 提示 / 错误）才配图标。
+        //
+        // 图标只能从组件库打包的那 106 个里选（`default-icons.txt`），
+        // 没有 clock / chart 这类，别照着 lucide 全量清单写。
+        let stat = |icon: Option<IconName>, text: String, color: Hsla| {
+            let mut cell = div().flex().items_center().gap(px(tokens::SPACE_XS));
+            if let Some(icon) = icon {
+                cell = cell.child(
+                    Icon::new(icon)
+                        .with_size(Size::Size(px(12.)))
+                        .text_color(color),
+                );
+            }
+            cell.child(div().text_xs().text_color(color).child(text))
+                .into_any_element()
+        };
         if self.busy {
-            status = status.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("生成中…（首次请求要等模型加载）"),
-            );
+            status = status.child(stat(
+                Some(IconName::Loader),
+                "生成中…（首次请求要等模型加载）".to_string(),
+                muted,
+            ));
         }
         if let Some(ms) = self.elapsed_ms {
-            status = status.child(div().text_xs().text_color(muted).child(format!("{ms} ms")));
+            status = status.child(stat(None, format!("{ms} ms"), muted));
         }
         if self.tool_calls > 0 {
             // 让"这次用了几次工具"看得见：多步的代价要摆在明面上
-            status = status.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("工具 {} 次", self.tool_calls)),
-            );
+            status = status.child(stat(
+                Some(IconName::Cpu),
+                format!("工具 {} 次", self.tool_calls),
+                muted,
+            ));
         }
         if let Some(usage) = &self.usage {
             // 模型报的真实用量（各 provider 未必都给）；没给就退回上下文粗估
@@ -1894,22 +1928,18 @@ impl Render for AiChat {
                 parts.push(format!("输出 {completion}"));
             }
             if !parts.is_empty() {
-                status = status.child(div().text_xs().text_color(muted).child(parts.join(" / ")));
+                status = status.child(stat(None, parts.join(" / "), muted));
             }
         }
         if let Some(tokens) = self.input_tokens {
-            status = status.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("上下文约 {tokens} tokens")),
-            );
+            status = status.child(stat(None, format!("上下文约 {tokens} tokens"), muted));
         }
         if let Some(notice) = &self.notice {
-            status = status.child(div().text_xs().text_color(muted).child(notice.clone()));
+            status = status.child(stat(Some(IconName::Info), notice.clone(), muted));
         }
+        // 错误单独一档：以前和普通提示一样是灰字，看不出是出问题了
         if let Some(err) = &self.error {
-            status = status.child(div().text_xs().text_color(warning).child(err.clone()));
+            status = status.child(stat(Some(IconName::CircleAlert), err.clone(), danger));
         }
 
         div()
