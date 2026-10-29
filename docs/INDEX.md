@@ -103,7 +103,7 @@
 | [ollama-provider-design.md](./ai/ollama-provider-design.md) | Ollama Provider + 模型列表管理：native vs 兼容端点实测、per-model 参数与连接测试、配置与设置界面 | `core/ai/{ollama,models}.rs`、`ui/settings.rs` | ✅ **M0 Spike + M1 已实施并验收**（2026-10-26） |
 | [ai-m1-completion-design.md](./ai/ai-m1-completion-design.md) | M1 收口：agent loop / 只读工具 / 结构校验 / `.xink` 排除 / 连接测试 / 快照轮转与清空 / 命令面板入口，P1–P5 分期 | `core/ai/{agent_loop,tools,verify,probe,snapshot}.rs`、`core/media.rs`、`ui/{ai,command,settings}.rs` | ✅ **P1–P5 全部实施并验收、已合入 main**（2026-10-26） |
 | [ai-capability-list-requirements.md](./ai/ai-capability-list-requirements.md) | 模型能力清单：Ollama 有 `/api/tags` 能力来源但 UI 只拼英文串；OpenAI 兼容（DeepSeek）**无任何能力来源** → 静态表推断 + 可手动改 + 中文标签与说明 | `core/ai/capability.rs`（新）、`core/config.rs`、`ui/settings.rs` | ✅ **G1 已过**（2026-10-29 用户拍板：静态表+可改 / 只展示不改行为 / 探针不动） |
-| [ai-capability-list-design.md](./ai/ai-capability-list-design.md) | 同上技术设计：能力字典 + `infer()` 纯函数、`capabilities_pinned` 字段、能力 chip 行（悬停看说明）+ 编辑菜单；P1–P4 分期 | 同上 | 📝 **待用户确认（G2）**（2026-10-29） |
+| [ai-capability-list-design.md](./ai/ai-capability-list-design.md) | 同上技术设计：能力字典 + `infer()` 纯函数、`capabilities_pinned` 字段、能力 chip 行（悬停看说明）+ 编辑菜单；P1–P4 分期 | 同上 | ✅ **已实施**（2026-10-29）；人工验收见 [ACCEPTANCE.md §21](./ACCEPTANCE.md) |
 | [ai-chat-blocks-design.md](./ai/ai-chat-blocks-design.md) | 对话条：正文改用 `TextView`（可选中 / `Cmd-C` 可复制）+ 交互过程分块折叠（我 / AI / 工具 / 校验 / diff） | `ui/ai.rs`、`core/ai/agent_loop.rs` | ✅ 已实施（2026-10-26，待人工验收） |
 | [ai-review-hunks-design.md](./ai/ai-review-hunks-design.md) | AI 修订评审：按 hunk 展示原文 / 改后文，逐块「接受修订」「拒绝修订」；落法改为结果驱动（不再只有"替换整篇"） | `core/ai/patch.rs`、`ui/editor.rs`、`ui/ai.rs` | ✅ **已实施**（2026-10-26，待人工验收） |
 | [ai-inline-diff-review-design.md](./ai/ai-inline-diff-review-design.md) | 把评审从"编辑区下方评审条"搬到**编辑区内部**：A 真插入式（AI 新行就地写进编辑区 + 行染色）+ 顶部条逐块卡片接受/拒绝；含 gpui 可行性调研结论 | `ui/editor.rs`、`core/ai/patch.rs` | ✅ **已实施**（2026-10-27） |
@@ -128,6 +128,11 @@
 
 ## 10. 已知缺口（文档说要做、代码还没做）
 
+- **OpenAI 兼容端点的能力是"猜"的**：`/v1/models` 只有 `id/created/owned_by`，
+  没有能力字段，各家路径还不一样，所以只能按域名 + 模型名推断
+  （`capability::infer()`，只覆盖 5 家主流厂商）。冷门端点显示"未知"，
+  靠用户在「编辑」菜单里手动勾。运行时权威判据仍是探针实测的 `tools_enabled`。
+  见 `ai-capability-list-design.md` §3.3 / §9-R1。
 - **`num_predict` 旧默认值 1024 只影响老配置**：2026-10-29 已把默认值改成 8192，
   但 `#[serde(default)]` 只在字段缺失时才用默认值——已经存进 `config.json` 的
   模型条目仍是 1024，不会被自动改写。老用户需在模型行的「最大生成」档位里
