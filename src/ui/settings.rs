@@ -956,13 +956,15 @@ fn all_fields() -> Vec<SettingField> {
         number_field(
             "ai.ollama.num_ctx",
             "上下文窗口",
-            "上下文窗口",
+            // 单位是 token 而不是字符：`max_context_chars`（"字"）是另一码事，
+            // 两者在 `AiChat::context_budget` 里才折算到一起
+            "一次请求带进去多少 token 的上下文",
             Ai,
             "连接",
             512.,
             131072.,
             512.,
-            "",
+            "token",
             |c| c.ai.ollama.num_ctx as f32,
             |c, v| c.ai.ollama.num_ctx = v as u32,
         ),
