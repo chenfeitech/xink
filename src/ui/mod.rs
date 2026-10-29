@@ -15,6 +15,7 @@ pub mod settings;
 pub mod tabs;
 pub mod tags;
 pub mod theme;
+pub mod tokens;
 pub mod vault_manager;
 
 pub use ai::{AiChat, AiChatEvent};

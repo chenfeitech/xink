@@ -33,6 +33,7 @@ use crate::core::config::{
 };
 use crate::core::keymap;
 use crate::core::theme::PRESET_THEMES;
+use crate::ui::tokens;
 
 /// 自定义动作的 id：内置 id 是固定字符串，这里用毫秒时间戳避开它们
 ///
@@ -3184,7 +3185,7 @@ impl Render for SettingsView {
                 .rounded(cx.theme().radius)
                 .text_sm()
                 .cursor_pointer()
-                .hover(|this| this.bg(cx.theme().primary.opacity(0.12)));
+                .hover(|this| this.bg(tokens::hover_bg(cx)));
             // 框架没给 Stateful 提供 `when`，选中态用普通分支（同 `rail.rs`）
             if selected {
                 item = item

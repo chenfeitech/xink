@@ -19,9 +19,11 @@ use std::time::{Duration, Instant};
 use gpui_kit::base::TextView;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
+// `gpui_kit::*` 里的 `Size` 是另一个泛型类型，组件库的 Size 要显式导入
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::{Icon, IconName, Size};
 use gpui_kit::*;
 
 use crate::app::{AppState, config};
@@ -45,40 +47,10 @@ use crate::core::search::{Hit, search_files};
 use crate::state::ai_sessions::{self, StoredBlock};
 use crate::state::workspace::app_data_dir;
 
-/// 等待首个响应字节的预算（Ollama 冷启动实测数秒）
-/// 对话区最大高度：超过就让对话区自己滚，编辑区不被压扁
-///
-/// 180 太小：一轮问答就撑满，更早的轮次全在视口外，看起来像"只有一轮"。
-const HISTORY_MAX_H: f32 = 260.;
-/// 单个展开块的最大高度
-///
-/// 块内自带垂直滚动：工具结果动辄几百行，不收口的话它会把对话区撑到很高，
-/// 外层那 260px 再怎么滚也看不全——块内滚动让"看细节"和"看全部轮次"互不干扰。
-const BODY_MAX_H: f32 = 220.;
-/// 气泡最大宽度（占对话区宽度的比例）：太长的一行读起来累
-const BUBBLE_MAX_W: f32 = 0.78;
-/// 气泡圆角：固定值，不取 `theme.radius`（后者可能为 0，那样气泡就是方块）
-const BUBBLE_RADIUS: f32 = 12.;
-
-/// 用户气泡的浅蓝底（HSL 度 / 百分比写法，见下面 `bubble_bg`）
-const BUBBLE_BG_LIGHT: (f32, f32, f32) = (210., 100., 92.);
-/// 深色主题下换深蓝，气泡自带对比度，不依赖主题前景色
-const BUBBLE_BG_DARK: (f32, f32, f32) = (212., 55., 30.);
-
-/// 用户气泡的底色
-///
-/// **坑**：gpui 的 `hsla(h, s, l, a)` 四个分量都是 **0..1**（不是 360 度 / 100
-/// 百分比），超出的会被 `clamp` 掉。写成 `hsla(210., 100., 92., 1.)` 会被夹成
-/// `(1,1,1,1)` = 纯白，看上去就是"底色没生效"。
-/// 因此这里统一按 HSL(度, %, %) 写常量，构造时再换算到 0..1。
-fn bubble_bg(is_dark: bool) -> Hsla {
-    let (h, s, l) = if is_dark {
-        BUBBLE_BG_DARK
-    } else {
-        BUBBLE_BG_LIGHT
-    };
-    hsla(h / 360., s / 100., l / 100., 1.)
-}
+// 尺寸与配色的取值统一在 `crate::ui::tokens`：这里不再自己写死数字，
+// 也不再手搓颜色（`bubble_bg` 的 `hsla()` 是全项目唯一一处不跟主题的颜色）。
+use crate::ui::tokens;
+use crate::ui::tokens::{AI_BODY_MAX_H, AI_BUBBLE_MAX_W};
 
 /// 对话条发出的事件（目前只有"关闭"）
 pub enum AiChatEvent {
@@ -428,7 +400,8 @@ struct PendingEdit {
 }
 
 pub struct AiChat {
-    input: Entity<InputState>,
+    /// 输入：多行（长提示词要能换行写）
+    input: Entity<TextareaState>,
     /// 对话区的内容块，顺序即发生顺序
     blocks: Vec<Block>,
     /// 对话区的滚动句柄：内容变长时用它滚到底，否则新的一轮在视口外看不见
@@ -470,8 +443,14 @@ pub struct AiChat {
 impl AiChat {
     /// `note_path` 是当前这篇笔记：会话按笔记落盘，建好就把历史读回来
     pub fn new(window: &mut Window, cx: &mut Context<Self>, note_path: Option<PathBuf>) -> Self {
-        let input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("问点什么，或让 AI 改这篇笔记…"));
+        // 多行：长提示词要能换行写。
+        // `submit_on_enter(true)` 让裸 Enter 依然发送、Shift+Enter 才换行——
+        // 多行模式下默认 Enter 是换行，不改这个开关就会"按回车既换行又发送"
+        let input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .submit_on_enter(true)
+                .placeholder("问点什么，或让 AI 改这篇笔记…（Enter 发送，Shift+Enter 换行）")
+        });
         // 订阅只挂一次：写进 render 会每帧多挂一个
         cx.subscribe_in(
             &input,
@@ -1353,6 +1332,7 @@ impl Render for AiChat {
         let border = theme.border;
         let primary = theme.primary;
         let warning = theme.warning;
+        let danger = theme.danger;
         let cfg = config(cx);
         // 顶栏显示的是"这次请求实际会用哪个"，与路由结果保持一致
         let current_model = self
@@ -1373,9 +1353,9 @@ impl Render for AiChat {
         let header = div()
             .flex()
             .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
+            .gap(px(tokens::SPACE_SM))
+            .px(px(tokens::SPACE_SM))
+            .py(px(tokens::SPACE_XS))
             .border_t_1()
             .border_color(border)
             .child(if !cfg.ai.enabled {
@@ -1420,6 +1400,64 @@ impl Render for AiChat {
                     })
                     .into_any_element()
             })
+            // 当前模式：以前点了动作 / 跑了 skill 之后，界面上完全看不出来
+            // 接下来发送会走哪条路
+            .child(match &self.mode {
+                AiMode::Chat => div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("对话")
+                    .into_any_element(),
+                AiMode::Action(id) => {
+                    let name = cfg
+                        .ai
+                        .action(id)
+                        .map(|a| a.name.clone())
+                        .unwrap_or_else(|| id.clone());
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(tokens::SPACE_XS))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(primary)
+                                .child(format!("动作：{name}")),
+                        )
+                        .child(
+                            Button::new("ai-back-to-chat")
+                                .xsmall()
+                                .ghost()
+                                .label("回到对话")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.mode = AiMode::Chat;
+                                    cx.notify();
+                                })),
+                        )
+                        .into_any_element()
+                }
+                AiMode::Skill(name) => div()
+                    .flex()
+                    .items_center()
+                    .gap(px(tokens::SPACE_XS))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(primary)
+                            .child(format!("Skill：{name}")),
+                    )
+                    .child(
+                        Button::new("ai-back-to-chat")
+                            .xsmall()
+                            .ghost()
+                            .label("回到对话")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.mode = AiMode::Chat;
+                                cx.notify();
+                            })),
+                    )
+                    .into_any_element(),
+            })
             .child(
                 Button::new("ai-clear")
                     .xsmall()
@@ -1441,24 +1479,39 @@ impl Render for AiChat {
         // `overflow_y_scrollbar()` 是组件库的封装，它会把元素包进一层
         // `size_full()` 的滚动壳、并**覆盖掉调用方的 id 与 `track_scroll`**
         // （handle 由它按 id 自己管），这样我们自己那个 handle 就滚不动了。
-        // 原生写法：height 由 `max_h` 收口（内容超出就是溢出），滚谁由 `track_scroll` 说了算。
+        // 高度不再写死：对话条由外层 `v_resizable` 定高，这里吃掉剩下的
+        // 空间（`flex_1`），内容超出就在内部滚。
         let mut history = div()
             .id("ai-history")
             .track_scroll(&self.history_scroll)
-            .max_h(px(HISTORY_MAX_H))
+            .flex_1()
             .min_h_0()
             .w_full()
             .overflow_y_scroll()
             .flex_col()
-            .gap_1()
-            .px_2()
-            .py_1();
+            .gap(px(tokens::SPACE_XS))
+            .px(px(tokens::SPACE_SM))
+            .py(px(tokens::SPACE_XS));
         if self.blocks.is_empty() {
+            // 空态：以前是裸的一行小字，没有容器也没有图标
             history = history.child(
                 div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("可以直接提问；要改笔记时用下面的动作，或者说“把这段改成……”"),
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(tokens::SPACE_XS))
+                    .py(px(tokens::SPACE_LG))
+                    .child(
+                        Icon::new(IconName::Bot)
+                            .with_size(Size::Size(px(20.)))
+                            .text_color(muted),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child("可以直接提问；要改笔记时用下面的动作，或者说“把这段改成……”"),
+                    ),
             );
         }
         for (ix, block) in self.blocks.iter().enumerate() {
@@ -1467,17 +1520,30 @@ impl Render for AiChat {
             // 过程块（工具 / 校验 / diff）仍是"标题 + 可折叠正文"。
             if let Block::User { text, .. } | Block::Assistant { text, .. } = block {
                 let mine = matches!(block, Block::User { .. });
-                if !mine && text.is_empty() && self.busy {
-                    continue;
-                }
                 // 外层是整行容器，靠 `justify` 决定气泡贴哪一边：
                 // 比给气泡自身设 `align_self` 稳（不受父容器 align-items 影响）
-                let row = div().w_full().flex();
+                let row = div()
+                    .w_full()
+                    .flex()
+                    .items_start()
+                    .gap(px(tokens::SPACE_XS));
                 let row = if mine {
                     // 用户消息贴右、AI 回复贴左
                     row.justify_end()
                 } else {
                     row.justify_start()
+                };
+                // 角色标识：以前只靠左右对齐区分是谁说的
+                let role = |mine: bool| {
+                    div().flex_none().pt(px(tokens::SPACE_SM)).child(
+                        Icon::new(if mine {
+                            IconName::CircleUser
+                        } else {
+                            IconName::Bot
+                        })
+                        .with_size(Size::Size(px(14.)))
+                        .text_color(muted),
+                    )
                 };
                 if collapsed {
                     // 收起后没有标题可点，留一行极简提示（对齐方向保持原样）
@@ -1488,6 +1554,9 @@ impl Render for AiChat {
                                 .text_xs()
                                 .text_color(muted)
                                 .cursor_pointer()
+                                .rounded(tokens::row_radius(cx))
+                                .px(px(tokens::SPACE_XS))
+                                .hover(|s| s.bg(tokens::hover_bg(cx)))
                                 .on_click(
                                     cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)),
                                 )
@@ -1496,32 +1565,59 @@ impl Render for AiChat {
                     );
                     continue;
                 }
+                // 等首个字：以前直接跳过，界面上什么都看不到（只有状态行一行字）
+                if !mine && text.is_empty() {
+                    if self.busy {
+                        history = history.child(
+                            row.child(role(mine)).child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(tokens::SPACE_XS))
+                                    .py(px(tokens::SPACE_XS))
+                                    .child(
+                                        Icon::new(IconName::Loader)
+                                            .with_size(Size::Size(px(14.)))
+                                            .text_color(muted),
+                                    )
+                                    .child(div().text_xs().text_color(muted).child("生成中…")),
+                            ),
+                        );
+                    }
+                    continue;
+                }
                 let mut bubble = div()
                     .id(("ai-bubble", ix))
-                    .max_w(relative(BUBBLE_MAX_W))
-                    // 圆角写死而不是取 `theme.radius`：有的主题把 radius 设成 0，
-                    // 气泡就成了方块。气泡圆角是设计决定，不跟主题走。
-                    .rounded(px(BUBBLE_RADIUS))
-                    .px_3()
-                    .py_2()
+                    .max_w(relative(AI_BUBBLE_MAX_W))
+                    // 圆角跟主题走（`tokens::bubble_radius`），但兜一个下限：
+                    // 主题把 radius 设成 0 时气泡会变方块
+                    .rounded(tokens::bubble_radius(cx))
+                    .px(px(tokens::SPACE_MD))
+                    .py(px(tokens::SPACE_SM))
                     .cursor_pointer()
+                    // 气泡可点（折叠/展开），得有 hover 才看得出
+                    .hover(|s| s.bg(tokens::selected_bg(cx)))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)));
                 if mine {
-                    // 用户消息：浅蓝底 + 内边距 + 圆角 + 文字右对齐
-                    bubble = bubble.text_right().bg(bubble_bg(cx.theme().is_dark()));
+                    // 用户消息：accent 淡底 + 文字右对齐（底色走主题，不再手搓 HSL）
+                    bubble = bubble.text_right().bg(tokens::user_bubble_bg(cx));
                 } else {
-                    // AI 回复：无背景色 + 文字左对齐
-                    bubble = bubble.text_left();
+                    // AI 回复：muted 底 + 文字左对齐（以前没有任何底色，
+                    // 只靠左右对齐和用户消息区分）
+                    bubble = bubble.text_left().bg(tokens::ai_bubble_bg(cx));
                 }
-                history = history.child(
-                    row.child(
-                        bubble.child(
-                            TextView::markdown(("ai-body", ix), text.clone())
-                                .selectable(true)
-                                .text_sm(),
-                        ),
-                    ),
+                let bubble = bubble.child(
+                    TextView::markdown(("ai-body", ix), text.clone())
+                        .selectable(true)
+                        .text_sm(),
                 );
+                // 角色图标贴气泡外侧：AI 在左、用户在右
+                let row = if mine {
+                    row.child(bubble).child(role(mine))
+                } else {
+                    row.child(role(mine)).child(bubble)
+                };
+                history = history.child(row);
                 continue;
             }
             let (title, body) = match block {
@@ -1555,8 +1651,12 @@ impl Render for AiChat {
                     .id(("ai-block", ix))
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap(px(tokens::SPACE_XS))
                     .cursor_pointer()
+                    .rounded(tokens::row_radius(cx))
+                    .px(px(tokens::SPACE_XS))
+                    // 标题行可点（折叠/展开），补上 hover 反馈
+                    .hover(|s| s.bg(tokens::hover_bg(cx)))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_block(ix, cx)))
                     .child(div().text_xs().text_color(muted).child(if collapsed {
                         "▸"
@@ -1575,7 +1675,7 @@ impl Render for AiChat {
                     .id(("ai-body-box", ix))
                     .w_full()
                     .min_h_0()
-                    .max_h(px(BODY_MAX_H))
+                    .max_h(px(AI_BODY_MAX_H))
                     .overflow_y_scroll()
                     .child(child)
                     .into_any_element()
@@ -1634,7 +1734,12 @@ impl Render for AiChat {
         }
 
         // ── 快捷动作 ──
-        let mut actions = div().flex().flex_wrap().gap_1().px_2().pb_1();
+        let mut actions = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(tokens::SPACE_XS))
+            .px(px(tokens::SPACE_SM))
+            .pb(px(tokens::SPACE_XS));
         // 从配置读，而不是代码里的枚举：用户新增 / 停用 / 改名都会立刻反映
         for action in config(cx).ai.active_actions() {
             let id = action.id.clone();
@@ -1642,32 +1747,44 @@ impl Render for AiChat {
             let prompt = action.prompt.clone();
             let label = SharedString::from(name);
             let id_for_btn = SharedString::from(format!("ai-act-{id}"));
-            actions = actions.child(
-                Button::new(id_for_btn)
-                    .xsmall()
-                    .ghost()
-                    .label(label)
-                    .tooltip(prompt)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        // 执行时才按 id 重新查一次配置：面板渲染到点击之间
-                        // 用户可能在设置里改过或删过这一条
-                        let Some(action) = config(cx).ai.action(&id).cloned() else {
-                            this.error = Some(format!("动作已不存在：{id}"));
-                            cx.notify();
-                            return;
-                        };
-                        this.run_action(&action, window, cx);
-                    })),
-            );
+            // 正在用哪个动作：以前点了动作之后界面上没有任何提示，
+            // 看不出接下来发送会走动作还是普通对话
+            let current = matches!(&self.mode, AiMode::Action(current) if *current == id);
+            let mut button = Button::new(id_for_btn)
+                .xsmall()
+                .label(label)
+                .tooltip(prompt);
+            button = if current {
+                button.primary()
+            } else {
+                button.ghost()
+            };
+            actions = actions.child(button.on_click(cx.listener(move |this, _, window, cx| {
+                // 执行时才按 id 重新查一次配置：面板渲染到点击之间
+                // 用户可能在设置里改过或删过这一条
+                let Some(action) = config(cx).ai.action(&id).cloned() else {
+                    this.error = Some(format!("动作已不存在：{id}"));
+                    cx.notify();
+                    return;
+                };
+                this.run_action(&action, window, cx);
+            })));
         }
 
         // ── 输入行 ──
-        let mut input_row = div().flex().items_center().gap_2().px_2().pb_2().child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(Input::new(&self.input).small()),
-        );
+        let mut input_row = div()
+            .flex()
+            .items_end()
+            .gap(px(tokens::SPACE_SM))
+            .px(px(tokens::SPACE_SM))
+            .pb(px(tokens::SPACE_SM))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    // 多行输入：给一个起始高度，写长了由它自己长高
+                    .child(Textarea::new(&self.input).min_h(px(tokens::INPUT_MIN_H))),
+            );
         if self.busy {
             input_row = input_row.child(
                 Button::new("ai-stop")
@@ -1757,26 +1874,50 @@ impl Render for AiChat {
         }
 
         // ── 状态行 ──
-        let mut status = div().flex().items_center().gap_2().px_2().pb_1();
+        //
+        // 以前是一串 text_xs 平铺：耗时、工具次数、tokens、错误挤在一起，
+        // 错误还是灰字。现在一格一格排，错误单独用 danger。
+        let mut status = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(tokens::SPACE_SM))
+            .px(px(tokens::SPACE_SM))
+            .pb(px(tokens::SPACE_XS));
+        // 一格：可选图标 + 文字。数值类（耗时、tokens）本来就有单位，
+        // 不加图标；状态类（生成中 / 工具 / 提示 / 错误）才配图标。
+        //
+        // 图标只能从组件库打包的那 106 个里选（`default-icons.txt`），
+        // 没有 clock / chart 这类，别照着 lucide 全量清单写。
+        let stat = |icon: Option<IconName>, text: String, color: Hsla| {
+            let mut cell = div().flex().items_center().gap(px(tokens::SPACE_XS));
+            if let Some(icon) = icon {
+                cell = cell.child(
+                    Icon::new(icon)
+                        .with_size(Size::Size(px(12.)))
+                        .text_color(color),
+                );
+            }
+            cell.child(div().text_xs().text_color(color).child(text))
+                .into_any_element()
+        };
         if self.busy {
-            status = status.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("生成中…（首次请求要等模型加载）"),
-            );
+            status = status.child(stat(
+                Some(IconName::Loader),
+                "生成中…（首次请求要等模型加载）".to_string(),
+                muted,
+            ));
         }
         if let Some(ms) = self.elapsed_ms {
-            status = status.child(div().text_xs().text_color(muted).child(format!("{ms} ms")));
+            status = status.child(stat(None, format!("{ms} ms"), muted));
         }
         if self.tool_calls > 0 {
             // 让"这次用了几次工具"看得见：多步的代价要摆在明面上
-            status = status.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("工具 {} 次", self.tool_calls)),
-            );
+            status = status.child(stat(
+                Some(IconName::Cpu),
+                format!("工具 {} 次", self.tool_calls),
+                muted,
+            ));
         }
         if let Some(usage) = &self.usage {
             // 模型报的真实用量（各 provider 未必都给）；没给就退回上下文粗估
@@ -1788,28 +1929,26 @@ impl Render for AiChat {
                 parts.push(format!("输出 {completion}"));
             }
             if !parts.is_empty() {
-                status = status.child(div().text_xs().text_color(muted).child(parts.join(" / ")));
+                status = status.child(stat(None, parts.join(" / "), muted));
             }
         }
         if let Some(tokens) = self.input_tokens {
-            status = status.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("上下文约 {tokens} tokens")),
-            );
+            status = status.child(stat(None, format!("上下文约 {tokens} tokens"), muted));
         }
         if let Some(notice) = &self.notice {
-            status = status.child(div().text_xs().text_color(muted).child(notice.clone()));
+            status = status.child(stat(Some(IconName::Info), notice.clone(), muted));
         }
+        // 错误单独一档：以前和普通提示一样是灰字，看不出是出问题了
         if let Some(err) = &self.error {
-            status = status.child(div().text_xs().text_color(warning).child(err.clone()));
+            status = status.child(stat(Some(IconName::CircleAlert), err.clone(), danger));
         }
 
+        // 高度由外层 `v_resizable` 的面板给（`size_full` 接住它），
+        // 不能再 `flex_none`：那样高度只由内容决定，拖多少都是一样高。
         div()
             .id("ai-chat")
-            .flex_none()
-            .w_full()
+            .size_full()
+            .min_h_0()
             .flex()
             .flex_col()
             .bg(theme.background)

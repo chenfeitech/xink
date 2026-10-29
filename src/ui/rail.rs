@@ -12,6 +12,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size};
 use gpui_kit::*;
 
 use crate::ui::drawer::{self, DrawerKind};
+use crate::ui::tokens;
 
 /// 按钮条宽度
 const RAIL_WIDTH: f32 = 44.;
@@ -109,7 +110,7 @@ fn rail_button(
         .rounded(cx.theme().radius)
         .cursor_pointer()
         .text_color(fg)
-        .hover(|this| this.bg(cx.theme().accent.opacity(0.15)));
+        .hover(|this| this.bg(tokens::hover_bg(cx)));
     // 选中态：框架没有给 Stateful 提供 `when`，这里用普通分支
     if selected {
         button = button.bg(cx.theme().accent);

@@ -25,6 +25,7 @@ use crate::core::ai::tasks::Task as BatchTask;
 use crate::core::ai::tasks::{self, BATCH_SIZE, ItemState, TagOutcome, TaskKind, TaskStatus};
 use crate::core::note::atomic_write;
 use crate::state::workspace::app_data_dir;
+use crate::ui::tokens;
 
 /// 浮层尺寸：计划可能上百行，宁可大一点
 const WIDTH: f32 = 660.;
@@ -497,12 +498,14 @@ impl Render for PlanView {
 
             let mut row = div()
                 .id(("plan-item", ix))
-                .px_2()
-                .py_1()
+                .px(px(tokens::SPACE_SM))
+                .py(px(tokens::SPACE_XS))
                 .flex()
                 .flex_col()
-                .gap_1()
-                .rounded(cx.theme().radius)
+                .gap(px(tokens::SPACE_XS))
+                // 以前有圆角没底色，看着不像卡片
+                .rounded(tokens::card_radius(cx))
+                .bg(tokens::card_bg(cx))
                 .child(
                     div()
                         .flex()
@@ -549,6 +552,8 @@ impl Render for PlanView {
             if !finished {
                 row = row
                     .cursor_pointer()
+                    // 可勾选却一直没有 hover 反馈
+                    .hover(|s| s.bg(tokens::hover_bg(cx)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.toggle(ix, cx);
                     }));
