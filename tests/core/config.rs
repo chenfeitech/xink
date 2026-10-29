@@ -639,6 +639,18 @@ fn ai_num_predict_is_clamped() {
     assert_eq!(ai.models[0].params.num_predict, 32_768);
 }
 
+/// 默认预算必须够写完一篇长文
+///
+/// 1024 会把长文改写截断在半句（`done_reason:"length"`），而协议层以前
+/// 认不出截断，用户看到的就是"AI 处理不全面"却毫无提示。钉住新默认值，
+/// 免得哪天被当成"随手写的数字"改回小值。
+#[test]
+fn ai_num_predict_default_covers_a_long_rewrite() {
+    assert_eq!(AiModelParams::default().num_predict, 8192);
+    // 档位最低 10240：不点档位的默认行为也要够用
+    assert!(AiModelParams::default().num_predict >= 8192);
+}
+
 #[test]
 fn ai_default_model_is_cleared_when_it_cannot_be_used() {
     // "看着配好了却发不出去"是最难查的一类：选中的模型不存在或被停用

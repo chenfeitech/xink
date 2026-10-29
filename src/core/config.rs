@@ -794,8 +794,11 @@ impl Default for AiModelParams {
     fn default() -> Self {
         Self {
             num_ctx: 8192,
-            // 给足预算：thinking 模型会把 num_predict 用在思维链上
-            num_predict: 1024,
+            // 1024 对长文改写不够：写到一半就停在 `done_reason:"length"`，
+            // 而且协议层以前认不出截断，界面上表现为"AI 处理不全面"却毫无提示。
+            // 8192 是 2026-10-29 定的新默认值；还是不够就在模型行上调档位
+            // （10240 / 20480 / 32768）。
+            num_predict: 8192,
             temperature: 0.7,
             think: false,
             keep_alive: "5m".into(),
