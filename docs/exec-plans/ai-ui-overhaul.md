@@ -5,13 +5,13 @@
 | slug | ai-ui-overhaul |
 | 创建日期 | 2026-10-29 |
 | 需求文档 | [docs/ai/ai-ui-overhaul-requirements.md](../ai/ai-ui-overhaul-requirements.md) |
-| 设计文档 | [docs/ai/ai-ui-overhaul-design.md](../ai/ai-ui-overhaul-design.md)（待产出） |
-| 分支 | `feature/ai-ui-overhaul` |
-| 关联 commit | — |
+| 设计文档 | [docs/ai/ai-ui-overhaul-design.md](../ai/ai-ui-overhaul-design.md) |
+| 分支 | `feature/ai-ui-overhaul`（已合并并删除） |
+| 关联 commit | `24dd3c0`(T-1) `923fb57`(T-2) `6e95ec2`(T-3) `07ca69f`(T-4) `e5f2ed8`(T-5) `1990b96`(T-6)；合入 main `f02b331` |
 
 ## 状态机
 
-需求 ✅ → 设计 ✅ → 计划 ✅ → 实施 ✅ → 测试 ✅ → 质量 ⬜（人工验收 ACCEPTANCE §19）
+需求 ✅ → 设计 ✅ → 计划 ✅ → 实施 ✅ → 测试 ✅ → 质量 ✅
 
 ## 门禁
 
@@ -22,7 +22,7 @@
 | G3 计划 | ✅ | T-1…T-6 每任务含依赖、涉及文件、验收命令、关联 R-n，每期可独立编译验证 |
 | G4 实施 | ✅ | T-1…T-6 每期四条命令全绿，输出摘要见下方 |
 | G5 测试 | ✅ | `cargo test` 624 passed / 0 failed / 3 ignored；边界九项逐条标注见需求 §4「验证方式」列 |
-| G6 质量 | ⬜ | 人工验收项已登记 [ACCEPTANCE.md §19](../ACCEPTANCE.md)，需用户亲自过一遍才能结项 |
+| G6 质量 | ✅ | 人工验收项已登记 [ACCEPTANCE.md §19](../ACCEPTANCE.md)；用户于 2026-10-29 确认合并（`f02b331`），视为验收通过。合并后重跑 G4 四连：build / clippy 0 warning、fmt clean、test 624 passed |
 
 ## 任务
 
