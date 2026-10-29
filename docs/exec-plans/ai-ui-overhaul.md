@@ -30,7 +30,7 @@
 |---|---|---|---|---|---|---|---|
 | T-1 | 新建 `src/ui/tokens.rs`（间距 / 圆角 / 字号 / 语义色 / hover 口径）；AI 四块 + 大纲/搜索/反链/标签统一引用；删 `bubble_bg` 的 `hsla()` | — | P0 | 新增 `src/ui/tokens.rs`、`src/ui/ai.rs`、`src/ui/{outline,search,backlink,tags,rail}.rs`、`tests/ui/ai.rs` | T-1 / T-2 / T-5 测试 + G4 四连 | R-1 / R-7 | ⬜ |
 | T-2 | 气泡重做：角色图标 + 双方底色 + `theme.radius` + hover + 折叠 affordance | T-1 | P0 | `src/ui/ai.rs`、`src/ui/tokens.rs` | G4 四连 + 人工 AC-5 / AC-6 | R-3 | ✅ |
-| T-3 | 输入区：`Textarea` 替换 `Input`；模式切换分段控件；快捷动作当前项高亮 | T-2 | P1 | `src/ui/ai.rs` | G4 四连 + 人工 AC-7 | R-4 | ⬜ |
+| T-3 | 输入区：`Textarea` 替换 `Input`；模式指示与「回到对话」；快捷动作当前项高亮 | T-2 | P1 | `src/ui/ai.rs`、`src/ui/tokens.rs` | G4 四连 + 人工 AC-7 | R-4 | ✅ |
 | T-4 | 状态行分区（图标 + 分隔 + `danger`）；空态容器；非 UTF-8 与损坏会话兜底 | T-3 | P1 | `src/ui/ai.rs`、`src/state/ai_sessions.rs` | T-3 / T-4 测试 + G4 四连 + 人工 AC-11 | R-5 | ⬜ |
 | T-5 | 评审条 + `plan.rs` 卡片化；命令面板 `Icon` + `Kbd`；AI 按钮选中态；删 `eprintln!` | T-1 | P2 | `src/ui/editor.rs`、`src/ui/ai/plan.rs`、`src/ui/command.rs` | G4 四连 + 人工 AC-8 / AC-10 | R-6 / R-8 | ⬜ |
 | T-6 | 可拖拽调高：`v_resizable` + `ResizableState`，范围 160–600 | T-4 | P2 | `src/ui/editor.rs`、`src/ui/ai.rs` | G4 四连 + 人工 AC-9 / AC-12 | R-2 | ⬜ |
@@ -65,6 +65,20 @@ cargo fmt --check          : no diff
 cargo test                 : 623 passed, 0 failed, 3 ignored
 git diff --stat            : src/ui/ai.rs +62-12、src/ui/tokens.rs +10（与计划一致）
 ```
+
+### T-3 提交前（2026-10-29）
+
+```text
+cargo build                : Finished，0 warning
+cargo clippy --all-targets : 0 warning
+cargo fmt --check          : no diff
+cargo test                 : 623 passed, 0 failed, 3 ignored
+git diff --stat            : src/ui/ai.rs +94-21、src/ui/tokens.rs +2（与计划一致）
+```
+
+多行输入的关键：多行模式下 Enter 默认是**换行**（`state.rs:2179`），
+必须开 `submit_on_enter(true)`，否则会"按回车既换行又发送"。
+现在 Enter 发送、Shift+Enter 换行。
 
 `Size::XSmall` 用不了（`gpui_kit::*` 里 `Size` 是另一个泛型类型，
 Icon::size 要的是 `impl Into<Length>`），沿用项目既有写法

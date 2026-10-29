@@ -21,7 +21,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
 // `gpui_kit::*` 里的 `Size` 是另一个泛型类型，组件库的 Size 要显式导入
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::{Icon, IconName, Size};
 use gpui_kit::*;
@@ -400,7 +400,8 @@ struct PendingEdit {
 }
 
 pub struct AiChat {
-    input: Entity<InputState>,
+    /// 输入：多行（长提示词要能换行写）
+    input: Entity<TextareaState>,
     /// 对话区的内容块，顺序即发生顺序
     blocks: Vec<Block>,
     /// 对话区的滚动句柄：内容变长时用它滚到底，否则新的一轮在视口外看不见
@@ -442,8 +443,14 @@ pub struct AiChat {
 impl AiChat {
     /// `note_path` 是当前这篇笔记：会话按笔记落盘，建好就把历史读回来
     pub fn new(window: &mut Window, cx: &mut Context<Self>, note_path: Option<PathBuf>) -> Self {
-        let input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("问点什么，或让 AI 改这篇笔记…"));
+        // 多行：长提示词要能换行写。
+        // `submit_on_enter(true)` 让裸 Enter 依然发送、Shift+Enter 才换行——
+        // 多行模式下默认 Enter 是换行，不改这个开关就会"按回车既换行又发送"
+        let input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .submit_on_enter(true)
+                .placeholder("问点什么，或让 AI 改这篇笔记…（Enter 发送，Shift+Enter 换行）")
+        });
         // 订阅只挂一次：写进 render 会每帧多挂一个
         cx.subscribe_in(
             &input,
@@ -1392,6 +1399,64 @@ impl Render for AiChat {
                     })
                     .into_any_element()
             })
+            // 当前模式：以前点了动作 / 跑了 skill 之后，界面上完全看不出来
+            // 接下来发送会走哪条路
+            .child(match &self.mode {
+                AiMode::Chat => div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("对话")
+                    .into_any_element(),
+                AiMode::Action(id) => {
+                    let name = cfg
+                        .ai
+                        .action(id)
+                        .map(|a| a.name.clone())
+                        .unwrap_or_else(|| id.clone());
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(tokens::SPACE_XS))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(primary)
+                                .child(format!("动作：{name}")),
+                        )
+                        .child(
+                            Button::new("ai-back-to-chat")
+                                .xsmall()
+                                .ghost()
+                                .label("回到对话")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.mode = AiMode::Chat;
+                                    cx.notify();
+                                })),
+                        )
+                        .into_any_element()
+                }
+                AiMode::Skill(name) => div()
+                    .flex()
+                    .items_center()
+                    .gap(px(tokens::SPACE_XS))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(primary)
+                            .child(format!("Skill：{name}")),
+                    )
+                    .child(
+                        Button::new("ai-back-to-chat")
+                            .xsmall()
+                            .ghost()
+                            .label("回到对话")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.mode = AiMode::Chat;
+                                cx.notify();
+                            })),
+                    )
+                    .into_any_element(),
+            })
             .child(
                 Button::new("ai-clear")
                     .xsmall()
@@ -1666,29 +1731,34 @@ impl Render for AiChat {
             let prompt = action.prompt.clone();
             let label = SharedString::from(name);
             let id_for_btn = SharedString::from(format!("ai-act-{id}"));
-            actions = actions.child(
-                Button::new(id_for_btn)
-                    .xsmall()
-                    .ghost()
-                    .label(label)
-                    .tooltip(prompt)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        // 执行时才按 id 重新查一次配置：面板渲染到点击之间
-                        // 用户可能在设置里改过或删过这一条
-                        let Some(action) = config(cx).ai.action(&id).cloned() else {
-                            this.error = Some(format!("动作已不存在：{id}"));
-                            cx.notify();
-                            return;
-                        };
-                        this.run_action(&action, window, cx);
-                    })),
-            );
+            // 正在用哪个动作：以前点了动作之后界面上没有任何提示，
+            // 看不出接下来发送会走动作还是普通对话
+            let current = matches!(&self.mode, AiMode::Action(current) if *current == id);
+            let mut button = Button::new(id_for_btn)
+                .xsmall()
+                .label(label)
+                .tooltip(prompt);
+            button = if current {
+                button.primary()
+            } else {
+                button.ghost()
+            };
+            actions = actions.child(button.on_click(cx.listener(move |this, _, window, cx| {
+                // 执行时才按 id 重新查一次配置：面板渲染到点击之间
+                // 用户可能在设置里改过或删过这一条
+                let Some(action) = config(cx).ai.action(&id).cloned() else {
+                    this.error = Some(format!("动作已不存在：{id}"));
+                    cx.notify();
+                    return;
+                };
+                this.run_action(&action, window, cx);
+            })));
         }
 
         // ── 输入行 ──
         let mut input_row = div()
             .flex()
-            .items_center()
+            .items_end()
             .gap(px(tokens::SPACE_SM))
             .px(px(tokens::SPACE_SM))
             .pb(px(tokens::SPACE_SM))
@@ -1696,7 +1766,8 @@ impl Render for AiChat {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(Input::new(&self.input).small()),
+                    // 多行输入：给一个起始高度，写长了由它自己长高
+                    .child(Textarea::new(&self.input).min_h(px(tokens::INPUT_MIN_H))),
             );
         if self.busy {
             input_row = input_row.child(

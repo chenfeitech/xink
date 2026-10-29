@@ -85,3 +85,5 @@ pub const AI_HISTORY_MAX_H: f32 = 260.;
 pub const AI_BODY_MAX_H: f32 = 220.;
 /// 气泡最大宽度（占对话区宽度的比例）：太长的一行读起来累
 pub const AI_BUBBLE_MAX_W: f32 = 0.78;
+/// 输入框起始高度：多行，写长了由它自己长高
+pub const INPUT_MIN_H: f32 = 52.;
